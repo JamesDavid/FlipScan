@@ -56,7 +56,7 @@ flipscan ui [--port 8321]
 - [x] M2 Scoring + clustering + selection (+ contact sheet) — validated on synthetic two-pass video (`tools/make_test_video.py`); validate on a real book video before trusting thresholds
 - [x] M3 Preprocess (crop/perspective)
 - [x] M4 Transcribe (backends + JSON schema)
-- [ ] M5 Assemble + EPUB
+- [x] M5 Assemble + EPUB
 - [ ] M6 Review HTML + patch flow
 - [ ] M7 Figures pipeline
 - [ ] M8 PDF outputs

@@ -112,14 +112,47 @@ def run(directory: Path, only_stage, force, provider, model, ollama_url):
         try:
             importlib.import_module(STAGE_MODULES[stage])
         except ModuleNotFoundError:
-            click.echo(f"[{stage}] not implemented yet, stopping here")
-            break
+            click.echo(f"[{stage}] not implemented yet, skipping")
+            continue
         if not only_stage and not force and ws.stage_status(stage) == "done":
             click.echo(f"[{stage}] done, skipping")
             continue
         click.echo(f"[{stage}] running")
         _run_stage(ws, cfg, stage)
         click.echo(f"[{stage}] ok")
+
+
+# ---------------------------------------------------------------- build
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path))
+@click.option("-o", "--output", type=click.Path(path_type=Path), default=None,
+              help="Output file (default: out/<workspace>.<ext>)")
+@click.option("--format", "formats", multiple=True,
+              type=click.Choice(["epub", "pdf", "pdf-facsimile"]),
+              help="Output format; repeatable (default: epub)")
+@click.option("--title", default=None)
+@click.option("--author", default=None)
+def build(directory: Path, output, formats, title, author):
+    """Build the book (epub / pdf / pdf-facsimile) from the assembled markdown."""
+    ws = Workspace.open(directory)
+    formats = formats or ("epub",)
+    for fmt in formats:
+        ext = "epub" if fmt == "epub" else "pdf"
+        if output and len(formats) == 1:
+            out = output
+        else:
+            suffix = "" if fmt != "pdf-facsimile" else "-facsimile"
+            out = ws.dir("out") / f"{ws.root.name}{suffix}.{ext}"
+        if fmt == "epub":
+            from .build_epub import build_epub
+            build_epub(ws, out, title=title, author=author, log=click.echo)
+        elif fmt == "pdf-facsimile":
+            from .build_pdf import build_pdf_facsimile
+            build_pdf_facsimile(ws, out, title=title, log=click.echo)
+        else:
+            from .build_pdf import build_pdf_reflowed
+            build_pdf_reflowed(ws, out, title=title, log=click.echo)
 
 
 # ---------------------------------------------------------------- status
