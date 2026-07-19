@@ -39,6 +39,7 @@ DEFAULTS: dict[str, Any] = {
     "preprocess": {
         "llm_long_edge": 1600,
         "quad_pad": 0.025,  # expand the page crop so edge content (page numbers) survives
+        "isolate_page": True,  # edge-density crop to the flat readable page
         "mask_clutter": False,  # experimental: isolate the book, hide desk clutter
         "dewarp": False,
     },

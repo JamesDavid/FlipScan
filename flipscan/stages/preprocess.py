@@ -14,7 +14,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ..imaging import detect_page_quad, isolate_book, mask_outside, order_quad
+from ..imaging import (detect_page_quad, find_flat_page, isolate_book,
+                       mask_outside, order_quad)
 from ..workspace import Workspace
 from .score import scores_by_frame_id
 from .select import frame_path
@@ -125,6 +126,27 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
     rotation = _video_rotation(ws, fid)
     if rotation == 180:
         bgr = cv2.rotate(bgr, cv2.ROTATE_180)
+
+    # edge-density page isolation: crop straight to the flat readable page
+    # (lighting-invariant; falls back to the quad path when not confident)
+    if (cfg["preprocess"].get("isolate_page", True)
+            and not page.get("patched_source") and page.get("role") != "cover"):
+        box = find_flat_page(bgr)
+        if box is not None:
+            color = bgr[box[1]:box[3], box[0]:box[2]]
+            if cfg["preprocess"].get("dewarp"):
+                color = dewarp_cylindrical(color)
+            color_path = out_dir / f"{page['id']}_color.png"
+            llm_path = out_dir / f"{page['id']}_llm.jpg"
+            cv2.imwrite(str(color_path), color)
+            cv2.imwrite(str(llm_path),
+                        llm_copy(color, cfg["preprocess"]["llm_long_edge"]),
+                        [cv2.IMWRITE_JPEG_QUALITY, 85])
+            page["color"] = f"work/pages/{page['id']}_color.png"
+            page["llm_image"] = f"work/pages/{page['id']}_llm.jpg"
+            page["isolated"] = True
+            return
+    page.pop("isolated", None)
 
     quad = None
     if cfg["preprocess"].get("mask_clutter", False):  # experimental: needs even lighting

@@ -154,6 +154,72 @@ def isolate_book(bgr: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None,
     return book, order_quad(quad), spine_x
 
 
+def find_flat_page(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Locate the flat, readable page in an open-book photo via edge density.
+
+    Printed text is a dense edge field regardless of lighting (which defeats
+    color/brightness segmentation). Dilated Canny edges form text blocks; the
+    seed block is big, rectangular, and central; blocks stacked in the same
+    column (text above/below figures) merge, guarded so the result stays
+    page-shaped. Returns a pixel bbox, or None when no confident page exists
+    (blank pages, mid-turn chaos) — callers then fall back to the page quad.
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    med = float(np.median(gray))
+    edges = cv2.Canny(gray, 0.66 * med, 1.33 * med)
+    text = cv2.dilate(edges, cv2.getStructuringElement(cv2.MORPH_RECT, (13, 9)))
+    text = cv2.morphologyEx(text, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (13, 25)))
+
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(text)
+    cands = []
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < 0.015 * h * w:
+            continue
+        comp = (labels == i).astype(np.uint8)
+        cnt = max(cv2.findContours(comp, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)[0], key=cv2.contourArea)
+        rw, rh = cv2.minAreaRect(cnt)[1]
+        if min(rw, rh) < 1:
+            continue
+        rectangularity = cv2.contourArea(cnt) / (rw * rh)
+        cx, cy = cents[i]
+        offset = np.hypot((cx - w / 2) / w, (cy - h / 2) / h)
+        cands.append({"area": area, "rect": rectangularity,
+                      "cent": max(0.05, 1 - 2 * offset),
+                      "bbox": stats[i, :4].tolist()})
+    if not cands:
+        return None
+
+    seed = max(cands, key=lambda c: c["area"] * c["rect"] ** 2 * c["cent"])
+    sx, sy, sw, sh = seed["bbox"]
+    x0, y0, x1, y1 = sx, sy, sx + sw, sy + sh
+    others = sorted((c for c in cands if c is not seed),
+                    key=lambda c: abs((c["bbox"][1] + c["bbox"][3] / 2) - (sy + sh / 2)))
+    for c in others:
+        cx0, cy0, cw, ch = c["bbox"]
+        cx1, cy1 = cx0 + cw, cy0 + ch
+        overlap = max(0, min(x1, cx1) - max(x0, cx0))
+        nx0, ny0 = min(x0, cx0), min(y0, cy0)
+        nx1, ny1 = max(x1, cx1), max(y1, cy1)
+        if (overlap > 0.6 * min(x1 - x0, cw)          # same column of the page
+                and (nx1 - nx0) < 0.85 * (ny1 - ny0)  # still page-shaped
+                and (nx1 - nx0) < 0.75 * w):          # never the whole spread
+            x0, y0, x1, y1 = nx0, ny0, nx1, ny1
+
+    mx, my = int((x1 - x0) * 0.10), int((y1 - y0) * 0.07)
+    box = (max(0, x0 - mx), max(0, y0 - my), min(w, x1 + mx), min(h, y1 + my))
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    bcx, bcy = box[0] + bw / 2, box[1] + bh / 2
+    ok = (0.40 < bw / bh < 0.95
+          and 0.10 < (bw * bh) / (w * h) < 0.70
+          and abs(bcx - w / 2) / w < 0.18      # a page is central; corner hits are
+          and abs(bcy - h / 2) / h < 0.22)     # clutter (flyers next to blank pages)
+    return box if ok else None
+
+
 def mask_outside(bgr: np.ndarray, mask: np.ndarray,
                  fill: tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
     """Paint everything outside the mask a flat color (hide desk clutter)."""
