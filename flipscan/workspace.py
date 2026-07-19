@@ -94,9 +94,19 @@ class Workspace:
         return self._manifest
 
     def save(self) -> None:
+        import time
+
         tmp = self.manifest_path.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.manifest, f, indent=2, ensure_ascii=False)
+        # Windows: replace fails with PermissionError while another handle
+        # (GUI progress polling) has the manifest open — retry briefly
+        for attempt in range(6):
+            try:
+                tmp.replace(self.manifest_path)
+                return
+            except PermissionError:
+                time.sleep(0.05 * (2 ** attempt))
         tmp.replace(self.manifest_path)
 
     # -- stage bookkeeping ------------------------------------------------

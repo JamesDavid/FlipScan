@@ -167,6 +167,12 @@ def _run_incremental(ws: Workspace, backend, todo, by_id, log) -> dict[str, dict
         log(f"  {backend.name}: {item[0]} "
             f"({'ok' if 'error' not in r else 'FAILED'}) [{i}/{len(todo)}]")
 
+    def safe_record(item, r, i):
+        try:
+            record(item, r, i)
+        except Exception as e:  # bookkeeping hiccup must not sink a long run
+            log(f"  WARNING: failed to record {item[0]}: {e}")
+
     if workers > 1:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -177,10 +183,10 @@ def _run_incremental(ws: Workspace, backend, todo, by_id, log) -> dict[str, dict
                     r = fut.result()
                 except Exception as e:  # a worker crash must not sink the run
                     r = {"error": str(e)}
-                record(item, r, i)
+                safe_record(item, r, i)
     else:
         for i, item in enumerate(todo, 1):
-            record(item, one(item), i)
+            safe_record(item, one(item), i)
     return results
 
 
