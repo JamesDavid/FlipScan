@@ -27,7 +27,7 @@ def reshoot_list(ws: Workspace) -> list[dict]:
             reasons.append("weak capture (short cluster or low frame score)")
         if p["status"] == "missing":
             reasons.append("no usable frame captured")
-        if reasons and p["status"] != "patched":
+        if reasons and p["status"] not in ("patched", "duplicate"):
             items.append({"id": p["id"], "printed_number": p.get("printed_number"),
                           "reasons": reasons})
     return items

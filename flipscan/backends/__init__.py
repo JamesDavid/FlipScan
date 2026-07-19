@@ -9,8 +9,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 PROMPT = """\
-You are transcribing one photographed page of a printed book. Return ONLY a JSON object,
-no code fences, no commentary, matching exactly this schema:
+You are transcribing a photographed page of a printed book. The photo may show an
+open two-page spread — typically ONE page lies flat and readable while the other
+is curved mid-turn — and there may be desk clutter around the book (sticky notes,
+papers, other objects).
+
+Transcribe ONLY the flat, clearly readable page. Completely ignore the curved or
+foreshortened page and everything that is not part of the book.
+
+Return ONLY a JSON object, no code fences, no commentary, matching exactly this schema:
 
 {
   "markdown": "the page text as clean markdown",
@@ -32,7 +39,8 @@ Rules:
 - For each figure, photo, or complex table on the page: add a region with a normalized
   bbox [x0, y0, x1, y1] (0-1, relative to image width/height) and put the placeholder
   [[region-N]] (N = index into regions, starting at 0) where it belongs in the markdown.
-- "page_number_printed": the page number printed on the page, or null if none is visible.
+- "page_number_printed": the page number printed on the page you transcribed,
+  or null if none is visible.
 - "confidence": "high" | "medium" | "low" — your overall transcription confidence.
 - "flags": any of "cut_off_text", "blur", "multi_column", "handwriting" that apply, else [].
 """

@@ -217,6 +217,28 @@ def create_app(root: Path) -> FastAPI:
         entry = add_video(ws, dest, log=lambda m: None)
         return {"ok": True, "id": entry["id"]}
 
+    @app.put("/api/projects/{name}/videos/{vid}")
+    def set_video_rotation(name: str, vid: str, rotate: int):
+        """Mark a video as shot upside down (rotate=180) or normal (rotate=0).
+        Re-derives everything from preprocess onward for that video's pages."""
+        ws = ws_for(name)
+        video = next((v for v in ws.manifest["videos"] if v["id"] == vid), None)
+        if video is None:
+            raise HTTPException(404, f"no video {vid!r}")
+        video["rotate"] = rotate
+        from ..stages.transcribe import load_cache, save_cache
+        cache = {k: v for k, v in load_cache(ws).items()
+                 if not k.startswith(vid + "_")}
+        save_cache(ws, cache)
+        for p in ws.manifest["pages"]:
+            if (p.get("canonical") or "").startswith(vid + "_"):
+                p["md"] = None
+                for key in ("confidence", "flags", "transcribe_error", "printed_number"):
+                    p.pop(key, None)
+        ws.stage_reset("preprocess")
+        ws.save()
+        return {"ok": True, "rotate": rotate}
+
     @app.post("/api/projects/{name}/pages/add")
     async def add_page(name: str, photo: UploadFile, position: str = "end",
                        cover: bool = False):

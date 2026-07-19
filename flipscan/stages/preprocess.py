@@ -3,6 +3,9 @@
 Per page writes into work/pages/:
   <id>_color.png  full-res corrected color frame (source for figure crops)
   <id>_llm.jpg    contrast-normalized grayscale copy downscaled for the LLM
+
+Handles per-video 180-degree rotation (video shot upside down) and pads the
+page quad so edge content (printed page numbers!) survives the crop.
 Set config [preprocess] dewarp=true to apply simple cylindrical curl correction.
 """
 
@@ -11,10 +14,27 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ..imaging import detect_page_quad
+from ..imaging import detect_page_quad, order_quad
 from ..workspace import Workspace
 from .score import scores_by_frame_id
 from .select import frame_path
+
+
+def _video_rotation(ws: Workspace, frame_id: str | None) -> int:
+    if not frame_id:
+        return 0
+    vid = frame_id.split("_", 1)[0]
+    for v in ws.manifest["videos"]:
+        if v["id"] == vid:
+            return v.get("rotate", 0)
+    return 0
+
+
+def _pad_quad(quad: np.ndarray, pad: float) -> np.ndarray:
+    """Expand the quad outward about its centroid (page numbers live at the
+    very edges; the detected contour often sits just inside them)."""
+    center = quad.mean(axis=0)
+    return np.clip(center + (quad - center) * (1.0 + 2.0 * pad), 0.0, 1.0)
 
 
 def correct_page(bgr: np.ndarray, quad_norm) -> np.ndarray:
@@ -91,23 +111,38 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
     """Correct one page's canonical frame; used by the stage and the patch flow."""
     out_dir = ws.work_file("pages")
     out_dir.mkdir(exist_ok=True)
+    pad = cfg["preprocess"].get("quad_pad", 0.025)
+
     if page.get("patched_source"):
         fid = None
         bgr = cv2.imread(str(ws.root / page["patched_source"]))
     else:
         fid = page["canonical"]
         bgr = cv2.imread(str(frame_path(ws, fid)))
+    if bgr is None:
+        return
+
+    rotation = _video_rotation(ws, fid)
+    if rotation == 180:
+        bgr = cv2.rotate(bgr, cv2.ROTATE_180)
 
     quad = None
     if fid is not None and scores and fid in scores:
         quad = scores[fid].get("quad")
+        if quad is not None and rotation == 180:
+            quad = order_quad(1.0 - np.array(quad, dtype=np.float64))
     if quad is None:  # patched photos have no score record: detect now
         q, _ = detect_page_quad(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
-        quad = q.tolist() if q is not None else None
+        quad = q if q is not None else None
 
-    color = correct_page(bgr, quad) if quad is not None else bgr
+    if quad is not None:
+        quad = _pad_quad(np.array(quad, dtype=np.float64), pad)
+        color = correct_page(bgr, quad)
+    else:
+        color = bgr
     if cfg["preprocess"].get("dewarp"):
         color = dewarp_cylindrical(color)
+
     color_path = out_dir / f"{page['id']}_color.png"
     llm_path = out_dir / f"{page['id']}_llm.jpg"
     cv2.imwrite(str(color_path), color)

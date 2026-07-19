@@ -99,10 +99,15 @@ def contact_sheet(ws: Workspace, thumb_w: int = 240, cols: int = 8):
     pages = ws.manifest["pages"]
     if not pages:
         return None
+    rotations = {v["id"]: v.get("rotate", 0) for v in ws.manifest["videos"]}
     thumbs = []
     for p in pages:
+        if p.get("side") == "right":
+            continue  # one thumbnail per capture, not per spread half
         if p.get("canonical"):
             img = cv2.imread(str(frame_path(ws, p["canonical"])), cv2.IMREAD_REDUCED_COLOR_2)
+            if img is not None and rotations.get(p["canonical"].split("_")[0]) == 180:
+                img = cv2.rotate(img, cv2.ROTATE_180)
         elif p.get("color") and (ws.root / p["color"]).exists():
             img = cv2.imread(str(ws.root / p["color"]), cv2.IMREAD_REDUCED_COLOR_2)
         else:

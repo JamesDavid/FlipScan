@@ -30,13 +30,15 @@ DEFAULTS: dict[str, Any] = {
         "center_crop": 0.6,  # fraction of frame used for sharpness
     },
     "cluster": {
-        "hash_threshold": 10,  # pHash Hamming distance to open a new cluster
+        "hash_threshold": 10,  # pHash distance for patched-page reattachment
         "min_cluster_frames": 3,  # smaller clusters flagged suspect
         "motion_spike_factor": 2.5,  # motion must exceed median * factor between clusters
+        "turn_min_frames": 4,  # sustained high-motion run = page turn (shorter = wobble)
         "suspect_score_percentile": 10,  # clusters whose best score is in the bottom N% flagged
     },
     "preprocess": {
         "llm_long_edge": 1600,
+        "quad_pad": 0.025,  # expand the page crop so edge content (page numbers) survives
         "dewarp": False,
     },
     "transcribe": {

@@ -46,7 +46,8 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     total = 0
     for page in ws.manifest["pages"]:
         regions = page.get("regions") or []
-        if not regions or not page.get("md") or not page.get("color"):
+        if (not regions or not page.get("md") or not page.get("color")
+                or page.get("status") == "duplicate"):
             continue
         color = cv2.imread(str(ws.root / page["color"]))
         if color is None:

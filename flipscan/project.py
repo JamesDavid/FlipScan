@@ -46,7 +46,7 @@ def create_project(directory: Path, videos: list[dict[str, Any]],
 
 
 def add_video(ws: Workspace, src: Path, direction: str = "forward",
-              log: Callable[[str], None] = print) -> dict:
+              rotate: int = 0, log: Callable[[str], None] = print) -> dict:
     """Add another capture video to an existing project. Pages it shares with
     earlier videos merge (best capture wins); new pages slot into the order.
     Already-transcribed pages whose best frame is unchanged are not re-transcribed."""
@@ -58,7 +58,7 @@ def add_video(ws: Workspace, src: Path, direction: str = "forward",
     log(f"{vid}: {meta['fps_actual']} fps, {meta.get('nb_frames') or '?'} frames")
     entry = {
         "id": vid, "path": str(rel).replace("\\", "/"), "source": str(src),
-        "direction": direction, **meta,
+        "direction": direction, "rotate": rotate, **meta,
     }
     ws.manifest["videos"].append(entry)
     ws.stage_reset("extract")  # re-run; per-video skips keep it incremental

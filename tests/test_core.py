@@ -7,8 +7,8 @@ from flipscan.backends import TranscriptionError, needs_escalation, parse_result
 from flipscan.build_epub import split_chapters
 from flipscan.imaging import hamming, majority_hash, phash64
 from flipscan.stages.assemble import _join_pages, _strip_repeated_lines
-from flipscan.stages.cluster import _segments, auto_merge
-from flipscan.stages.transcribe import reorder_by_printed
+from flipscan.stages.cluster import segment_pages
+from flipscan.stages.transcribe import dedupe_by_printed, reorder_by_printed
 from flipscan.stages.figures import snap_bbox
 
 
@@ -62,61 +62,77 @@ def test_phash_similar_vs_different():
     assert hamming(phash64(base), phash64(noisy)) < hamming(phash64(base), phash64(other))
 
 
-# ---------------- clustering segments
+# ---------------- page segmentation (turn events split, wobble doesn't)
 
 def _rec(motion, flatness=0.6):
     return {"motion": motion, "flatness": flatness}
 
 
-def test_segments_drop_turn_debris():
-    # 8 rest frames, a turn with a brief sub-threshold dip, 8 more rest frames
+def test_turn_gap_splits_pages():
     records = ([_rec(0.0)] + [_rec(2.0)] * 7
-               + [_rec(20.0)] * 3 + [_rec(6.0)] * 2 + [_rec(20.0)] * 3
+               + [_rec(20.0)] * 6                     # sustained turn
                + [_rec(2.0)] * 8)
-    segs = _segments(records, spike_factor=2.5)
-    assert len(segs) == 2
-    assert all(len(s) == 8 for s in segs)
+    pages = segment_pages(records, spike_factor=2.5)
+    assert len(pages) == 2
+    assert all(len(p) == 8 for p in pages)
 
 
-def test_segments_keep_genuinely_still_short_rest():
-    records = ([_rec(0.0)] + [_rec(2.0)] * 9 + [_rec(20.0)] * 4
-               + [_rec(2.0)] * 2                      # brief but truly still
-               + [_rec(20.0)] * 4 + [_rec(2.0)] * 10)
-    segs = _segments(records, spike_factor=2.5)
-    assert len(segs) == 3
+def test_wobble_does_not_split_page():
+    records = ([_rec(0.0)] + [_rec(2.0)] * 7
+               + [_rec(20.0)] * 2                     # brief hand wobble
+               + [_rec(2.0)] * 8)
+    pages = segment_pages(records, spike_factor=2.5)
+    assert len(pages) == 1                            # still the same page
+    assert len(pages[0]) == 16
 
 
-# ---------------- cross-video auto merge
-
-def _mkcluster(page_key: int, video: str):
-    rng = np.random.default_rng(page_key)  # deterministic per-page hash
-    h = int(rng.integers(0, 2**63))
-    return {"frames": [f"{video}_f{page_key:03d}"], "hash": h, "suspect": False}
-
-
-def test_auto_merge_overlap_and_reverse():
-    # video A: pages 1..4 forward; video B: pages 5,4,3 (shot back-to-front)
-    va = [_mkcluster(k, "v0") for k in (1, 2, 3, 4)]
-    vb = [_mkcluster(k, "v1") for k in (5, 4, 3)]
-    merged = auto_merge([va, vb], threshold=10)
-    assert len(merged) == 5  # 1,2,3,4,5 — B auto-reversed, 3+4 merged, 5 appended
-    assert len(merged[2]["frames"]) == 2 and len(merged[3]["frames"]) == 2
-    assert merged[4]["frames"] == ["v1_f005"]
+def test_mid_turn_debris_dropped():
+    records = ([_rec(0.0)] + [_rec(2.0)] * 9
+               + [_rec(20.0)] * 5 + [_rec(4.5)] * 2 + [_rec(20.0)] * 5
+               + [_rec(2.0)] * 10)
+    pages = segment_pages(records, spike_factor=2.5)
+    assert len(pages) == 2                            # debris blip not a page
 
 
-def test_auto_merge_fills_gap_in_middle():
-    va = [_mkcluster(k, "v0") for k in (1, 2, 4, 5)]   # page 3 missed
-    vb = [_mkcluster(k, "v1") for k in (2, 3, 4)]      # re-flip caught it
-    merged = auto_merge([va, vb], threshold=10)
-    assert len(merged) == 5
-    assert merged[2]["frames"] == ["v1_f003"]          # inserted between 2 and 4
+def test_brief_but_still_rest_is_a_page():
+    records = ([_rec(0.0)] + [_rec(2.0)] * 9
+               + [_rec(20.0)] * 5
+               + [_rec(2.0)] * 3                      # quick flip, genuinely still
+               + [_rec(20.0)] * 5 + [_rec(2.0)] * 10)
+    pages = segment_pages(records, spike_factor=2.5)
+    assert len(pages) == 3
 
 
-def test_auto_merge_disjoint_videos_appended():
-    va = [_mkcluster(k, "v0") for k in (1, 2)]
-    vb = [_mkcluster(k, "v1") for k in (8, 9)]         # no overlap at all
-    merged = auto_merge([va, vb], threshold=10)
-    assert [c["frames"][0] for c in merged] == ["v0_f001", "v0_f002", "v1_f008", "v1_f009"]
+# ---------------- deduplication by printed number
+
+def _pg(pid, num, conf="high", score=0.5, **kw):
+    return {"id": pid, "printed_number": num, "confidence": conf,
+            "scores": {"composite": score}, "status": "ok", **kw}
+
+
+def test_dedupe_keeps_best_capture():
+    pages = [_pg("a", 5, "low", 0.3), _pg("b", 5, "high", 0.6), _pg("c", 6)]
+    n = dedupe_by_printed(pages, log=lambda m: None)
+    assert n == 1
+    assert pages[0]["status"] == "duplicate"   # low-confidence capture loses
+    assert pages[1]["status"] == "ok"
+    assert pages[2]["status"] == "ok"
+
+
+def test_dedupe_unnumbered_untouched():
+    pages = [_pg("a", None), _pg("b", None), _pg("c", 3)]
+    assert dedupe_by_printed(pages, log=lambda m: None) == 0
+    assert all(p["status"] == "ok" for p in pages)
+
+
+def test_dedupe_rerun_can_change_winner():
+    pages = [_pg("a", 5, "high", 0.6), _pg("b", 5, "low", 0.3)]
+    dedupe_by_printed(pages, log=lambda m: None)
+    assert pages[1]["status"] == "duplicate"
+    pages[1]["confidence"] = "high"
+    pages[1]["scores"]["composite"] = 0.9      # better capture arrived
+    dedupe_by_printed(pages, log=lambda m: None)
+    assert pages[0]["status"] == "duplicate" and pages[1]["status"] == "ok"
 
 
 def test_reorder_by_printed_numbers():

@@ -57,14 +57,16 @@ def init(directory: Path, videos, directions, reverse, title, expected_pages):
 @click.argument("directory", type=click.Path(exists=True, path_type=Path))
 @click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.option("--direction", type=click.Choice(["forward", "reverse"]), default="forward")
-def addvideo(directory: Path, video: Path, direction: str):
+@click.option("--upside-down", is_flag=True, help="Video was shot rotated 180 degrees.")
+def addvideo(directory: Path, video: Path, direction: str, upside_down: bool):
     """Add another capture video — shared pages merge, new pages slot in.
 
-    Keep adding videos until every page is covered; already-transcribed pages
-    are only re-transcribed if the new video has a better capture of them."""
+    Keep adding videos until every page is covered; duplicate captures collapse
+    via printed page numbers after transcription."""
     ws = Workspace.open(directory)
     from .project import add_video
-    add_video(ws, video, direction=direction, log=click.echo)
+    add_video(ws, video, direction=direction, rotate=180 if upside_down else 0,
+              log=click.echo)
     click.echo(f"video added — run `flipscan run {directory}` to merge it in")
 
 

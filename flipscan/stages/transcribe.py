@@ -14,7 +14,10 @@ CACHE_FILE = "transcriptions.json"
 
 
 def cache_key(page: dict) -> str | None:
-    return page.get("patched_source") or page.get("canonical")
+    base = page.get("patched_source") or page.get("canonical")
+    if base and page.get("side"):
+        return f"{base}|{page['side']}"  # spread halves share the canonical frame
+    return base
 
 
 def load_cache(ws: Workspace) -> dict:
@@ -79,6 +82,38 @@ def reorder_by_printed(pages: list[dict]) -> list[dict]:
     return start + [middle[i] for i in order] + end
 
 
+def dedupe_by_printed(pages: list[dict], log=print) -> int:
+    """Pages sharing a printed page number are the same page captured more
+    than once (multiple videos, or a re-detected rest). Keep the best capture,
+    mark the rest status="duplicate" (excluded from the book, shown in review)."""
+    groups: dict[tuple, list[dict]] = {}
+    for p in pages:
+        n = p.get("printed_number")
+        if n is None or p.get("role") or p.get("status") == "patched":
+            continue
+        groups.setdefault((n,), []).append(p)
+
+    conf_rank = {"high": 2, "medium": 1, "low": 0}
+    deduped = 0
+    for group in groups.values():
+        # a previous run may have marked duplicates; re-decide from scratch
+        for p in group:
+            if p["status"] == "duplicate":
+                p["status"] = "ok"
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda p: (conf_rank.get(p.get("confidence"), 0),
+                                  (p.get("scores") or {}).get("composite", 0.0)),
+                   reverse=True)
+        for p in group[1:]:
+            p["status"] = "duplicate"
+            deduped += 1
+    if deduped:
+        log(f"  merged {deduped} duplicate captures (same printed page number; "
+            f"best capture kept)")
+    return deduped
+
+
 def check_printed_numbers(pages: list[dict]) -> list[str]:
     """Printed page numbers must increase monotonically in cluster order;
     violations point at missed/duplicated pages or a parity merge misalignment."""
@@ -86,7 +121,7 @@ def check_printed_numbers(pages: list[dict]) -> list[str]:
     prev_num, prev_id = None, None
     for p in pages:
         n = p.get("printed_number")
-        if n is None:
+        if n is None or p.get("status") == "duplicate":
             continue
         if prev_num is not None and n <= prev_num:
             warnings.append(
@@ -143,11 +178,12 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             }
     save_cache(ws, cache)
 
+    dedupe_by_printed(pages, log)
     reordered = reorder_by_printed(pages)
     if [p["id"] for p in reordered] != [p["id"] for p in pages]:
         log("  reordered pages by printed page numbers")
         ws.manifest["pages"] = pages = reordered
-        ws.save()
+    ws.save()
 
     warnings = check_printed_numbers(pages)
     for w in warnings:

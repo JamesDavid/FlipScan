@@ -82,6 +82,8 @@
   .badge.suspect { background:#fee2e2; color:var(--bad); }
   .badge.ok { background:#dcfce7; color:#166534; }
   .badge.patched { background:#dbeafe; color:#1d4ed8; }
+  .badge.duplicate { background:#fef9c3; color:#854d0e; }
+  .pagerow.duplicate { opacity:.55; }
   .thumbs { display:flex; flex-wrap:wrap; gap:.6rem; }
   .thumbs img { height:160px; border:1px solid var(--line); border-radius:4px; }
   a { color:var(--accent); }
@@ -286,6 +288,13 @@ async function openProject(name, tab) {
       <span class="meta">${p.videos.length} videos · ${p.pages.length} pages ·
         ${p.pages.filter(x => x.status === "suspect").length} suspect</span>
     </div>
+    <div class="meta" style="margin-top:.5rem">
+      ${p.videos.map(v => `<label style="margin-right:1rem">
+        <input type="checkbox" style="width:auto;margin:0 .25rem 0 0"
+               ${v.rotate === 180 ? "checked" : ""}
+               onchange="setRotate('${v.id}', this.checked)">
+        ${v.id} shot upside-down</label>`).join("")}
+    </div>
     <div id="log"></div>
   </div>
   <div class="tabs">
@@ -413,6 +422,15 @@ async function patchPage(pageId) {
                         {method:"POST", body: fd});
   if (!r.ok) { alert("patch failed"); return; }
   openProject(current, "pages");
+}
+
+async function setRotate(vid, upsideDown) {
+  await api(`/projects/${current}/videos/${vid}?rotate=${upsideDown ? 180 : 0}`,
+            {method:"PUT"});
+  if (confirm("Orientation saved. Re-run the pipeline now to re-process that video's pages?")) {
+    await api(`/projects/${current}/run`, {method:"POST"});
+  }
+  openProject(current);
 }
 
 async function addVideoToProject() {

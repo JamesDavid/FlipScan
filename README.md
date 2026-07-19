@@ -132,13 +132,14 @@ w_motion = 1.0
 center_crop = 0.6                # frame fraction used for sharpness
 
 [cluster]
-hash_threshold = 10              # pHash Hamming distance to split pages
+turn_min_frames = 4              # sustained high-motion run = page turn
 min_cluster_frames = 3           # smaller clusters flagged suspect
 motion_spike_factor = 2.5        # rest = motion below median * factor
 suspect_score_percentile = 10
 
 [preprocess]
 llm_long_edge = 1600             # LLM copy downscale (token cost vs legibility)
+quad_pad = 0.025                 # crop padding so page numbers survive
 dewarp = false                   # cylindrical curl correction
 
 [transcribe]
