@@ -43,6 +43,7 @@ def generate_review(ws: Workspace, log=print) -> Path:
         md_text = ""
         if p.get("md") and (ws.root / p["md"]).exists():
             md_text = (ws.root / p["md"]).read_text(encoding="utf-8")
+            md_text = md_text.replace("](figures/", "](../figures/")
         image = None
         if p.get("color") and (ws.root / p["color"]).exists():
             image = f"../{p['color'].replace(chr(92), '/')}"
