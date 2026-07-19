@@ -47,7 +47,7 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     for page in ws.manifest["pages"]:
         regions = page.get("regions") or []
         if (not regions or not page.get("md") or not page.get("color")
-                or page.get("status") == "duplicate"):
+                or page.get("status") in ("duplicate", "deleted")):
             continue
         color = cv2.imread(str(ws.root / page["color"]))
         if color is None:
@@ -59,6 +59,8 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
         page_figs = []
 
         for i, region in enumerate(regions):
+            if region.get("user_crop"):
+                continue  # the user hand-cropped this figure; never overwrite
             bx0, by0, bx1, by1 = region["bbox_norm"]
             dx, dy = (bx1 - bx0) * EXPAND, (by1 - by0) * EXPAND
             x0 = int(max(0.0, bx0 - dx) * w)

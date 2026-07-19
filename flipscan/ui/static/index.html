@@ -91,6 +91,9 @@
   .badge.patched { background:#dbeafe; color:#1d4ed8; }
   .badge.duplicate { background:#fef9c3; color:#854d0e; }
   .pagerow.duplicate { opacity:.55; }
+  .badge.deleted { background:#f3f4f6; color:#6b7280; text-decoration:line-through; }
+  .pagerow.deleted { opacity:.35; }
+  button.danger { background:#dc2626; }
   .thumbs { display:flex; flex-wrap:wrap; gap:.6rem; }
   .thumbs img { height:160px; border:1px solid var(--line); border-radius:4px; }
   a { color:var(--accent); }
@@ -342,8 +345,17 @@ function addPagePanel() {
 function renderTab(tab, p) {
   const name = p.name, body = $("tabbody");
   if (tab === "pipeline") {
-    api("/projects/" + name + "/reshoot").then(items => {
-      body.innerHTML = `<div class="card"><h2>Reshoot list</h2>` + (items.length
+    api("/projects/" + name + "/reshoot").then(r => {
+      const items = r.items || [];
+      const missingCard = r.missing && r.missing.length ? `
+        <div class="card" style="border:2px solid #f59e0b">
+          <h2>Missing pages — never captured</h2>
+          <p>Printed pages <b>${esc(r.missing_ranges)}</b> (${r.missing.length} pages)
+          appear in no video. Film those parts of the book (any direction) and use
+          <b>+ Add video</b>, or add photos of them below.</p>
+        </div>` : "";
+      body.innerHTML = missingCard
+        + `<div class="card"><h2>Reshoot list — captured badly</h2>` + (items.length
         ? "<ul>" + items.map(i =>
             `<li><b>${i.id}</b>${i.printed_number ? ` (printed ${i.printed_number})` : ""}
              — ${esc(i.reasons.join(", "))}</li>`).join("") + "</ul>"
@@ -351,24 +363,69 @@ function renderTab(tab, p) {
         + addPagePanel();
     });
   } else if (tab === "pages") {
-    body.innerHTML = addPagePanel() + p.pages.map(pg => `
-      <div class="card pagerow ${pg.status}">
-        <div>
-          <div class="meta"><span class="badge ${pg.status}">${pg.status}</span>
-            ${pg.id}${pg.printed_number ? " · printed " + pg.printed_number : ""}
-            ${pg.confidence ? " · " + pg.confidence : ""}</div>
-          ${pg.color ? `<img loading="lazy" src="/api/projects/${name}/file/${pg.color}">` : ""}
-          <div style="margin-top:.5rem">
-            <input type="file" id="patch-${pg.id}" style="display:none"
-                   onchange="patchPage('${pg.id}')">
-            <button class="secondary" onclick="$('patch-${pg.id}').click()">Patch photo…</button>
+    body.innerHTML = addPagePanel() + p.pages.map(pg => {
+      const collapsed = pg.status === "deleted" || pg.status === "duplicate";
+      const numLabel = pg.printed_number != null
+        ? "printed " + pg.printed_number + (pg.number_inferred ? " (inferred)" : "")
+          + (pg.number_manual ? " (manual)" : "")
+        : "no page number";
+      const header = `
+        <div class="row" style="padding:.15rem 0">
+          <span class="badge ${pg.status}">${pg.status}</span>
+          <span class="meta" style="margin:0">${pg.id} · ${numLabel}
+            ${pg.confidence ? " · " + pg.confidence : ""}
+            ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}</span>
+          ${collapsed ? `
+            <span style="margin-left:auto" class="row">
+              ${pg.status === "duplicate" ? `<button class="secondary"
+                 onclick="unduplicate('${pg.id}')">Not a duplicate</button>` : ""}
+              ${pg.status === "deleted" ? `<button class="secondary"
+                 onclick="restorePage('${pg.id}')">Restore</button>` : ""}
+              <button class="secondary" onclick="toggleCell('${pg.id}')"
+                      id="tgl-${pg.id}">expand ▾</button>
+            </span>` : ""}
+        </div>`;
+      const figs = (pg.figures || []).map((f, i) => `
+        <a href="javascript:void(0)" onclick="openCrop('${pg.id}', ${i})"
+           title="click to edit crop">
+          <img src="/api/projects/${name}/file/${f}?t=${Date.now()}"
+               style="height:80px;border:1px solid var(--line);border-radius:4px"></a>`)
+        .join("");
+      return `
+      <div class="card ${collapsed ? "" : "pagerow"} ${pg.status}" id="cell-${pg.id}">
+        ${collapsed ? header : ""}
+        <div class="pagerow-body" style="${collapsed ? "display:none" : ""};
+             ${collapsed ? "" : "display:contents"}">
+          <div>
+            ${collapsed ? "" : header}
+            ${pg.color ? `<img loading="lazy"
+               src="/api/projects/${name}/file/${pg.color}">` : ""}
+            ${figs ? `<div class="row" style="margin-top:.4rem">${figs}
+              <span class="meta">figures — click to re-crop</span></div>` : ""}
+            <div style="margin-top:.5rem" class="row">
+              <label style="margin:0">page #</label>
+              <input type="number" id="num-${pg.id}" value="${pg.printed_number ?? ""}"
+                     style="width:5.5rem;margin:0"
+                     onchange="setPageNumber('${pg.id}')">
+              <input type="file" id="patch-${pg.id}" style="display:none"
+                     onchange="patchPage('${pg.id}')">
+              <button class="secondary" onclick="$('patch-${pg.id}').click()">Patch photo…</button>
+              <button class="secondary" onclick="toggleReshoot('${pg.id}', ${!pg.needs_reshoot})">
+                ${pg.needs_reshoot ? "Unmark re-acquire" : "Mark for re-acquisition"}</button>
+              ${pg.status === "duplicate" ? `<button class="secondary"
+                 onclick="unduplicate('${pg.id}')">Not a duplicate</button>` : ""}
+              ${pg.status === "deleted"
+                ? `<button class="secondary" onclick="restorePage('${pg.id}')">Restore</button>`
+                : `<button class="danger" onclick="deletePage('${pg.id}')">Delete</button>`}
+            </div>
+          </div>
+          <div>
+            <textarea id="md-${pg.id}" data-page="${pg.id}"></textarea>
+            <button style="margin-top:.4rem" onclick="saveMd('${pg.id}')">Save markdown</button>
           </div>
         </div>
-        <div>
-          <textarea id="md-${pg.id}" data-page="${pg.id}"></textarea>
-          <button style="margin-top:.4rem" onclick="saveMd('${pg.id}')">Save markdown</button>
-        </div>
-      </div>`).join("");
+      </div>`;
+    }).join("") + cropModalHtml();
     p.pages.forEach(async pg => {
       if (pg.md) {
         const r = await fetch(`/api/projects/${name}/file/${pg.md}`);
@@ -388,6 +445,14 @@ function renderTab(tab, p) {
         || "<div class='meta'>no figures yet</div>"}</div></div>`;
   } else if (tab === "output") {
     body.innerHTML = `<div class="card"><h2>Build</h2>
+      <div class="row" style="margin-bottom:.6rem">
+        <label style="margin:0">Target device</label>
+        <select id="build-device" style="width:auto">
+          ${["none","xteink-x3","xteink-x4","eink-6in","tablet"].map(d =>
+            `<option>${d}</option>`).join("")}
+        </select>
+        <span class="meta">images resized/grayscaled for small e-ink readers</span>
+      </div>
       <div class="row">
         ${["epub","pdf-facsimile","pdf"].map(f =>
           `<button onclick="buildFmt('${f}')">Build ${f}</button>`).join("")}
@@ -513,10 +578,123 @@ async function addPagePhoto() {
 }
 
 async function buildFmt(fmt) {
+  const dev = $("build-device") ? $("build-device").value : "none";
   try {
-    await api(`/projects/${current}/build?format=${fmt}`, {method:"POST"});
+    await api(`/projects/${current}/build?format=${fmt}&device=${dev}`, {method:"POST"});
     openProject(current, "output");
   } catch (e) { alert(e.message); }
+}
+
+function toggleCell(pageId) {
+  const bodyEl = document.querySelector(`#cell-${pageId} .pagerow-body`);
+  const btn = $("tgl-" + pageId);
+  const hidden = bodyEl.style.display === "none";
+  bodyEl.style.display = hidden ? "contents" : "none";
+  document.getElementById("cell-" + pageId).classList.toggle("pagerow", hidden);
+  if (btn) btn.textContent = hidden ? "collapse ▴" : "expand ▾";
+}
+
+async function setPageNumber(pageId) {
+  const v = $("num-" + pageId).value;
+  await api(`/projects/${current}/pages/${pageId}`, {
+    method: "PATCH", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({printed_number: v === "" ? null : +v})});
+  openProject(current, "pages");
+}
+
+async function toggleReshoot(pageId, flag) {
+  await api(`/projects/${current}/pages/${pageId}`, {
+    method: "PATCH", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({needs_reshoot: flag})});
+  openProject(current, "pages");
+}
+
+async function unduplicate(pageId) {
+  await api(`/projects/${current}/pages/${pageId}`, {
+    method: "PATCH", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({unduplicate: true})});
+  openProject(current, "pages");
+}
+
+// ---- figure crop editor: draw a rectangle over the page image
+function cropModalHtml() {
+  return `
+  <div id="crop-modal" style="display:none;position:fixed;inset:0;z-index:50;
+       background:rgba(0,0,0,.7);align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:10px;padding:1rem;max-width:92vw;
+         max-height:92vh;overflow:auto">
+      <div class="row" style="margin-bottom:.5rem">
+        <b>Re-crop figure</b>
+        <span class="meta">drag on the page to draw the new crop</span>
+        <button style="margin-left:auto" onclick="saveCrop()">Save crop</button>
+        <button class="secondary" onclick="$('crop-modal').style.display='none'">Cancel</button>
+      </div>
+      <div id="crop-stage" style="position:relative;touch-action:none;cursor:crosshair">
+        <img id="crop-img" style="max-width:86vw;max-height:75vh;display:block;
+             user-select:none;-webkit-user-drag:none" draggable="false">
+        <div id="crop-box" style="position:absolute;border:2px solid #0d9488;
+             background:rgba(13,148,136,.15);pointer-events:none"></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+let cropCtx = null;
+function openCrop(pageId, figIdx) {
+  const pg = window._proj.pages.find(p => p.id === pageId);
+  cropCtx = {pageId, figIdx, start: null, bbox: (pg.regions?.[figIdx]?.bbox_norm) || null};
+  const img = $("crop-img");
+  img.src = `/api/projects/${current}/file/${pg.color}?t=${Date.now()}`;
+  $("crop-modal").style.display = "flex";
+  img.onload = () => drawCropBox();
+  const stage = $("crop-stage");
+  stage.onpointerdown = (e) => {
+    const r = $("crop-img").getBoundingClientRect();
+    cropCtx.start = [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+    cropCtx.bbox = null;
+    stage.setPointerCapture(e.pointerId);
+  };
+  stage.onpointermove = (e) => {
+    if (!cropCtx.start) return;
+    const r = $("crop-img").getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    cropCtx.bbox = [Math.min(cropCtx.start[0], x), Math.min(cropCtx.start[1], y),
+                    Math.max(cropCtx.start[0], x), Math.max(cropCtx.start[1], y)];
+    drawCropBox();
+  };
+  stage.onpointerup = () => cropCtx.start = null;
+}
+
+function drawCropBox() {
+  const box = $("crop-box"), img = $("crop-img");
+  if (!cropCtx?.bbox) { box.style.display = "none"; return; }
+  const [x0, y0, x1, y1] = cropCtx.bbox;
+  box.style.display = "block";
+  box.style.left = (x0 * img.clientWidth) + "px";
+  box.style.top = (y0 * img.clientHeight) + "px";
+  box.style.width = ((x1 - x0) * img.clientWidth) + "px";
+  box.style.height = ((y1 - y0) * img.clientHeight) + "px";
+}
+
+async function saveCrop() {
+  if (!cropCtx?.bbox) { alert("draw a rectangle first"); return; }
+  await api(`/projects/${current}/pages/${cropCtx.pageId}/figures/${cropCtx.figIdx}/crop`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({bbox_norm: cropCtx.bbox})});
+  $("crop-modal").style.display = "none";
+  openProject(current, "pages");
+}
+
+async function deletePage(pageId) {
+  if (!confirm(`Delete ${pageId} from the book? (It stays visible here and can be restored.)`)) return;
+  await api(`/projects/${current}/pages/${pageId}`, {method:"DELETE"});
+  openProject(current, "pages");
+}
+
+async function restorePage(pageId) {
+  await api(`/projects/${current}/pages/${pageId}/restore`, {method:"POST"});
+  openProject(current, "pages");
 }
 
 refreshProjects();

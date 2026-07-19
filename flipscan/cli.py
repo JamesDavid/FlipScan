@@ -176,6 +176,24 @@ def addpage(directory: Path, image: Path, position: str, cover: bool):
                f"`flipscan build {directory}` to rebuild outputs")
 
 
+# ---------------------------------------------------------------- delpage
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path))
+@click.argument("page_id")
+@click.option("--restore", is_flag=True, help="Un-delete a previously deleted page.")
+def delpage(directory: Path, page_id: str, restore: bool):
+    """Delete an erroneous page from the book (soft: restorable, survives re-runs)."""
+    ws = Workspace.open(directory)
+    from .project import set_page_deleted
+    try:
+        set_page_deleted(ws, page_id, not restore)
+    except KeyError:
+        raise click.UsageError(f"no page {page_id!r}")
+    click.echo(f"{page_id} {'restored' if restore else 'deleted'} — "
+               f"run `flipscan build {directory}` to rebuild outputs")
+
+
 # ---------------------------------------------------------------- build
 
 @main.command()
@@ -187,7 +205,10 @@ def addpage(directory: Path, image: Path, position: str, cover: bool):
               help="Output format; repeatable (default: epub)")
 @click.option("--title", default=None)
 @click.option("--author", default=None)
-def build(directory: Path, output, formats, title, author):
+@click.option("--device", default="none",
+              type=click.Choice(["none", "xteink-x3", "xteink-x4", "eink-6in", "tablet"]),
+              help="Resize/grayscale images for a target reader (e.g. Xteink X3/X4).")
+def build(directory: Path, output, formats, title, author, device):
     """Build the book (epub / pdf / pdf-facsimile) from the assembled markdown."""
     ws = Workspace.open(directory)
     formats = formats or ("epub",)
@@ -197,13 +218,16 @@ def build(directory: Path, output, formats, title, author):
             out = output
         else:
             suffix = "" if fmt != "pdf-facsimile" else "-facsimile"
+            if device != "none":
+                suffix += f"-{device}"
             out = ws.dir("out") / f"{ws.root.name}{suffix}.{ext}"
         if fmt == "epub":
             from .build_epub import build_epub
-            build_epub(ws, out, title=title, author=author, log=click.echo)
+            build_epub(ws, out, title=title, author=author, device=device,
+                       log=click.echo)
         elif fmt == "pdf-facsimile":
             from .build_pdf import build_pdf_facsimile
-            build_pdf_facsimile(ws, out, title=title, log=click.echo)
+            build_pdf_facsimile(ws, out, title=title, device=device, log=click.echo)
         else:
             from .build_pdf import build_pdf_reflowed
             build_pdf_reflowed(ws, out, title=title, log=click.echo)

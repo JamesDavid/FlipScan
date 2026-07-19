@@ -23,11 +23,13 @@ def reshoot_list(ws: Workspace) -> list[dict]:
             reasons.append(f"flagged: {f}")
         if p.get("figure_quality"):
             reasons.append("figure source frame is low quality")
+        if p.get("needs_reshoot"):
+            reasons.append("marked for re-acquisition by you")
         if p["status"] == "suspect" and not reasons:
             reasons.append("weak capture (short cluster or low frame score)")
         if p["status"] == "missing":
             reasons.append("no usable frame captured")
-        if reasons and p["status"] not in ("patched", "duplicate"):
+        if reasons and p["status"] not in ("patched", "duplicate", "deleted"):
             items.append({"id": p["id"], "printed_number": p.get("printed_number"),
                           "reasons": reasons})
     return items
@@ -54,6 +56,8 @@ def generate_review(ws: Workspace, log=print) -> Path:
                     else "<em>no transcription</em>",
         })
 
+    from .stages.transcribe import format_ranges
+    missing = ws.manifest.get("missing_pages", [])
     out = ws.dir("review") / "index.html"
     out.write_text(tmpl.render(
         title=ws.manifest["book"].get("title") or ws.root.name,
@@ -61,6 +65,8 @@ def generate_review(ws: Workspace, log=print) -> Path:
         pages=pages,
         suspect_count=sum(1 for p in pages if p["status"] == "suspect"),
         reshoot=reshoot_list(ws),
+        missing=missing,
+        missing_ranges=format_ranges(missing),
     ), encoding="utf-8")
     log(f"review page: {out}")
     return out

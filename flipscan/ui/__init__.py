@@ -332,26 +332,135 @@ def create_app(root: Path) -> FastAPI:
         ws.stage_reset("figures")
         return {"ok": True}
 
+    class PageEdit(BaseModel):
+        printed_number: int | None = None
+        needs_reshoot: bool | None = None
+        unduplicate: bool | None = None
+
+    def _reconcile(ws):
+        from ..stages.transcribe import reconcile
+        reconcile(ws, ws.manifest["pages"], log=lambda m: None)
+        ws.stage_reset("assemble")
+        ws.save()
+
+    @app.patch("/api/projects/{name}/pages/{page_id}")
+    def edit_page(name: str, page_id: str, edit: PageEdit):
+        """Manual corrections: set/clear the printed page number, mark a page
+        for re-acquisition, or rescue a false duplicate."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        fields = edit.model_fields_set
+        if "printed_number" in fields:
+            page["printed_number"] = edit.printed_number
+            page["number_manual"] = True
+            page.pop("number_inferred", None)
+            page.pop("number_conflict", None)
+            from ..stages.transcribe import cache_key, load_cache, save_cache
+            cache = load_cache(ws)
+            key = cache_key(page)
+            if key in cache:
+                cache[key]["printed_number"] = edit.printed_number
+                save_cache(ws, cache)
+        if edit.needs_reshoot is not None:
+            page["needs_reshoot"] = edit.needs_reshoot
+        if edit.unduplicate:
+            page["status"] = "ok"
+            page["dedupe_exempt"] = True
+        _reconcile(ws)
+        return {"ok": True, "page": ws.page(page_id)}
+
+    class CropEdit(BaseModel):
+        bbox_norm: list[float]
+
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
+    def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
+        """Re-crop a figure to a user-drawn bbox (normalized to the page image)."""
+        import string
+
+        import cv2
+
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None or not page.get("color"):
+            raise HTTPException(404, "no such page")
+        regions = page.get("regions") or []
+        if fig_idx >= len(regions) or len(edit.bbox_norm) != 4:
+            raise HTTPException(400, "bad figure index or bbox")
+        color = cv2.imread(str(ws.root / page["color"]))
+        if color is None:
+            raise HTTPException(500, "page image unreadable")
+        h, w = color.shape[:2]
+        x0, y0, x1, y1 = edit.bbox_norm
+        x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
+        y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
+        px = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
+        if px[2] - px[0] < 10 or px[3] - px[1] < 10:
+            raise HTTPException(400, "crop too small")
+        crop = color[px[1]:px[3], px[0]:px[2]]
+        figs = page.get("figures") or []
+        if fig_idx < len(figs):
+            rel = figs[fig_idx]
+        else:
+            rel = f"figures/{page_id}_{string.ascii_lowercase[fig_idx % 26]}.png"
+            figs = figs + [rel]
+            page["figures"] = figs
+        cv2.imwrite(str(ws.root / rel), crop)
+        regions[fig_idx]["bbox_norm"] = [x0, y0, x1, y1]
+        regions[fig_idx]["user_crop"] = True
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True, "figure": rel}
+
+    @app.delete("/api/projects/{name}/pages/{page_id}")
+    def delete_page(name: str, page_id: str):
+        ws = ws_for(name)
+        from ..project import set_page_deleted
+        try:
+            set_page_deleted(ws, page_id, True)
+        except KeyError:
+            raise HTTPException(404, "no such page")
+        return {"ok": True}
+
+    @app.post("/api/projects/{name}/pages/{page_id}/restore")
+    def restore_page(name: str, page_id: str):
+        ws = ws_for(name)
+        from ..project import set_page_deleted
+        try:
+            set_page_deleted(ws, page_id, False)
+        except KeyError:
+            raise HTTPException(404, "no such page")
+        return {"ok": True}
+
     @app.get("/api/projects/{name}/reshoot")
     def reshoot(name: str):
         from ..review import reshoot_list
-        return reshoot_list(ws_for(name))
+        from ..stages.transcribe import format_ranges
+        ws = ws_for(name)
+        return {
+            "items": reshoot_list(ws),
+            "missing": ws.manifest.get("missing_pages", []),
+            "missing_ranges": format_ranges(ws.manifest.get("missing_pages", [])),
+        }
 
     # ---------------- build + files
 
     @app.post("/api/projects/{name}/build")
-    def build(name: str, format: str = "epub"):
+    def build(name: str, format: str = "epub", device: str = "none"):
         ws = ws_for(name)
         ext = "epub" if format == "epub" else "pdf"
         suffix = "-facsimile" if format == "pdf-facsimile" else ""
+        if device != "none":
+            suffix += f"-{device}"
         out = ws.dir("out") / f"{ws.root.name}{suffix}.{ext}"
         try:
             if format == "epub":
                 from ..build_epub import build_epub
-                build_epub(ws, out, log=lambda m: None)
+                build_epub(ws, out, device=device, log=lambda m: None)
             elif format == "pdf-facsimile":
                 from ..build_pdf import build_pdf_facsimile
-                build_pdf_facsimile(ws, out, log=lambda m: None)
+                build_pdf_facsimile(ws, out, device=device, log=lambda m: None)
             elif format == "pdf":
                 from ..build_pdf import build_pdf_reflowed
                 build_pdf_reflowed(ws, out, log=lambda m: None)

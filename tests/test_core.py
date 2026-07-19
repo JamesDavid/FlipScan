@@ -8,7 +8,9 @@ from flipscan.build_epub import split_chapters
 from flipscan.imaging import hamming, majority_hash, phash64
 from flipscan.stages.assemble import _join_pages, _strip_repeated_lines
 from flipscan.stages.cluster import segment_pages
-from flipscan.stages.transcribe import dedupe_by_printed, reorder_by_printed
+from flipscan.stages.transcribe import (dedupe_by_printed, format_ranges,
+                                        infer_missing_numbers, reorder_by_printed,
+                                        sanitize_numbers_by_video)
 from flipscan.stages.figures import snap_bbox
 
 
@@ -150,6 +152,42 @@ def test_reorder_by_printed_numbers():
 def test_reorder_no_numbers_is_stable():
     pages = [{"id": i, "printed_number": None} for i in range(5)]
     assert [p["id"] for p in reorder_by_printed(pages)] == [0, 1, 2, 3, 4]
+
+
+# ---------------- number sanitizing + inference
+
+def _cap(pid, frame, num, video="v0", **kw):
+    return {"id": pid, "video": video, "canonical": f"{video}_f{frame:06d}",
+            "printed_number": num, "status": "ok", "scores": {}, **kw}
+
+
+def test_sanitize_rejects_misread_266_between_204_and_208():
+    pages = [_cap("a", 100, 200), _cap("b", 200, 202), _cap("c", 300, 204),
+             _cap("d", 400, 266),  # misread — really 206
+             _cap("e", 500, 208), _cap("f", 600, 210)]
+    assert sanitize_numbers_by_video(pages, log=lambda m: None) == 1
+    assert pages[3]["printed_number"] is None and pages[3]["number_rejected"]
+    infer_missing_numbers(pages, log=lambda m: None)
+    assert pages[3]["printed_number"] == 206  # neighbors 204/208 pin it down
+
+
+def test_sanitize_handles_descending_video():
+    pages = [_cap("a", 100, 50), _cap("b", 200, 48), _cap("c", 300, 12),  # misread
+             _cap("d", 400, 44), _cap("e", 500, 42)]
+    assert sanitize_numbers_by_video(pages, log=lambda m: None) == 1
+    assert pages[2]["printed_number"] is None
+
+
+def test_sanitize_keeps_manual_numbers():
+    pages = [_cap("a", 100, 10), _cap("b", 200, 99, number_manual=True),
+             _cap("c", 300, 12), _cap("d", 400, 14), _cap("e", 500, 16)]
+    sanitize_numbers_by_video(pages, log=lambda m: None)
+    assert pages[1]["printed_number"] == 99  # user-entered survives
+
+
+def test_format_ranges():
+    assert format_ranges([6, 7, 14, 22, 23, 24]) == "6-7, 14, 22-24"
+    assert format_ranges([]) == ""
 
 
 # ---------------- assembly

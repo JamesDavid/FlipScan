@@ -40,6 +40,15 @@
   generated from <code>{{ workspace }}</code>
 </div>
 
+{% if missing %}
+<div class="reshoot" style="border-color:#f59e0b; background:#fffbeb;">
+  <h2 style="color:#b45309">Missing pages — never captured</h2>
+  <p>Printed pages <strong>{{ missing_ranges }}</strong> ({{ missing|length }} pages)
+  appear in no video. Film those parts of the book again (any direction) and add the
+  video, or photograph them individually and add them as page photos.</p>
+</div>
+{% endif %}
+
 {% if reshoot %}
 <div class="reshoot">
   <h2>Reshoot list — re-photograph these pages individually</h2>

@@ -71,8 +71,8 @@ def _join_pages(pages: list[str]) -> str:
 def run(ws: Workspace, cfg: dict, log=print) -> None:
     texts, missing = [], []
     for page in ws.manifest["pages"]:
-        if page.get("role") == "cover" or page.get("status") == "duplicate":
-            continue  # covers are images; duplicates are merged captures
+        if page.get("role") == "cover" or page.get("status") in ("duplicate", "deleted"):
+            continue  # covers are images; duplicates merged; deleted excluded
         if page.get("md"):
             texts.append((ws.root / page["md"]).read_text(encoding="utf-8"))
         else:

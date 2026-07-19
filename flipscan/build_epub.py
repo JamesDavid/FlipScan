@@ -30,7 +30,7 @@ def split_chapters(book_md: str) -> list[tuple[str, str]]:
 
 
 def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
-               author: str | None = None, log=print) -> Path:
+               author: str | None = None, device: str = "none", log=print) -> Path:
     book_md_path = ws.work_file("book.md")
     if not book_md_path.exists():
         raise FileNotFoundError("work/book.md missing — run the pipeline (assemble) first")
@@ -43,21 +43,25 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
     if author:
         book.add_author(author)
 
+    from .device import process_image
+
     cover_page = next((p for p in ws.manifest["pages"] if p.get("role") == "cover"), None)
     if cover_page and cover_page.get("color") and (ws.root / cover_page["color"]).exists():
-        cover_src = ws.root / cover_page["color"]
-        book.set_cover(f"cover{cover_src.suffix}", cover_src.read_bytes())
+        cover_bytes, cover_type = process_image(
+            (ws.root / cover_page["color"]).read_bytes(), device)
+        ext = ".jpg" if cover_type == "image/jpeg" else ".png"
+        book.set_cover(f"cover{ext}", cover_bytes)
 
-    # embed referenced figure images
+    # embed referenced figure images, processed for the target device
     added_images: dict[str, str] = {}
     for rel in set(_IMG.findall(book_md)):
         src = ws.root / rel
         if src.exists():
-            epub_name = f"images/{src.name}"
+            data, media_type = process_image(src.read_bytes(), device)
+            ext = ".jpg" if media_type == "image/jpeg" else src.suffix
+            epub_name = f"images/{src.stem}{ext}"
             book.add_item(epub.EpubItem(
-                file_name=epub_name,
-                media_type="image/png" if src.suffix == ".png" else "image/jpeg",
-                content=src.read_bytes(),
+                file_name=epub_name, media_type=media_type, content=data,
             ))
             added_images[rel] = epub_name
 

@@ -89,14 +89,16 @@ def dedupe_by_printed(pages: list[dict], log=print) -> int:
     groups: dict[tuple, list[dict]] = {}
     for p in pages:
         n = p.get("printed_number")
-        if n is None or p.get("role") or p.get("status") == "patched":
+        if n is None or p.get("role") or p.get("status") in ("patched", "deleted"):
             continue
         groups.setdefault((n,), []).append(p)
 
     conf_rank = {"high": 2, "medium": 1, "low": 0}
     deduped = 0
     for group in groups.values():
-        # a previous run may have marked duplicates; re-decide from scratch
+        # a previous run may have marked duplicates; re-decide from scratch —
+        # except pages the user explicitly rescued ("not a duplicate")
+        group = [p for p in group if not p.get("dedupe_exempt")]
         for p in group:
             if p["status"] == "duplicate":
                 p["status"] = "ok"
@@ -114,6 +116,134 @@ def dedupe_by_printed(pages: list[dict], log=print) -> int:
     return deduped
 
 
+def _body_pages(pages: list[dict]) -> list[dict]:
+    return [p for p in pages
+            if not p.get("role") and not p.get("pinned")
+            and p.get("status") not in ("duplicate", "deleted")]
+
+
+def _frame_no(page: dict) -> int | None:
+    fid = page.get("canonical")
+    if not fid or "_f" not in fid:
+        return None
+    try:
+        return int(fid.rsplit("_f", 1)[1])
+    except ValueError:
+        return None
+
+
+def sanitize_numbers_by_video(pages: list[dict], log=print) -> int:
+    """Within one video, capture order is ground truth: printed numbers must run
+    monotonically (ascending or descending). A number that breaks its video's
+    sequence — e.g. reading '266' between neighbors 204 and 208 — is a misread:
+    reject it so position-based inference can assign the real number (206).
+
+    Keeps the maximum-weight monotonic subsequence per video (user-entered
+    numbers are effectively unremovable anchors); everything else is cleared."""
+    by_video: dict[str, list[dict]] = {}
+    for p in _body_pages(pages):
+        if p.get("printed_number") is None or _frame_no(p) is None:
+            continue
+        by_video.setdefault(p.get("video") or "?", []).append(p)
+
+    rejected = 0
+    for vid, group in by_video.items():
+        group.sort(key=_frame_no)
+        nums = [p["printed_number"] for p in group]
+        weights = [1000 if p.get("number_manual") else 1 for p in group]
+        n = len(group)
+        if n < 3:
+            continue
+
+        def best_monotonic(sign: int) -> tuple[int, list[int]]:
+            # O(n^2) weighted longest non-decreasing (sign=1) / non-increasing
+            best = list(weights)
+            prev = [-1] * n
+            for i in range(n):
+                for j in range(i):
+                    if (nums[i] - nums[j]) * sign >= 0 and best[j] + weights[i] > best[i]:
+                        best[i] = best[j] + weights[i]
+                        prev[i] = j
+            end = max(range(n), key=lambda i: best[i])
+            keep, i = [], end
+            while i != -1:
+                keep.append(i)
+                i = prev[i]
+            return best[end], keep
+
+        asc_w, asc_keep = best_monotonic(1)
+        desc_w, desc_keep = best_monotonic(-1)
+        keep = set(asc_keep if asc_w >= desc_w else desc_keep)
+        for i, p in enumerate(group):
+            if i not in keep and not p.get("number_manual"):
+                p["printed_number"] = None
+                p["number_rejected"] = True
+                p.pop("number_inferred", None)
+                rejected += 1
+    if rejected:
+        log(f"  rejected {rejected} printed numbers that break their video's "
+            f"page order (misreads) — re-inferring from neighbors")
+    return rejected
+
+
+def infer_missing_numbers(pages: list[dict], log=print) -> int:
+    """Assign printed numbers to unnumbered pages when their position makes it
+    unambiguous: one unknown page sitting between printed 52 and 54 must be 53.
+    Runs of unknowns that exactly fill a gap get numbered sequentially; runs
+    that exceed the gap are contradictions — those pages go suspect."""
+    body = _body_pages(pages)
+    numbered_idx = [i for i, p in enumerate(body)
+                    if p.get("printed_number") is not None]
+    inferred = 0
+    for a, b in zip(numbered_idx, numbered_idx[1:]):
+        unknown = body[a + 1:b]
+        if not unknown:
+            continue
+        span = body[b]["printed_number"] - body[a]["printed_number"]
+        slots = len(unknown) + 1
+        # uniform-step fit: step 1 = every page captured; step 2 = one flat
+        # side per pass (204, ?, 208 -> 206); larger steps are too ambiguous
+        if span > 0 and span % slots == 0 and 1 <= span // slots <= 2:
+            step = span // slots
+            for k, p in enumerate(unknown, 1):
+                p["printed_number"] = body[a]["printed_number"] + k * step
+                p["number_inferred"] = True
+                inferred += 1
+        elif 0 < span <= len(unknown):
+            for p in unknown:  # more captures than pages fit here
+                if p["status"] == "ok":
+                    p["status"] = "suspect"
+                p["number_conflict"] = True
+    if inferred:
+        log(f"  inferred printed numbers for {inferred} unnumbered pages "
+            f"from their neighbors")
+    return inferred
+
+
+def compute_missing_pages(pages: list[dict]) -> list[int]:
+    """Printed numbers absent from the captured range = pages never captured."""
+    nums = sorted({p["printed_number"] for p in _body_pages(pages)
+                   if p.get("printed_number") is not None})
+    if len(nums) < 2:
+        return []
+    return sorted(set(range(nums[0], nums[-1] + 1)) - set(nums))
+
+
+def format_ranges(nums: list[int]) -> str:
+    """[6,7,14,22,23,24] -> '6-7, 14, 22-24'"""
+    if not nums:
+        return ""
+    out, start, prev = [], nums[0], nums[0]
+    for n in nums[1:] + [None]:
+        if n is not None and n == prev + 1:
+            prev = n
+            continue
+        out.append(str(start) if start == prev else f"{start}-{prev}")
+        if n is not None:
+            start = prev = n
+    return ", ".join(out)
+
+
 def check_printed_numbers(pages: list[dict]) -> list[str]:
     """Printed page numbers must increase monotonically in cluster order;
     violations point at missed/duplicated pages or a parity merge misalignment."""
@@ -121,7 +251,7 @@ def check_printed_numbers(pages: list[dict]) -> list[str]:
     prev_num, prev_id = None, None
     for p in pages:
         n = p.get("printed_number")
-        if n is None or p.get("status") == "duplicate":
+        if n is None or p.get("status") in ("duplicate", "deleted"):
             continue
         if prev_num is not None and n <= prev_num:
             warnings.append(
@@ -190,10 +320,30 @@ def _run_incremental(ws: Workspace, backend, todo, by_id, log) -> dict[str, dict
     return results
 
 
+def reconcile(ws: Workspace, pages: list[dict], log=print) -> list[dict]:
+    """Post-transcription bookkeeping: reject numbers that break their video's
+    capture order, collapse duplicates, order by number, infer unnumbered pages
+    from neighbors, and compute the never-captured page list."""
+    for p in pages:  # inferred numbers re-derive from scratch each pass
+        if p.get("number_inferred"):
+            p["printed_number"] = None
+            p.pop("number_inferred", None)
+    sanitize_numbers_by_video(pages, log)
+    dedupe_by_printed(pages, log)
+    pages = reorder_by_printed(pages)
+    infer_missing_numbers(pages, log)
+    pages = reorder_by_printed(pages)
+    ws.manifest["pages"] = pages
+    ws.manifest["missing_pages"] = compute_missing_pages(pages)
+    ws.save()
+    return pages
+
+
 def run(ws: Workspace, cfg: dict, log=print) -> None:
     pages = ws.manifest["pages"]
     todo = [(p["id"], ws.root / p["llm_image"]) for p in pages
-            if not p.get("md") and p.get("llm_image") and p.get("role") != "cover"]
+            if not p.get("md") and p.get("llm_image") and p.get("role") != "cover"
+            and p.get("status") != "deleted"]
     by_id = {p["id"]: p for p in pages}
     if not todo:
         log("  all pages already transcribed")
@@ -227,14 +377,14 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             backend = get_backend(cfg)
             _run_incremental(ws, backend, todo, by_id, log)
 
-    dedupe_by_printed(pages, log)
-    reordered = reorder_by_printed(pages)
-    if [p["id"] for p in reordered] != [p["id"] for p in pages]:
-        log("  reordered pages by printed page numbers")
-        ws.manifest["pages"] = pages = reordered
-    ws.save()
+    pages = reconcile(ws, pages, log)
+    missing = ws.manifest["missing_pages"]
 
     warnings = check_printed_numbers(pages)
+    if missing:
+        warnings.append(f"printed pages never captured: {format_ranges(missing)} "
+                        f"— film those pages (any direction) and Add video, or "
+                        f"add photos of them")
     for w in warnings:
         log(f"  WARNING: {w}")
     failed = [p["id"] for p in pages if p.get("transcribe_error")]

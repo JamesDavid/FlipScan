@@ -20,12 +20,17 @@ from .workspace import Workspace
 
 
 def build_pdf_facsimile(ws: Workspace, out_path: Path, title: str | None = None,
-                        log=print) -> Path:
+                        device: str = "none", log=print) -> Path:
+    import io
+
     from PIL import Image
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
 
-    pages = [p for p in ws.manifest["pages"] if p.get("color")]
+    from .device import process_image
+
+    pages = [p for p in ws.manifest["pages"]
+             if p.get("color") and p.get("status") not in ("duplicate", "deleted")]
     if not pages:
         raise RuntimeError("no preprocessed pages — run the pipeline first")
 
@@ -35,13 +40,19 @@ def build_pdf_facsimile(ws: Workspace, out_path: Path, title: str | None = None,
         img_path = ws.root / page["color"]
         if not img_path.exists():
             continue
-        with Image.open(img_path) as im:
-            iw, ih = im.size
+        if device != "none":
+            data, _ = process_image(img_path.read_bytes(), device)
+            reader = ImageReader(io.BytesIO(data))
+            iw, ih = Image.open(io.BytesIO(data)).size
+        else:
+            reader = ImageReader(str(img_path))
+            with Image.open(img_path) as im:
+                iw, ih = im.size
         # scale to a ~US-letter-width page, preserving aspect
         pw = 612.0
         ph = pw * ih / iw
         c.setPageSize((pw, ph))
-        c.drawImage(ImageReader(str(img_path)), 0, 0, pw, ph)
+        c.drawImage(reader, 0, 0, pw, ph)
 
         md = ""
         if page.get("md") and (ws.root / page["md"]).exists():

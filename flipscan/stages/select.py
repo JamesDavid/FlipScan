@@ -78,9 +78,17 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
                       "transcribed_by")})
         page["md"] = target
 
+    # deletions persist across re-clustering, keyed by capture identity
+    from .transcribe import cache_key as _ck
+    deleted = set(ws.manifest.get("deleted_captures", []))
+    if deleted:
+        for page in ws.manifest["pages"]:
+            if _ck(page) in deleted:
+                page["status"] = "deleted"
+
     # bottom-percentile composite scores get flagged suspect
     composites = [p["scores"]["composite"] for p in ws.manifest["pages"]
-                  if p.get("scores")]
+                  if p.get("scores") and p.get("status") != "deleted"]
     if composites:
         cutoff = float(np.percentile(composites, cfg["cluster"]["suspect_score_percentile"]))
         for p in ws.manifest["pages"]:
@@ -102,7 +110,7 @@ def contact_sheet(ws: Workspace, thumb_w: int = 240, cols: int = 8):
     rotations = {v["id"]: v.get("rotate", 0) for v in ws.manifest["videos"]}
     thumbs = []
     for p in pages:
-        if p.get("side") == "right":
+        if p.get("side") == "right" or p.get("status") == "deleted":
             continue  # one thumbnail per capture, not per spread half
         if p.get("canonical"):
             img = cv2.imread(str(frame_path(ws, p["canonical"])), cv2.IMREAD_REDUCED_COLOR_2)

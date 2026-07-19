@@ -150,6 +150,31 @@ def set_video_rotation(ws: Workspace, vid: str, rotate: int,
     log(f"{vid}: orientation set to {rotate} degrees")
 
 
+def set_page_deleted(ws: Workspace, page_id: str, deleted: bool = True) -> dict:
+    """Soft-delete an erroneous page (mid-turn junk, desk shots, misfires).
+
+    Deletion is remembered by capture identity in manifest.deleted_captures,
+    so re-clustering after adding a video doesn't resurrect the page."""
+    from .stages.transcribe import cache_key
+
+    page = ws.page(page_id)
+    if page is None:
+        raise KeyError(page_id)
+    key = cache_key(page)
+    dl = ws.manifest.setdefault("deleted_captures", [])
+    if deleted:
+        if key and key not in dl:
+            dl.append(key)
+        page["status"] = "deleted"
+    else:
+        if key in dl:
+            dl.remove(key)
+        page["status"] = "ok"
+    ws.stage_reset("assemble")  # the book text must rebuild without/with it
+    ws.save()
+    return page
+
+
 def run_pipeline(ws: Workspace, cfg: dict, only_stage: str | None = None,
                  force: bool = False, log: Callable[[str], None] = print) -> None:
     """Execute pipeline stages in order, resuming where it left off."""
