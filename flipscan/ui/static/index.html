@@ -47,6 +47,37 @@
   label { font-size:.75rem; color:var(--dim); }
   .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
   .grid3 { display:grid; grid-template-columns:2fr 1fr 1fr; gap:.5rem; }
+
+  img, input, select, textarea { max-width:100%; }
+  .page > div, .pagerow > div { min-width:0; }
+
+  html, body { max-width:100%; overflow-x:hidden; }
+
+  /* ---- phones & small tablets ---- */
+  @media (max-width: 820px) {
+    main { overflow-x:hidden; }
+    .row > * { min-width:0; }        /* let selects/labels shrink & wrap */
+    .row input[type="file"] { width:100%; }
+    .row select { max-width:100%; }
+    body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    aside { display:flex; align-items:center; gap:.6rem; padding:.55rem .8rem;
+            overflow-x:auto; white-space:nowrap; }
+    aside h1 { margin:0; font-size:1rem; flex:none; }
+    #projects { display:flex; gap:.4rem; }
+    .proj { flex:none; margin:0; padding:.35rem .7rem; }
+    .proj .sub { display:none; }
+    aside > div:last-child { margin:0 !important; flex:none; }
+    main { padding:.8rem; }
+    .card { padding:1rem; margin-bottom:.8rem; border-radius:10px; }
+    .page, .pagerow { grid-template-columns:1fr; gap:.8rem; }
+    .tabs { overflow-x:auto; }
+    .tab { flex:none; padding:.55rem 1rem; }
+    button { padding:.6rem 1.1rem; font-size:.9rem; }   /* finger-sized */
+    input, select { padding:.55rem .7rem; font-size:16px; } /* stops iOS zoom-on-focus */
+    textarea { min-height:150px; font-size:16px; }
+    #log { max-height:150px; }
+    .thumbs img { height:110px; }
+  }
   .badge { font-size:.7rem; padding:.1rem .45rem; border-radius:999px; }
   .badge.suspect { background:#fee2e2; color:var(--bad); }
   .badge.ok { background:#dcfce7; color:#166534; }
@@ -60,8 +91,9 @@
 <aside>
   <h1>FlipScan</h1>
   <div id="projects"></div>
-  <div style="margin-top:1rem">
+  <div style="margin-top:1rem; display:flex; gap:.4rem">
     <button class="secondary" onclick="showNew()">+ New project</button>
+    <button class="secondary" onclick="showSettings()" title="Settings">⚙</button>
   </div>
 </aside>
 <main id="main"><div class="card">Select or create a project.</div></main>
@@ -111,6 +143,67 @@ function showNew() {
   addVideoRow();
 }
 
+async function showSettings() {
+  current = null;
+  const s = await api("/settings");
+  $("main").innerHTML = `
+  <div class="card">
+    <h2>Settings <span class="meta">(apply to all projects)</span></h2>
+    <label>Transcription provider</label>
+    <select id="set-provider">
+      ${["ollama","anthropic","hybrid","mock"].map(p =>
+        `<option ${p === s.provider ? "selected" : ""}>${p}</option>`).join("")}
+    </select>
+    <label>Ollama server URL</label>
+    <div class="row" style="flex-wrap:nowrap">
+      <input id="set-ourl" value="${esc(s.ollama_url)}" style="margin-bottom:0">
+      <button class="secondary" onclick="testOllama()">Test</button>
+    </div>
+    <div class="meta" id="ollama-status" style="margin:.3rem 0 .6rem"></div>
+    <label>Ollama vision model</label>
+    <input id="set-omodel" list="omodel-list" value="${esc(s.ollama_model)}">
+    <datalist id="omodel-list"></datalist>
+    <label>Anthropic model</label>
+    <input id="set-amodel" value="${esc(s.anthropic_model)}">
+    <label>Anthropic API key ${s.anthropic_api_key_set
+      ? '<span class="badge ok">configured</span>' : "(needed for anthropic / hybrid)"}</label>
+    <input id="set-akey" type="password"
+           placeholder="${s.anthropic_api_key_set ? "leave blank to keep current key" : "sk-ant-…"}">
+    <div class="meta" style="margin-bottom:.6rem">Stored in the projects folder's
+      config.toml on this machine. Hybrid mode transcribes locally first and only
+      sends low-confidence pages to Anthropic.</div>
+    <button onclick="saveSettings()">Save settings</button>
+    <span class="meta" id="settings-status" style="margin-left:.6rem"></span>
+  </div>`;
+  testOllama();
+}
+
+async function testOllama() {
+  const st = $("ollama-status");
+  st.textContent = "checking Ollama server…";
+  const r = await api("/settings/ollama-models?url=" +
+                      encodeURIComponent($("set-ourl").value));
+  if (r.ok) {
+    st.textContent = `✓ connected — ${r.models.length} models available`;
+    $("omodel-list").innerHTML = r.models.map(m => `<option value="${m}">`).join("");
+  } else {
+    st.textContent = "✗ can't reach server: " + r.error;
+  }
+}
+
+async function saveSettings() {
+  await api("/settings", {method:"PUT", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      provider: $("set-provider").value,
+      ollama_url: $("set-ourl").value,
+      ollama_model: $("set-omodel").value,
+      anthropic_model: $("set-amodel").value,
+      anthropic_api_key: $("set-akey").value,
+    })});
+  $("settings-status").textContent = "saved ✓";
+  setTimeout(() => $("settings-status").textContent = "", 2500);
+}
+
 let vrows = 0;
 function addVideoRow() {
   const d = document.createElement("div");
@@ -123,16 +216,33 @@ function addVideoRow() {
   vrows++;
 }
 
+function uploadXHR(url, fd, onProgress) {
+  // fetch() has no upload progress; phone videos are GB-scale, so show one
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    x.upload.onprogress = e => {
+      if (e.lengthComputable && onProgress)
+        onProgress(Math.round(100 * e.loaded / e.total));
+    };
+    x.onload = () => x.status < 300
+      ? resolve(JSON.parse(x.responseText))
+      : reject(new Error(x.responseText || x.statusText));
+    x.onerror = () => reject(new Error("network error during upload"));
+    x.send(fd);
+  });
+}
+
 async function uploadVideo(input) {
   if (!input.files.length) return;
   const pathBox = input.parentElement.querySelector(".np-vpath");
-  pathBox.value = "uploading…"; pathBox.disabled = true;
+  pathBox.disabled = true;
   const fd = new FormData();
   fd.append("file", input.files[0]);
   try {
-    const r = await fetch("/api/upload", {method:"POST", body: fd});
-    if (!r.ok) throw new Error("upload failed");
-    pathBox.value = (await r.json()).path;
+    const r = await uploadXHR("/api/upload", fd,
+                              pct => pathBox.value = `uploading… ${pct}%`);
+    pathBox.value = r.path;
   } catch (e) { pathBox.value = ""; alert(e.message); }
   pathBox.disabled = false;
 }
@@ -188,6 +298,27 @@ async function openProject(name, tab) {
   renderTab(tab || "pipeline", p);
 }
 
+function addPagePanel() {
+  return `
+    <div class="card">
+      <h2>Add page from photo</h2>
+      <div class="row">
+        <input type="file" accept="image/*" id="addpage-file" style="width:auto">
+        <select id="addpage-pos" style="width:auto">
+          <option value="start">at the front (cover / inside cover)</option>
+          <option value="end">at the back (back cover)</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:.3rem">
+          <input type="checkbox" id="addpage-cover" style="width:auto;margin:0">
+          use as book cover image</label>
+        <button onclick="addPagePhoto()">Add page</button>
+      </div>
+      <div class="meta">Covers become the EPUB cover image; other photos
+      (inside-cover text, missed pages) are transcribed like normal pages.
+      Photos of badly-captured pages: use the Patch button on that page instead.</div>
+    </div>`;
+}
+
 function renderTab(tab, p) {
   const name = p.name, body = $("tabbody");
   if (tab === "pipeline") {
@@ -196,26 +327,11 @@ function renderTab(tab, p) {
         ? "<ul>" + items.map(i =>
             `<li><b>${i.id}</b>${i.printed_number ? ` (printed ${i.printed_number})` : ""}
              — ${esc(i.reasons.join(", "))}</li>`).join("") + "</ul>"
-        : "<div class='meta'>empty — all pages look good</div>") + `</div>`;
+        : "<div class='meta'>empty — all pages look good</div>") + `</div>`
+        + addPagePanel();
     });
   } else if (tab === "pages") {
-    body.innerHTML = `
-      <div class="card">
-        <h2>Add page from photo</h2>
-        <div class="row">
-          <input type="file" accept="image/*" id="addpage-file" style="width:auto">
-          <select id="addpage-pos" style="width:auto">
-            <option value="start">at the front (cover / inside cover)</option>
-            <option value="end">at the back (back cover)</option>
-          </select>
-          <label style="display:flex;align-items:center;gap:.3rem">
-            <input type="checkbox" id="addpage-cover" style="width:auto;margin:0">
-            use as book cover image</label>
-          <button onclick="addPagePhoto()">Add page</button>
-        </div>
-        <div class="meta">Covers become the EPUB cover image; other photos
-        (inside-cover text, missed pages) are transcribed like normal pages.</div>
-      </div>` + p.pages.map(pg => `
+    body.innerHTML = addPagePanel() + p.pages.map(pg => `
       <div class="card pagerow ${pg.status}">
         <div>
           <div class="meta"><span class="badge ${pg.status}">${pg.status}</span>
@@ -303,14 +419,16 @@ async function addVideoToProject() {
   const input = $("addvideo-file");
   if (!input.files.length) return;
   const btn = input.nextElementSibling;
-  btn.textContent = "uploading…"; btn.disabled = true;
+  btn.disabled = true;
   const fd = new FormData();
   fd.append("video", input.files[0]);
-  const r = await fetch(`/api/projects/${current}/videos`, {method:"POST", body: fd});
-  if (!r.ok) { alert("add video failed: " + (await r.json()).detail); }
-  else if (confirm("Video added. Run the pipeline now to merge its pages in?")) {
-    await api(`/projects/${current}/run`, {method:"POST"});
-  }
+  try {
+    await uploadXHR(`/api/projects/${current}/videos`, fd,
+                    pct => btn.textContent = `uploading ${pct}%`);
+    if (confirm("Video added. Run the pipeline now to merge its pages in?")) {
+      await api(`/projects/${current}/run`, {method:"POST"});
+    }
+  } catch (e) { alert("add video failed: " + e.message); }
   openProject(current);
 }
 

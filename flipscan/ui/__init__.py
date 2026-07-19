@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ..config import load_config
+from ..config import load_config, save_global_config
 from ..project import create_project, run_pipeline
 from ..workspace import STAGES, Workspace
 
@@ -33,6 +34,14 @@ class NewProject(BaseModel):
 
 class MarkdownEdit(BaseModel):
     markdown: str
+
+
+class Settings(BaseModel):
+    provider: str = "ollama"
+    ollama_url: str = ""
+    ollama_model: str = ""
+    anthropic_model: str = ""
+    anthropic_api_key: str = ""
 
 
 def create_app(root: Path) -> FastAPI:
@@ -137,6 +146,44 @@ def create_app(root: Path) -> FastAPI:
                 yield f"data: {json.dumps(msg)}\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    # ---------------- settings (global: applies to every project)
+
+    @app.get("/api/settings")
+    def get_settings():
+        p = load_config()["provider"]
+        return {
+            "provider": p["name"], "ollama_url": p["ollama_url"],
+            "ollama_model": p["ollama_model"],
+            "anthropic_model": p["anthropic_model"],
+            "anthropic_api_key_set": bool(p.get("anthropic_api_key")
+                                          or os.environ.get("ANTHROPIC_API_KEY")
+                                          or os.environ.get("FLIPSCAN_ANTHROPIC_API_KEY")),
+        }
+
+    @app.put("/api/settings")
+    def put_settings(s: Settings):
+        current = load_config()["provider"]
+        save_global_config({"provider": {
+            "name": s.provider,
+            "ollama_url": s.ollama_url,
+            "ollama_model": s.ollama_model,
+            "anthropic_model": s.anthropic_model,
+            # keep the stored key unless a new one was typed
+            "anthropic_api_key": s.anthropic_api_key or current.get("anthropic_api_key", ""),
+        }})
+        return {"ok": True}
+
+    @app.get("/api/settings/ollama-models")
+    def ollama_models(url: str):
+        import httpx
+        try:
+            r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=6.0)
+            r.raise_for_status()
+            return {"ok": True,
+                    "models": [m["name"] for m in r.json().get("models", [])]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     # ---------------- uploads (videos/photos from the browser, incl. phones)
 
@@ -273,7 +320,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(static)
+        # always revalidate the app shell — stale cached UI on phones is worse
+        # than the tiny refetch
+        return FileResponse(static, headers={"Cache-Control": "no-cache"})
 
     return app
 

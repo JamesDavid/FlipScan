@@ -63,9 +63,21 @@ ENV_OVERRIDES = {
 }
 
 
+def global_config_path() -> Path:
+    """Global config shared by all projects: $FLIPSCAN_ROOT/config.toml
+    (the GUI's projects folder), or ~/.flipscan/config.toml otherwise."""
+    root = os.environ.get("FLIPSCAN_ROOT")
+    base = Path(root) if root else Path.home() / ".flipscan"
+    return base / "config.toml"
+
+
 def load_config(workspace: Path | None = None) -> dict[str, Any]:
-    """Merged config for a workspace. Env vars win over config.toml over defaults."""
+    """Merged config: defaults <- global config <- workspace config.toml <- env."""
     cfg = DEFAULTS
+    gp = global_config_path()
+    if gp.exists():
+        with open(gp, "rb") as f:
+            cfg = _deep_merge(cfg, tomllib.load(f))
     if workspace is not None:
         toml_path = Path(workspace) / "config.toml"
         if toml_path.exists():
@@ -76,3 +88,30 @@ def load_config(workspace: Path | None = None) -> dict[str, Any]:
         if val:
             cfg = _deep_merge(cfg, {section: {key: val}})
     return cfg
+
+
+def _toml_value(v: Any) -> str:
+    import json as _json
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    return _json.dumps(str(v))  # valid TOML basic string
+
+
+def save_global_config(sections: dict[str, dict[str, Any]]) -> Path:
+    """Persist settings to the global config file (whole-file rewrite)."""
+    path = global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# FlipScan global settings (edited by the GUI settings panel)"]
+    for section, values in sections.items():
+        vals = {k: v for k, v in values.items() if v not in (None, "")}
+        if not vals:
+            continue
+        lines.append(f"\n[{section}]")
+        for k, v in vals.items():
+            lines.append(f"{k} = {_toml_value(v)}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path

@@ -20,7 +20,8 @@ class AnthropicBackend(TranscriptionBackend):
 
     def __init__(self, cfg: dict):
         api_key = (os.environ.get("FLIPSCAN_ANTHROPIC_API_KEY")
-                   or os.environ.get("ANTHROPIC_API_KEY"))
+                   or os.environ.get("ANTHROPIC_API_KEY")
+                   or cfg["provider"].get("anthropic_api_key") or None)
         # None -> SDK resolves its own credential chain (env, `ant auth login` profile)
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = cfg["provider"]["anthropic_model"]
