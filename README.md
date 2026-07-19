@@ -9,7 +9,8 @@ See [SPEC.md](SPEC.md) for the full architecture.
 ## Capture protocol: just keep filming until you have every page
 
 Shoot videos of flipping through the book — any direction, any subset of pages, as many
-videos as you like (mark a video "shot upside-down" in the GUI if needed). Page turns
+videos as you like — upside-down videos are auto-detected (one vision-model check per
+video; the GUI "shot upside-down" toggle overrides it). Page turns
 (motion bursts) split each video into page captures; the vision model transcribes the
 flat, readable page of each capture and reads its **printed page number**, which is how
 captures of the same page across videos are recognized: the best capture wins, the rest
