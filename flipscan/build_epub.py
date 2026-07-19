@@ -43,6 +43,11 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
     if author:
         book.add_author(author)
 
+    cover_page = next((p for p in ws.manifest["pages"] if p.get("role") == "cover"), None)
+    if cover_page and cover_page.get("color") and (ws.root / cover_page["color"]).exists():
+        cover_src = ws.root / cover_page["color"]
+        book.set_cover(f"cover{cover_src.suffix}", cover_src.read_bytes())
+
     # embed referenced figure images
     added_images: dict[str, str] = {}
     for rel in set(_IMG.findall(book_md)):

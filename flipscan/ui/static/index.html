@@ -109,13 +109,29 @@ function addVideoRow() {
   const d = document.createElement("div");
   d.className = "grid3";
   d.innerHTML = `
-    <span><label>Video path</label><input class="np-vpath" placeholder="/data/oddpass.mov"></span>
+    <span><label>Video (upload or server path)</label>
+      <input type="file" accept="video/*" class="np-vfile" onchange="uploadVideo(this)">
+      <input class="np-vpath" placeholder="…or path, e.g. /data/oddpass.mov"></span>
     <span><label>Pages</label><select class="np-vpages">
       <option>all</option><option>odd</option><option>even</option></select></span>
     <span><label>Direction</label><select class="np-vdir">
       <option>forward</option><option>reverse</option></select></span>`;
   $("np-videos").appendChild(d);
   vrows++;
+}
+
+async function uploadVideo(input) {
+  if (!input.files.length) return;
+  const pathBox = input.parentElement.querySelector(".np-vpath");
+  pathBox.value = "uploading…"; pathBox.disabled = true;
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  try {
+    const r = await fetch("/api/upload", {method:"POST", body: fd});
+    if (!r.ok) throw new Error("upload failed");
+    pathBox.value = (await r.json()).path;
+  } catch (e) { pathBox.value = ""; alert(e.message); }
+  pathBox.disabled = false;
 }
 
 async function createProject() {
@@ -178,7 +194,23 @@ function renderTab(tab, p) {
         : "<div class='meta'>empty — all pages look good</div>") + `</div>`;
     });
   } else if (tab === "pages") {
-    body.innerHTML = p.pages.map(pg => `
+    body.innerHTML = `
+      <div class="card">
+        <h2>Add page from photo</h2>
+        <div class="row">
+          <input type="file" accept="image/*" id="addpage-file" style="width:auto">
+          <select id="addpage-pos" style="width:auto">
+            <option value="start">at the front (cover / inside cover)</option>
+            <option value="end">at the back (back cover)</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:.3rem">
+            <input type="checkbox" id="addpage-cover" style="width:auto;margin:0">
+            use as book cover image</label>
+          <button onclick="addPagePhoto()">Add page</button>
+        </div>
+        <div class="meta">Covers become the EPUB cover image; other photos
+        (inside-cover text, missed pages) are transcribed like normal pages.</div>
+      </div>` + p.pages.map(pg => `
       <div class="card pagerow ${pg.status}">
         <div>
           <div class="meta"><span class="badge ${pg.status}">${pg.status}</span>
@@ -259,6 +291,19 @@ async function patchPage(pageId) {
   const r = await fetch(`/api/projects/${current}/pages/${pageId}/patch`,
                         {method:"POST", body: fd});
   if (!r.ok) { alert("patch failed"); return; }
+  openProject(current, "pages");
+}
+
+async function addPagePhoto() {
+  const input = $("addpage-file");
+  if (!input.files.length) { alert("choose a photo first"); return; }
+  const fd = new FormData();
+  fd.append("photo", input.files[0]);
+  const pos = $("addpage-pos").value, cover = $("addpage-cover").checked;
+  const r = await fetch(
+    `/api/projects/${current}/pages/add?position=${pos}&cover=${cover}`,
+    {method:"POST", body: fd});
+  if (!r.ok) { alert("add page failed"); return; }
   openProject(current, "pages");
 }
 

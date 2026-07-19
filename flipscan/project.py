@@ -46,6 +46,67 @@ def create_project(directory: Path, videos: list[dict[str, Any]],
     return ws
 
 
+def next_page_id(ws: Workspace) -> str:
+    nums = [int(p["id"][1:]) for p in ws.manifest["pages"]
+            if p["id"].startswith("p") and p["id"][1:].isdigit()]
+    return f"p{(max(nums) + 1 if nums else 0):04d}"
+
+
+def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
+                        position: str = "end", role: str | None = None,
+                        log: Callable[[str], None] = print) -> dict:
+    """Insert a new page from a photo (cover, inside-cover text, missed page).
+
+    position: "start" | "end" | integer index into the page order.
+    role: "cover" marks it as the EPUB cover image (excluded from the body text).
+    """
+    import shutil
+
+    patches = ws.root / "patches"
+    patches.mkdir(exist_ok=True)
+    page_id = next_page_id(ws)
+    dest = patches / f"{page_id}{Path(image).suffix.lower() or '.jpg'}"
+    shutil.copy2(image, dest)
+
+    page = {
+        "id": page_id,
+        "cluster_frames": [],
+        "canonical": None,
+        "scores": {},
+        "status": "patched",
+        "printed_number": None,
+        "patched_source": f"patches/{dest.name}",
+        "md": None,
+    }
+    if role:
+        page["role"] = role
+
+    pages = ws.manifest["pages"]
+    if position == "start":
+        idx = 0
+    elif position == "end":
+        idx = len(pages)
+    else:
+        idx = max(0, min(len(pages), int(position)))
+    pages.insert(idx, page)
+
+    from .stages.preprocess import preprocess_page
+    from .stages.transcribe import run as transcribe_run
+
+    log(f"{page_id}: preprocessing photo ({role or 'page'} at position {idx})")
+    preprocess_page(ws, page, cfg)
+    ws.save()
+    if role == "cover":
+        # covers are used as an image; no need to burn transcription on them
+        page["md"] = None
+        ws.save()
+    else:
+        log(f"{page_id}: transcribing")
+        transcribe_run(ws, cfg, log=log)
+    ws.stage_reset("figures")
+    return page
+
+
 def run_pipeline(ws: Workspace, cfg: dict, only_stage: str | None = None,
                  force: bool = False, log: Callable[[str], None] = print) -> None:
     """Execute pipeline stages in order, resuming where it left off."""

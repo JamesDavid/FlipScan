@@ -41,7 +41,24 @@ docker compose run --rm flipscan build /data/mybook
 
 ```sh
 pip install -e ".[ui,pdf,dev]"   # requires ffmpeg on PATH
+flipscan ui                      # prints your LAN URL, e.g. http://192.168.x.x:8321
 ```
+
+### Using it from your phone
+
+`flipscan ui` (and the Docker container) listen on all interfaces by default and print a
+"your network" URL on startup — open that URL in your phone's browser:
+
+- **New project → Video → choose file** uploads slow-mo videos straight from the camera roll.
+- **Pages tab → Add page from photo** uploads normal photos for the **front cover** (tick
+  "use as book cover image" — it becomes the EPUB cover), inside-cover / back-cover text
+  pages, or any page the video missed. Non-cover photos are transcribed like normal pages.
+- The same tab's **Patch photo…** button replaces a badly-captured page from the reshoot list.
+
+If another device can't reach the URL on Windows, allow the port through the firewall once
+(admin PowerShell): `netsh advfirewall firewall add rule name="FlipScan GUI" dir=in action=allow protocol=TCP localport=8321 profile=private`
+— or click "Allow access" if Windows pops up its firewall dialog. Use `--host 127.0.0.1`
+to keep the GUI private to this machine.
 
 ## CLI reference
 
@@ -66,6 +83,11 @@ flipscan review DIR             static HTML review page + reshoot list
 flipscan patch DIR --page ID IMG
     Replace a badly-captured page with a re-shot photo; re-runs preprocess and
     transcription for that page and resets figures/assemble.
+
+flipscan addpage DIR IMG [--position start|end|N] [--cover]
+    Add a page from a photo: --cover makes it the EPUB cover image (excluded
+    from body text); otherwise it's transcribed like a normal page (inside-cover
+    text, missed pages).
 
 flipscan build DIR [-o FILE] [--format epub|pdf|pdf-facsimile] [--title T] [--author A]
     --format is repeatable; default epub. Outputs land in DIR/out/.

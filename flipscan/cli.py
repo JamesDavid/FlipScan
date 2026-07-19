@@ -140,6 +140,27 @@ def patch(directory: Path, page_id: str, image: Path):
                f"`flipscan build {directory}` to rebuild outputs")
 
 
+# ---------------------------------------------------------------- addpage
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path))
+@click.argument("image", type=click.Path(exists=True, path_type=Path))
+@click.option("--position", default="end",
+              help='"start", "end", or a page index (default: end)')
+@click.option("--cover", is_flag=True,
+              help="Use this photo as the book cover (EPUB cover image, "
+                   "excluded from body text)")
+def addpage(directory: Path, image: Path, position: str, cover: bool):
+    """Add a page from a photo — covers, inside-cover text, or missed pages."""
+    ws = Workspace.open(directory)
+    cfg = load_config(ws.root)
+    from .project import add_page_from_photo
+    page = add_page_from_photo(ws, cfg, image, position=position,
+                               role="cover" if cover else None, log=click.echo)
+    click.echo(f"{page['id']} added — run `flipscan run {directory}` then "
+               f"`flipscan build {directory}` to rebuild outputs")
+
+
 # ---------------------------------------------------------------- build
 
 @main.command()
@@ -193,11 +214,14 @@ def status(directory: Path):
 @main.command()
 @click.option("--root", type=click.Path(path_type=Path), default=None,
               help="Directory containing project workspaces (default: FLIPSCAN_ROOT or cwd)")
-@click.option("--host", default="127.0.0.1")
+@click.option("--host", default="0.0.0.0",
+              help="Bind address (default 0.0.0.0 = reachable from other "
+                   "devices on your network; use 127.0.0.1 for this machine only)")
 @click.option("--port", type=int, default=8321)
 def ui(root, host, port):
     """Start the local web GUI (requires `pip install flipscan[ui]`)."""
     import os
+    import socket
 
     try:
         from .ui import serve
@@ -205,7 +229,17 @@ def ui(root, host, port):
         raise click.ClickException(
             "GUI dependencies missing — install with: pip install 'flipscan[ui]'")
     root = root or Path(os.environ.get("FLIPSCAN_ROOT", "."))
-    click.echo(f"FlipScan GUI on http://{host}:{port}  (projects root: {root.resolve()})")
+    click.echo(f"FlipScan GUI  (projects root: {root.resolve()})")
+    click.echo(f"  this machine:  http://127.0.0.1:{port}")
+    if host == "0.0.0.0":
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+            s.close()
+            click.echo(f"  your network:  http://{lan_ip}:{port}  (phone, tablet, ...)")
+        except OSError:
+            pass
     serve(root, host=host, port=port)
 
 

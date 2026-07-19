@@ -139,6 +139,39 @@ def create_app(root: Path) -> FastAPI:
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
+    # ---------------- uploads (videos/photos from the browser, incl. phones)
+
+    @app.post("/api/upload")
+    async def upload(file: UploadFile):
+        uploads = root / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        safe = Path(file.filename or "upload.bin").name
+        dest = uploads / safe
+        i = 1
+        while dest.exists():
+            dest = uploads / f"{Path(safe).stem}-{i}{Path(safe).suffix}"
+            i += 1
+        with open(dest, "wb") as f:
+            while chunk := await file.read(1 << 22):  # 4 MB chunks — videos are big
+                f.write(chunk)
+        return {"ok": True, "path": str(dest)}
+
+    @app.post("/api/projects/{name}/pages/add")
+    async def add_page(name: str, photo: UploadFile, position: str = "end",
+                       cover: bool = False):
+        ws = ws_for(name)
+        cfg = load_config(ws.root)
+        uploads = ws.root / "uploads"
+        uploads.mkdir(exist_ok=True)
+        tmp = uploads / Path(photo.filename or "page.jpg").name
+        tmp.write_bytes(await photo.read())
+        from ..project import add_page_from_photo
+        page = add_page_from_photo(ws, cfg, tmp, position=position,
+                                   role="cover" if cover else None,
+                                   log=lambda m: None)
+        tmp.unlink(missing_ok=True)
+        return {"ok": True, "id": page["id"]}
+
     # ---------------- pages / patch / review
 
     @app.put("/api/projects/{name}/pages/{page_id}/md")
