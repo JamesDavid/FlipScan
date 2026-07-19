@@ -291,19 +291,8 @@ async function openProject(name, tab) {
         <option value="">provider: config default</option>
         <option>ollama</option><option>anthropic</option><option>hybrid</option><option>mock</option>
       </select>
-      <input type="file" accept="video/*" id="addvideo-file" style="display:none"
-             onchange="addVideoToProject()">
-      <button class="secondary" onclick="$('addvideo-file').click()"
-              ${p.running ? "disabled" : ""}>+ Add video</button>
       <span class="meta">${p.videos.length} videos · ${p.pages.length} pages ·
         ${p.pages.filter(x => x.status === "suspect").length} suspect</span>
-    </div>
-    <div class="meta" style="margin-top:.5rem">
-      ${p.videos.map(v => `<label style="margin-right:1rem">
-        <input type="checkbox" style="width:auto;margin:0 .25rem 0 0"
-               ${v.rotate === 180 ? "checked" : ""}
-               onchange="setRotate('${v.id}', this.checked)">
-        ${v.id} shot upside-down</label>`).join("")}
     </div>
     <div id="progress">
       <div class="ptrack"><div class="pfill" id="pfill"></div></div>
@@ -312,7 +301,7 @@ async function openProject(name, tab) {
     <div id="log"></div>
   </div>
   <div class="tabs">
-    ${["pipeline","frames","pages","figures","output"].map(t =>
+    ${["pipeline","media","frames","pages","figures","output"].map(t =>
       `<div class="tab ${t === (tab||"pipeline") ? "active" : ""}"
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
@@ -360,11 +349,60 @@ function renderTab(tab, p) {
             `<li><a href="javascript:void(0)" onclick="gotoPage('${i.id}')"><b>${i.id}</b>${
               i.printed_number ? ` (printed ${i.printed_number})` : ""}</a>
              — ${esc(i.reasons.join(", "))}</li>`).join("") + "</ul>"
-        : "<div class='meta'>empty — all pages look good</div>") + `</div>`
-        + addPagePanel();
+        : "<div class='meta'>empty — all pages look good</div>") + `</div>`;
     });
+  } else if (tab === "media") {
+    const photoPages = p.pages.filter(pg => pg.patched_source);
+    body.innerHTML = `
+      <div class="card">
+        <h2>Add media</h2>
+        <div class="row" style="margin-bottom:.6rem">
+          <input type="file" accept="video/*" id="addvideo-file" style="display:none"
+                 onchange="addVideoToProject()">
+          <button onclick="$('addvideo-file').click()"
+                  ${p.running ? "disabled" : ""}>+ Add video</button>
+          <span class="meta">flip-through capture — shared pages merge, new pages
+            slot in; run the pipeline after adding</span>
+        </div>
+      </div>
+      ${addPagePanel()}
+      <div class="card">
+        <h2>Videos (${p.videos.length})</h2>
+        ${p.videos.map(v => `
+          <div class="row" style="border-top:1px solid var(--line);padding:.6rem 0">
+            <div style="flex:1;min-width:12rem">
+              <b>${v.id}</b> <span class="meta">·
+                ${esc((v.source || v.path).split(/[\\\\/]/).pop())}</span>
+              <div class="meta">${v.fps_actual} fps · ${v.nb_frames ?? "?"} frames ·
+                ${v.duration ? Math.round(v.duration) + "s" : ""}
+                ${v.rotate === 180 ? " · rotated 180°" : ""}</div>
+            </div>
+            <label style="display:flex;align-items:center;gap:.3rem">
+              <input type="checkbox" style="width:auto;margin:0"
+                     ${v.rotate === 180 ? "checked" : ""}
+                     onchange="setRotate('${v.id}', this.checked)">
+              shot upside-down</label>
+          </div>`).join("") || "<div class='meta'>no videos yet</div>"}
+      </div>
+      <div class="card">
+        <h2>Page photos (${photoPages.length})</h2>
+        ${photoPages.map(pg => `
+          <div class="row" style="border-top:1px solid var(--line);padding:.6rem 0">
+            <img src="/api/projects/${name}/file/${pg.patched_source}"
+                 style="height:90px;border:1px solid var(--line);border-radius:4px">
+            <div style="flex:1;min-width:10rem">
+              <a href="javascript:void(0)" onclick="gotoPage('${pg.id}')"><b>${pg.id}</b></a>
+              <span class="badge ${pg.status}">${pg.status}</span>
+              ${pg.role === "cover" ? '<span class="badge ok">cover</span>' : ""}
+              <div class="meta">${pg.printed_number != null
+                ? "printed " + pg.printed_number : "no page number"}</div>
+            </div>
+          </div>`).join("")
+          || "<div class='meta'>no photos added yet — use 'Add page from photo' above " +
+             "for covers, inside-cover text, or missed pages</div>"}
+      </div>`;
   } else if (tab === "pages") {
-    body.innerHTML = addPagePanel() + p.pages.map(pg => {
+    body.innerHTML = p.pages.map(pg => {
       const collapsed = pg.status === "deleted" || pg.status === "duplicate";
       const numLabel = pg.printed_number != null
         ? "printed " + pg.printed_number + (pg.number_inferred ? " (inferred)" : "")
@@ -610,7 +648,7 @@ async function addVideoToProject() {
       await api(`/projects/${current}/run`, {method:"POST"});
     }
   } catch (e) { alert("add video failed: " + e.message); }
-  openProject(current);
+  openProject(current, "media");
 }
 
 async function addPagePhoto() {
@@ -623,7 +661,7 @@ async function addPagePhoto() {
     `/api/projects/${current}/pages/add?position=${pos}&cover=${cover}`,
     {method:"POST", body: fd});
   if (!r.ok) { alert("add page failed"); return; }
-  openProject(current, "pages");
+  openProject(current, "media");
 }
 
 async function buildFmt(fmt) {

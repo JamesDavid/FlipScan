@@ -17,7 +17,7 @@ from ..project import create_project, run_pipeline
 from ..workspace import STAGES, Workspace
 
 # workspace files the browser may fetch, by top-level directory
-SERVABLE = {"frames", "work", "figures", "review", "out", "pages", "videos"}
+SERVABLE = {"frames", "work", "figures", "review", "out", "pages", "videos", "patches"}
 
 
 class VideoSpec(BaseModel):
