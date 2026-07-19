@@ -127,6 +127,50 @@ def create_app(root: Path) -> FastAPI:
         t.start()
         return {"ok": True}
 
+    rate_samples: dict[str, list] = {}  # project -> [(t, stage, done)] for ETA
+
+    @app.get("/api/projects/{name}/progress")
+    def progress(name: str):
+        import time as _time
+
+        ws = ws_for(name)
+        stages_status = {s: ws.stage_status(s) for s in STAGES}
+        current = next((s for s in STAGES if stages_status[s] != "done"), None)
+        pages = ws.manifest["pages"]
+        detail = None
+        if current == "transcribe":
+            eligible = [p for p in pages if p.get("role") != "cover"]
+            detail = {"done": sum(1 for p in eligible if p.get("md")),
+                      "total": len(eligible), "unit": "pages transcribed"}
+        elif current == "preprocess":
+            detail = {"done": sum(1 for p in pages if p.get("color")),
+                      "total": len(pages), "unit": "pages corrected"}
+        elif current in ("extract", "score"):
+            vids = ws.manifest["videos"]
+            done = sum(1 for v in vids
+                       if (current == "extract" and v.get("frames_extracted"))
+                       or (current == "score"
+                           and ws.work_file(f"scores_{v['id']}.json").exists()))
+            detail = {"done": done, "total": len(vids), "unit": "videos"}
+
+        eta = None
+        if detail and detail["total"]:
+            samples = rate_samples.setdefault(name, [])
+            now = _time.time()
+            samples.append((now, current, detail["done"]))
+            samples[:] = [s for s in samples if s[1] == current and now - s[0] < 900]
+            if len(samples) >= 2 and samples[-1][2] > samples[0][2]:
+                rate = (samples[-1][2] - samples[0][2]) / (samples[-1][0] - samples[0][0])
+                if rate > 0:
+                    eta = int((detail["total"] - detail["done"]) / rate)
+        return {
+            "running": name in runs and runs[name]["thread"].is_alive(),
+            "stages": stages_status,
+            "current": current,
+            "detail": detail,
+            "eta_seconds": eta,
+        }
+
     @app.get("/api/projects/{name}/events")
     def events(name: str):
         if name not in runs:

@@ -21,6 +21,7 @@ class OllamaBackend(TranscriptionBackend):
         self.model = p["ollama_model"]
         self.num_predict = p.get("ollama_num_predict", 4096)
         self.think = p.get("ollama_think", False)
+        self.concurrency = int(p.get("ollama_concurrency", 1))
         self.max_retries = cfg["transcribe"]["max_retries"]
 
     def _request(self, image_b64: str) -> str:

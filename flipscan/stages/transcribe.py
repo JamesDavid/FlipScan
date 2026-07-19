@@ -147,16 +147,40 @@ def _cache_page(ws: Workspace, page: dict) -> None:
 
 def _run_incremental(ws: Workspace, backend, todo, by_id, log) -> dict[str, dict]:
     """Transcribe page by page, persisting after each one — a multi-hour local
-    run must survive interruption (it resumes where it stopped)."""
+    run must survive interruption (it resumes where it stopped).
+
+    With ollama_concurrency > 1, N requests run in flight at once (only useful
+    when the Ollama server itself allows parallel slots via OLLAMA_NUM_PARALLEL;
+    otherwise they just queue server-side). Results still persist on the main
+    thread as each page completes."""
     results = {}
-    for i, item in enumerate(todo):
-        r = backend.transcribe([item], log=lambda m: None)[item[0]]
+    workers = getattr(backend, "concurrency", 1)
+
+    def one(item):
+        return backend.transcribe([item], log=lambda m: None)[item[0]]
+
+    def record(item, r, i):
         results[item[0]] = r
         _write_result(ws, by_id[item[0]], r, backend.name)
         _cache_page(ws, by_id[item[0]])
         ws.save()
         log(f"  {backend.name}: {item[0]} "
-            f"({'ok' if 'error' not in r else 'FAILED'}) [{i + 1}/{len(todo)}]")
+            f"({'ok' if 'error' not in r else 'FAILED'}) [{i}/{len(todo)}]")
+
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(one, item): item for item in todo}
+            for i, fut in enumerate(as_completed(futures), 1):
+                item = futures[fut]
+                try:
+                    r = fut.result()
+                except Exception as e:  # a worker crash must not sink the run
+                    r = {"error": str(e)}
+                record(item, r, i)
+    else:
+        for i, item in enumerate(todo, 1):
+            record(item, one(item), i)
     return results
 
 

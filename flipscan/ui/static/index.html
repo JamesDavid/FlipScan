@@ -31,6 +31,13 @@
   #log { background:#1c1917; color:#d6d3d1; font-family:ui-monospace,monospace;
          font-size:.75rem; padding: .8rem 1rem; border-radius:6px; max-height:220px;
          overflow-y:auto; white-space:pre-wrap; display:none; }
+  #progress { display:none; margin:.8rem 0 .2rem; }
+  .ptrack { background:#e7e5e4; border-radius:999px; height:14px; overflow:hidden; }
+  .pfill { background:var(--accent); height:100%; width:0; border-radius:999px;
+           transition: width .6s ease; }
+  .plabel { display:flex; justify-content:space-between; font-size:.8rem;
+            color:var(--dim); margin-top:.35rem; }
+  .stage.active { background:#ccfbf1; color:#0f766e; outline:2px solid var(--accent); }
   .tabs { display:flex; gap:.25rem; margin-bottom:1rem; }
   .tab { padding:.4rem .9rem; border-radius:6px 6px 0 0; cursor:pointer; font-size:.85rem;
          background:#e7e5e4; }
@@ -118,7 +125,7 @@ async function refreshProjects() {
       <div class="sub">${p.pages} pages · ${p.suspects} suspect</div>
     </div>`).join("") || '<div class="sub" style="color:#a8a29e">no projects yet</div>';
   if (!current && list.length) {
-    const h = location.hash.slice(1).split("/");  // #project/tab deep links
+    const h = location.hash.slice(1).split("/").map(decodeURIComponent);  // #project/tab
     const name = list.some(p => p.name === h[0]) ? h[0] : list[0].name;
     openProject(name, h[1] || undefined);
   }
@@ -269,7 +276,7 @@ async function openProject(name, tab) {
   const p = await api("/projects/" + name);
   window._proj = p;
   const stages = Object.entries(p.stages).map(([s, st]) =>
-    `<span class="stage ${st}">${s}</span>`).join("");
+    `<span class="stage ${st}" id="stage-${s}">${s}</span>`).join("");
   $("main").innerHTML = `
   <div class="card">
     <h2>${esc(p.book.title || name)}</h2>
@@ -295,6 +302,10 @@ async function openProject(name, tab) {
                onchange="setRotate('${v.id}', this.checked)">
         ${v.id} shot upside-down</label>`).join("")}
     </div>
+    <div id="progress">
+      <div class="ptrack"><div class="pfill" id="pfill"></div></div>
+      <div class="plabel"><span id="ptext"></span><span id="peta"></span></div>
+    </div>
     <div id="log"></div>
   </div>
   <div class="tabs">
@@ -303,7 +314,7 @@ async function openProject(name, tab) {
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
   <div id="tabbody"></div>`;
-  if (p.running) attachEvents(name);
+  if (p.running) { attachEvents(name); startProgress(name); }
   renderTab(tab || "pipeline", p);
 }
 
@@ -393,6 +404,44 @@ async function runPipeline() {
   await api(`/projects/${current}/run` + (prov ? `?provider=${prov}` : ""), {method:"POST"});
   $("runbtn").disabled = true; $("runbtn").textContent = "Running…";
   attachEvents(current);
+  startProgress(current);
+}
+
+let progressTimer = null;
+function startProgress(name) {
+  clearInterval(progressTimer);
+  const tick = async () => {
+    let p;
+    try { p = await api(`/projects/${name}/progress`); } catch { return; }
+    if (name !== current) { clearInterval(progressTimer); return; }
+    // live stage chips
+    for (const [s, st] of Object.entries(p.stages)) {
+      const el = $("stage-" + s);
+      if (el) el.className = "stage " + st + (s === p.current && p.running ? " active" : "");
+    }
+    const box = $("progress");
+    if (!box) return;
+    if (p.running && p.detail && p.detail.total) {
+      box.style.display = "block";
+      const pct = Math.round(100 * p.detail.done / p.detail.total);
+      $("pfill").style.width = pct + "%";
+      $("ptext").textContent =
+        `${p.current}: ${p.detail.done} / ${p.detail.total} ${p.detail.unit} (${pct}%)`;
+      $("peta").textContent = p.eta_seconds == null ? "" :
+        p.eta_seconds > 90 ? `~${Math.round(p.eta_seconds / 60)} min left`
+                           : `~${p.eta_seconds}s left`;
+    } else if (p.running) {
+      box.style.display = "block";
+      $("pfill").style.width = "100%";
+      $("ptext").textContent = p.current ? `${p.current}: working…` : "starting…";
+      $("peta").textContent = "";
+    } else {
+      clearInterval(progressTimer);
+      box.style.display = "none";
+    }
+  };
+  tick();
+  progressTimer = setInterval(tick, 4000);
 }
 
 function attachEvents(name) {
