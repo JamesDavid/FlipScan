@@ -129,6 +129,27 @@ def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
     return page
 
 
+def set_video_rotation(ws: Workspace, vid: str, rotate: int,
+                       log: Callable[[str], None] = print) -> None:
+    """Change a video's orientation and invalidate everything derived from it."""
+    video = next(v for v in ws.manifest["videos"] if v["id"] == vid)
+    if video.get("rotate", None) == rotate:
+        video["rotate"] = rotate
+        ws.save()
+        return
+    video["rotate"] = rotate
+    from .stages.transcribe import load_cache, save_cache
+    cache = {k: v for k, v in load_cache(ws).items() if not k.startswith(vid + "_")}
+    save_cache(ws, cache)
+    for p in ws.manifest["pages"]:
+        if (p.get("canonical") or "").startswith(vid + "_"):
+            p["md"] = None
+            for key in ("confidence", "flags", "transcribe_error", "printed_number"):
+                p.pop(key, None)
+    ws.save()
+    log(f"{vid}: orientation set to {rotate} degrees")
+
+
 def run_pipeline(ws: Workspace, cfg: dict, only_stage: str | None = None,
                  force: bool = False, log: Callable[[str], None] = print) -> None:
     """Execute pipeline stages in order, resuming where it left off."""

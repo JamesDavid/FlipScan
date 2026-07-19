@@ -142,6 +142,7 @@ suspect_score_percentile = 10
 [preprocess]
 llm_long_edge = 1600             # LLM copy downscale (token cost vs legibility)
 quad_pad = 0.025                 # crop padding so page numbers survive
+mask_clutter = false             # experimental: isolate book, hide desk clutter
 dewarp = false                   # cylindrical curl correction
 
 [transcribe]

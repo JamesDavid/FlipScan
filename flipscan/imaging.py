@@ -91,6 +91,77 @@ def detect_page_quad(gray: np.ndarray) -> tuple[np.ndarray | None, float]:
     return order_quad(quad), float(np.clip(flatness, 0.0, 1.0))
 
 
+def isolate_book(bgr: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, int | None]:
+    """Find the open book and separate it from desk clutter.
+
+    Book pages are bright AND colorless; sticky notes, drawings, and desk are
+    either colored (high saturation) or dark. Returns (mask, quad, spine_x):
+    a uint8 mask of the book region, its normalized corner quad, and the x
+    position (pixels) of the dark spine fold — or Nones when not found.
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h, w = hsv.shape[:2]
+    sat, val = hsv[:, :, 1], hsv[:, :, 2]
+    _, v_th = cv2.threshold(cv2.GaussianBlur(val, (5, 5), 0), 0, 255,
+                            cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = ((v_th > 0) & (sat < 70)).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
+
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
+    if n < 2:
+        return None, None, None
+    # the book is big AND centered — desk papers/flyers are big but off-center
+    best, best_score = None, 0.0
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < 0.06 * h * w:
+            continue
+        cx, cy = centroids[i]
+        offset = np.hypot((cx - w / 2) / w, (cy - h / 2) / h)  # 0 center, ~0.7 corner
+        score = area * max(0.05, 1.0 - 2.0 * offset)
+        if score > best_score:
+            best, best_score = i, score
+    if best is None:
+        return None, None, None
+    book = (labels == best).astype(np.uint8) * 255
+    # fill holes (dark photos/figures inside the page must stay part of the book)
+    contours, _ = cv2.findContours(book, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnt = max(contours, key=cv2.contourArea)
+    book = np.zeros_like(book)
+    cv2.drawContours(book, [cnt], -1, 255, -1)
+
+    peri = cv2.arcLength(cnt, True)
+    approx = cv2.approxPolyDP(cv2.convexHull(cnt), 0.02 * peri, True)
+    quad = (approx.reshape(-1, 2).astype(np.float64) if len(approx) == 4
+            else cv2.boxPoints(cv2.minAreaRect(cnt)).astype(np.float64))
+    quad[:, 0] /= w
+    quad[:, 1] /= h
+
+    # the spine fold: darkest smoothed column valley inside the book's middle
+    x0, x1 = int(quad[:, 0].min() * w), int(quad[:, 0].max() * w)
+    lo = x0 + int((x1 - x0) * 0.30)
+    hi = x0 + int((x1 - x0) * 0.70)
+    spine_x = None
+    if hi - lo > 30:
+        vals = np.where(book > 0, val, 255).astype(np.float32)
+        col = vals[:, lo:hi].mean(axis=0)
+        sm = np.convolve(col, np.ones(15) / 15, mode="same")
+        base = float(np.median(val[book > 0]))
+        valley = float(sm.min())
+        if (base - valley) / max(base, 1.0) > 0.08:
+            spine_x = lo + int(np.argmin(sm))
+    return book, order_quad(quad), spine_x
+
+
+def mask_outside(bgr: np.ndarray, mask: np.ndarray,
+                 fill: tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
+    """Paint everything outside the mask a flat color (hide desk clutter)."""
+    out = bgr.copy()
+    out[mask == 0] = fill
+    return out
+
+
 def order_quad(quad: np.ndarray) -> np.ndarray:
     """Order corners tl, tr, br, bl."""
     s = quad.sum(axis=1)

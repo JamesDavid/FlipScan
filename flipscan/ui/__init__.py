@@ -222,19 +222,10 @@ def create_app(root: Path) -> FastAPI:
         """Mark a video as shot upside down (rotate=180) or normal (rotate=0).
         Re-derives everything from preprocess onward for that video's pages."""
         ws = ws_for(name)
-        video = next((v for v in ws.manifest["videos"] if v["id"] == vid), None)
-        if video is None:
+        if not any(v["id"] == vid for v in ws.manifest["videos"]):
             raise HTTPException(404, f"no video {vid!r}")
-        video["rotate"] = rotate
-        from ..stages.transcribe import load_cache, save_cache
-        cache = {k: v for k, v in load_cache(ws).items()
-                 if not k.startswith(vid + "_")}
-        save_cache(ws, cache)
-        for p in ws.manifest["pages"]:
-            if (p.get("canonical") or "").startswith(vid + "_"):
-                p["md"] = None
-                for key in ("confidence", "flags", "transcribe_error", "printed_number"):
-                    p.pop(key, None)
+        from ..project import set_video_rotation
+        set_video_rotation(ws, vid, rotate, log=lambda m: None)
         ws.stage_reset("preprocess")
         ws.save()
         return {"ok": True, "rotate": rotate}

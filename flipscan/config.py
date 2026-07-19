@@ -12,7 +12,7 @@ DEFAULTS: dict[str, Any] = {
         "name": "ollama",  # ollama | anthropic | hybrid
         "ollama_url": "http://localhost:11434",
         "ollama_model": "gemma4",
-        "ollama_num_predict": 4096,
+        "ollama_num_predict": 8192,  # thinking models reason before answering
         "anthropic_model": "claude-sonnet-4-6",
         "ollama_concurrency": 2,
         # hybrid: escalate to anthropic when local result matches any of these
@@ -39,6 +39,7 @@ DEFAULTS: dict[str, Any] = {
     "preprocess": {
         "llm_long_edge": 1600,
         "quad_pad": 0.025,  # expand the page crop so edge content (page numbers) survives
+        "mask_clutter": False,  # experimental: isolate the book, hide desk clutter
         "dewarp": False,
     },
     "transcribe": {

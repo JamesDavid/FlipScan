@@ -8,7 +8,8 @@ from typing import Callable
 
 import httpx
 
-from . import PROMPT, TranscriptionBackend, TranscriptionError, parse_result
+from . import (ORIENTATION_PROMPT, PROMPT, TranscriptionBackend,
+               TranscriptionError, parse_orientation, parse_result)
 
 
 class OllamaBackend(TranscriptionBackend):
@@ -37,6 +38,29 @@ class OllamaBackend(TranscriptionBackend):
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"]
+
+    def check_orientation(self, image_path: Path) -> bool | None:
+        try:
+            resp = httpx.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "stream": False,
+                    "format": "json",
+                    # thinking models spend tokens reasoning before answering
+                    "options": {"num_predict": 512, "temperature": 0},
+                    "messages": [{
+                        "role": "user", "content": ORIENTATION_PROMPT,
+                        "images": [base64.standard_b64encode(
+                            image_path.read_bytes()).decode()],
+                    }],
+                },
+                timeout=300.0,
+            )
+            resp.raise_for_status()
+            return parse_orientation(resp.json()["message"]["content"])
+        except (httpx.HTTPError, KeyError):
+            return None
 
     def transcribe(self, pages: list[tuple[str, Path]],
                    log: Callable[[str], None] = print) -> dict[str, dict]:

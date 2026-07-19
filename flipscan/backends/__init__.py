@@ -89,6 +89,12 @@ def parse_result(raw: str) -> dict[str, Any]:
     return obj
 
 
+ORIENTATION_PROMPT = """\
+Look at the printed text in this photo of a book. Is the text upside down
+(rotated 180 degrees)? Return ONLY a JSON object: {"upside_down": true} or
+{"upside_down": false}."""
+
+
 class TranscriptionBackend(ABC):
     """Transcribe page images. Results are validated dicts keyed by page id;
     a failure is recorded as {"error": "..."} instead of raising."""
@@ -99,6 +105,23 @@ class TranscriptionBackend(ABC):
     def transcribe(self, pages: list[tuple[str, Path]],
                    log: Callable[[str], None] = print) -> dict[str, dict]:
         ...
+
+    def check_orientation(self, image_path: Path) -> bool | None:
+        """True if the image's text is upside down, None if this backend
+        can't tell (callers then assume normal orientation)."""
+        return None
+
+
+def parse_orientation(raw: str) -> bool | None:
+    text = raw.strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        v = json.loads(text[start:end + 1]).get("upside_down")
+        return v if isinstance(v, bool) else None
+    except json.JSONDecodeError:
+        return None
 
 
 def needs_escalation(result: dict, escalate_on: list[str]) -> bool:

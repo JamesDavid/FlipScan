@@ -12,7 +12,8 @@ import anthropic
 from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 from anthropic.types.messages.batch_create_params import Request
 
-from . import PROMPT, TranscriptionBackend, TranscriptionError, parse_result
+from . import (ORIENTATION_PROMPT, PROMPT, TranscriptionBackend,
+               TranscriptionError, parse_orientation, parse_result)
 
 
 class AnthropicBackend(TranscriptionBackend):
@@ -25,6 +26,27 @@ class AnthropicBackend(TranscriptionBackend):
         # None -> SDK resolves its own credential chain (env, `ant auth login` profile)
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = cfg["provider"]["anthropic_model"]
+
+    def check_orientation(self, image_path: Path) -> bool | None:
+        try:
+            image_b64 = base64.standard_b64encode(image_path.read_bytes()).decode()
+            msg = self.client.messages.create(
+                model=self.model,
+                max_tokens=64,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image",
+                         "source": {"type": "base64", "media_type": "image/jpeg",
+                                    "data": image_b64}},
+                        {"type": "text", "text": ORIENTATION_PROMPT},
+                    ],
+                }],
+            )
+            text = next((b.text for b in msg.content if b.type == "text"), "")
+            return parse_orientation(text)
+        except anthropic.APIError:
+            return None
 
     def transcribe(self, pages: list[tuple[str, Path]],
                    log: Callable[[str], None] = print) -> dict[str, dict]:

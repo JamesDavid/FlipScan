@@ -14,7 +14,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ..imaging import detect_page_quad, order_quad
+from ..imaging import detect_page_quad, isolate_book, mask_outside, order_quad
 from ..workspace import Workspace
 from .score import scores_by_frame_id
 from .select import frame_path
@@ -127,7 +127,15 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
         bgr = cv2.rotate(bgr, cv2.ROTATE_180)
 
     quad = None
-    if fid is not None and scores and fid in scores:
+    if cfg["preprocess"].get("mask_clutter", False):  # experimental: needs even lighting
+        # isolate the book (bright + colorless region, spine fold inside),
+        # hide the desk, and take the quad from the book itself — the warp
+        # then rectifies to the book's true aspect ratio
+        book_mask, book_quad, _spine = isolate_book(bgr)
+        if book_quad is not None:
+            bgr = mask_outside(bgr, book_mask)
+            quad = book_quad
+    if quad is None and fid is not None and scores and fid in scores:
         quad = scores[fid].get("quad")
         if quad is not None and rotation == 180:
             quad = order_quad(1.0 - np.array(quad, dtype=np.float64))
@@ -152,8 +160,59 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
     page["llm_image"] = f"work/pages/{page['id']}_llm.jpg"
 
 
+def _orientation_sample(ws: Workspace, cfg: dict, video: dict,
+                        scores: dict[str, dict]):
+    """Un-rotated corrected crop of a middle page from this video, for the
+    'is this upside down?' check."""
+    vid = video["id"]
+    pages = [p for p in ws.manifest["pages"]
+             if (p.get("canonical") or "").startswith(vid + "_")]
+    if not pages:
+        return None
+    fid = pages[len(pages) // 2]["canonical"]
+    bgr = cv2.imread(str(frame_path(ws, fid)))
+    if bgr is None:
+        return None
+    quad = (scores.get(fid) or {}).get("quad")
+    if quad is not None:
+        bgr = correct_page(bgr, _pad_quad(np.array(quad, dtype=np.float64), 0.02))
+    out = ws.work_file(f"_orient_{vid}.jpg")
+    cv2.imwrite(str(out), llm_copy(bgr, 1200), [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return out
+
+
+def auto_detect_orientation(ws: Workspace, cfg: dict,
+                            scores: dict[str, dict], log=print) -> None:
+    """Ask the vision model once per video whether its text is upside down.
+    Only runs for videos whose orientation was never determined; the GUI
+    toggle / --upside-down flag always wins because they set the field."""
+    pending = [v for v in ws.manifest["videos"] if "rotate" not in v]
+    if not pending:
+        return
+    provider = cfg["provider"]["name"]
+    check_cfg = cfg
+    if provider == "hybrid":  # one cheap local call is plenty
+        check_cfg = {**cfg, "provider": {**cfg["provider"], "name": "ollama"}}
+    from ..backends import get_backend
+    from ..project import set_video_rotation
+    backend = get_backend(check_cfg)
+    for video in pending:
+        sample = _orientation_sample(ws, cfg, video, scores)
+        verdict = backend.check_orientation(sample) if sample else None
+        if verdict is None:
+            video["rotate"] = 0  # can't tell (or mock) — assume normal
+            log(f"  {video['id']}: orientation check unavailable, assuming normal")
+        else:
+            set_video_rotation(ws, video["id"], 180 if verdict else 0,
+                               log=lambda m: None)
+            log(f"  {video['id']}: auto-detected "
+                f"{'UPSIDE DOWN — will rotate' if verdict else 'normal orientation'}")
+    ws.save()
+
+
 def run(ws: Workspace, cfg: dict, log=print) -> None:
     scores = scores_by_frame_id(ws)
+    auto_detect_orientation(ws, cfg, scores, log)
     pages = ws.manifest["pages"]
     for i, page in enumerate(pages):
         preprocess_page(ws, page, cfg, scores)
