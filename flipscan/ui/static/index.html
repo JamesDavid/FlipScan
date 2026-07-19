@@ -609,9 +609,9 @@ function attachEvents(name) {
 }
 
 async function saveMd(pageId) {
-  await api(`/projects/${current}/pages/${pageId}/md`, {
+  try { await api(`/projects/${current}/pages/${pageId}/md`, {
     method:"PUT", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({markdown: $("md-" + pageId).value})});
+    body: JSON.stringify({markdown: $("md-" + pageId).value})}); } catch (e) { alert('save failed: ' + e.message); return; }
 }
 
 async function patchPage(pageId) {
@@ -693,23 +693,23 @@ function toggleCell(pageId) {
 
 async function setPageNumber(pageId) {
   const v = $("num-" + pageId).value;
-  await api(`/projects/${current}/pages/${pageId}`, {
+  try { await api(`/projects/${current}/pages/${pageId}`, {
     method: "PATCH", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({printed_number: v === "" ? null : +v})});
+    body: JSON.stringify({printed_number: v === "" ? null : +v})}); } catch (e) { alert('save failed: ' + e.message); return; }
   openProject(current, "pages");
 }
 
 async function toggleReshoot(pageId, flag) {
-  await api(`/projects/${current}/pages/${pageId}`, {
+  try { await api(`/projects/${current}/pages/${pageId}`, {
     method: "PATCH", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({needs_reshoot: flag})});
+    body: JSON.stringify({needs_reshoot: flag})}); } catch (e) { alert('save failed: ' + e.message); return; }
   openProject(current, "pages");
 }
 
 async function unduplicate(pageId) {
-  await api(`/projects/${current}/pages/${pageId}`, {
+  try { await api(`/projects/${current}/pages/${pageId}`, {
     method: "PATCH", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({unduplicate: true})});
+    body: JSON.stringify({unduplicate: true})}); } catch (e) { alert('save failed: ' + e.message); return; }
   openProject(current, "pages");
 }
 
@@ -722,15 +722,21 @@ function cropModalHtml() {
          max-height:92vh;overflow:auto">
       <div class="row" style="margin-bottom:.5rem">
         <b>Re-crop figure</b>
-        <span class="meta">drag on the page to draw the new crop</span>
+        <span class="meta">drag to draw a box, then drag corners to fine-tune —
+          skewed shapes are straightened back to a rectangle</span>
         <button style="margin-left:auto" onclick="saveCrop()">Save crop</button>
         <button class="secondary" onclick="$('crop-modal').style.display='none'">Cancel</button>
       </div>
-      <div id="crop-stage" style="position:relative;touch-action:none;cursor:crosshair">
+      <div id="crop-stage" style="position:relative;touch-action:none;cursor:crosshair;
+           display:inline-block">
         <img id="crop-img" style="max-width:86vw;max-height:75vh;display:block;
              user-select:none;-webkit-user-drag:none" draggable="false">
-        <div id="crop-box" style="position:absolute;border:2px solid #0d9488;
-             background:rgba(13,148,136,.15);pointer-events:none"></div>
+        <svg id="crop-svg" style="position:absolute;inset:0;width:100%;height:100%">
+          <polygon id="crop-poly" fill="rgba(13,148,136,.15)" stroke="#0d9488"
+                   stroke-width="2" points=""/>
+          ${[0,1,2,3].map(i => `<circle id="crop-h${i}" r="9" fill="#0d9488"
+              stroke="#fff" stroke-width="2" style="display:none"/>`).join("")}
+        </svg>
       </div>
     </div>
   </div>`;
@@ -739,48 +745,78 @@ function cropModalHtml() {
 let cropCtx = null;
 function openCrop(pageId, figIdx) {
   const pg = window._proj.pages.find(p => p.id === pageId);
-  cropCtx = {pageId, figIdx, start: null, bbox: (pg.regions?.[figIdx]?.bbox_norm) || null};
+  // corners ordered tl,tr,br,bl (normalized); start from the existing region
+  const bb = pg.regions?.[figIdx]?.bbox_norm;
+  cropCtx = {pageId, figIdx, mode: null, corner: -1,
+             quad: bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]] : null};
   const img = $("crop-img");
   img.src = `/api/projects/${current}/file/${pg.color}?t=${Date.now()}`;
   $("crop-modal").style.display = "flex";
-  img.onload = () => drawCropBox();
+  img.onload = () => drawCropQuad();
   const stage = $("crop-stage");
+  const norm = (e) => {
+    const r = img.getBoundingClientRect();
+    return [Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
+            Math.max(0, Math.min(1, (e.clientY - r.top) / r.height))];
+  };
   stage.onpointerdown = (e) => {
-    const r = $("crop-img").getBoundingClientRect();
-    cropCtx.start = [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
-    cropCtx.bbox = null;
+    const [x, y] = norm(e);
     stage.setPointerCapture(e.pointerId);
+    // grab a corner if close to one (finger-sized threshold)
+    if (cropCtx.quad) {
+      const r = img.getBoundingClientRect();
+      const near = cropCtx.quad.findIndex(c =>
+        Math.hypot((c[0]-x) * r.width, (c[1]-y) * r.height) < 22);
+      if (near >= 0) { cropCtx.mode = "corner"; cropCtx.corner = near; return; }
+    }
+    cropCtx.mode = "draw";
+    cropCtx.start = [x, y];
+    cropCtx.quad = [[x,y],[x,y],[x,y],[x,y]];
+    drawCropQuad();
   };
   stage.onpointermove = (e) => {
-    if (!cropCtx.start) return;
-    const r = $("crop-img").getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-    const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
-    cropCtx.bbox = [Math.min(cropCtx.start[0], x), Math.min(cropCtx.start[1], y),
-                    Math.max(cropCtx.start[0], x), Math.max(cropCtx.start[1], y)];
-    drawCropBox();
+    if (!cropCtx.mode) return;
+    const [x, y] = norm(e);
+    if (cropCtx.mode === "draw") {
+      const [sx, sy] = cropCtx.start;
+      const x0 = Math.min(sx,x), y0 = Math.min(sy,y),
+            x1 = Math.max(sx,x), y1 = Math.max(sy,y);
+      cropCtx.quad = [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
+    } else {
+      cropCtx.quad[cropCtx.corner] = [x, y];
+    }
+    drawCropQuad();
   };
-  stage.onpointerup = () => cropCtx.start = null;
+  stage.onpointerup = () => { cropCtx.mode = null; cropCtx.corner = -1; };
 }
 
-function drawCropBox() {
-  const box = $("crop-box"), img = $("crop-img");
-  if (!cropCtx?.bbox) { box.style.display = "none"; return; }
-  const [x0, y0, x1, y1] = cropCtx.bbox;
-  box.style.display = "block";
-  box.style.left = (x0 * img.clientWidth) + "px";
-  box.style.top = (y0 * img.clientHeight) + "px";
-  box.style.width = ((x1 - x0) * img.clientWidth) + "px";
-  box.style.height = ((y1 - y0) * img.clientHeight) + "px";
+function drawCropQuad() {
+  const img = $("crop-img"), poly = $("crop-poly");
+  const w = img.clientWidth, h = img.clientHeight;
+  if (!cropCtx?.quad) {
+    poly.setAttribute("points", "");
+    [0,1,2,3].forEach(i => $("crop-h"+i).style.display = "none");
+    return;
+  }
+  poly.setAttribute("points",
+    cropCtx.quad.map(c => `${c[0]*w},${c[1]*h}`).join(" "));
+  cropCtx.quad.forEach((c, i) => {
+    const hd = $("crop-h"+i);
+    hd.style.display = "block";
+    hd.setAttribute("cx", c[0]*w);
+    hd.setAttribute("cy", c[1]*h);
+  });
 }
 
 async function saveCrop() {
-  if (!cropCtx?.bbox) { alert("draw a rectangle first"); return; }
-  await api(`/projects/${current}/pages/${cropCtx.pageId}/figures/${cropCtx.figIdx}/crop`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({bbox_norm: cropCtx.bbox})});
+  if (!cropCtx?.quad) { alert("draw a box first"); return; }
+  try {
+    await api(`/projects/${current}/pages/${cropCtx.pageId}/figures/${cropCtx.figIdx}/crop`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({quad_norm: cropCtx.quad})});
+  } catch (e) { alert("crop failed: " + e.message); return; }
   $("crop-modal").style.display = "none";
-  openProject(current, "pages");
+  openProject(current, "figures");
 }
 
 async function delFigure(pageId, figIdx) {

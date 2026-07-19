@@ -36,6 +36,22 @@ class MarkdownEdit(BaseModel):
     markdown: str
 
 
+class PageEdit(BaseModel):
+    printed_number: int | None = None
+    needs_reshoot: bool | None = None
+    unduplicate: bool | None = None
+
+
+class CropEdit(BaseModel):
+    bbox_norm: list[float] | None = None
+    quad_norm: list[list[float]] | None = None  # 4 corners; skewed quads get
+    #                                             perspective-corrected
+
+
+class KeepBest(BaseModel):
+    items: list[dict]  # [{page_id, fig_idx}, ...] — duplicates of one figure
+
+
 class Settings(BaseModel):
     provider: str = "ollama"
     ollama_url: str = ""
@@ -332,11 +348,6 @@ def create_app(root: Path) -> FastAPI:
         ws.stage_reset("figures")
         return {"ok": True}
 
-    class PageEdit(BaseModel):
-        printed_number: int | None = None
-        needs_reshoot: bool | None = None
-        unduplicate: bool | None = None
-
     def _reconcile(ws):
         from ..stages.transcribe import reconcile
         reconcile(ws, ws.manifest["pages"], log=lambda m: None)
@@ -371,9 +382,6 @@ def create_app(root: Path) -> FastAPI:
         _reconcile(ws)
         return {"ok": True, "page": ws.page(page_id)}
 
-    class CropEdit(BaseModel):
-        bbox_norm: list[float]
-
     def _figure(ws, page_id: str, fig_idx: int):
         """Resolve (page, figure path, its region). fig_idx indexes
         page['figures']; the region is recovered from the filename letter."""
@@ -390,26 +398,49 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
     def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
-        """Re-crop a figure to a user-drawn bbox (normalized to the page image)."""
+        """Re-crop a figure. Axis-aligned bbox crops directly; a 4-corner quad
+        (user adjusted the corners) is perspective-warped back to a rectangle."""
         import cv2
+        import numpy as np
+
+        from ..imaging import order_quad
+        from ..stages.preprocess import correct_page
 
         ws = ws_for(name)
         page, rel, region = _figure(ws, page_id, fig_idx)
-        if not page.get("color") or len(edit.bbox_norm) != 4:
-            raise HTTPException(400, "bad page or bbox")
+        if not page.get("color"):
+            raise HTTPException(400, "page has no corrected image")
         color = cv2.imread(str(ws.root / page["color"]))
         if color is None:
             raise HTTPException(500, "page image unreadable")
         h, w = color.shape[:2]
-        x0, y0, x1, y1 = edit.bbox_norm
-        x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
-        y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
-        px = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
-        if px[2] - px[0] < 10 or px[3] - px[1] < 10:
+
+        if edit.quad_norm and len(edit.quad_norm) == 4:
+            quad = order_quad(np.clip(np.array(edit.quad_norm, dtype=np.float64), 0, 1))
+            crop = correct_page(color, quad)  # skew -> rectangle
+            xs, ys = quad[:, 0], quad[:, 1]
+            bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+            stored_quad = quad.tolist()
+        elif edit.bbox_norm and len(edit.bbox_norm) == 4:
+            x0, y0, x1, y1 = edit.bbox_norm
+            x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
+            y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
+            px = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
+            if px[2] - px[0] < 10 or px[3] - px[1] < 10:
+                raise HTTPException(400, "crop too small")
+            crop = color[px[1]:px[3], px[0]:px[2]]
+            bbox = [x0, y0, x1, y1]
+            stored_quad = None
+        else:
+            raise HTTPException(400, "need bbox_norm or quad_norm")
+        if crop.shape[0] < 10 or crop.shape[1] < 10:
             raise HTTPException(400, "crop too small")
-        cv2.imwrite(str(ws.root / rel), color[px[1]:px[3], px[0]:px[2]])
+
+        cv2.imwrite(str(ws.root / rel), crop)
         if region is not None:
-            region["bbox_norm"] = [x0, y0, x1, y1]
+            region["bbox_norm"] = bbox
+            if stored_quad:
+                region["quad_norm"] = stored_quad
             region["user_crop"] = True
         ws.stage_reset("assemble")
         ws.save()
@@ -440,9 +471,6 @@ def create_app(root: Path) -> FastAPI:
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True}
-
-    class KeepBest(BaseModel):
-        items: list[dict]  # [{page_id, fig_idx}, ...] — duplicates of one figure
 
     @app.post("/api/projects/{name}/figures/keep-best")
     def keep_best_figure(name: str, spec: KeepBest):
