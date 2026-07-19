@@ -12,7 +12,8 @@ DEFAULTS: dict[str, Any] = {
         "name": "ollama",  # ollama | anthropic | hybrid
         "ollama_url": "http://localhost:11434",
         "ollama_model": "gemma4",
-        "ollama_num_predict": 8192,  # thinking models reason before answering
+        "ollama_num_predict": 4096,
+        "ollama_think": False,  # thinking wastes minutes/page on transcription
         "anthropic_model": "claude-sonnet-4-6",
         "ollama_concurrency": 2,
         # hybrid: escalate to anthropic when local result matches any of these

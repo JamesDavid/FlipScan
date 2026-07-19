@@ -20,6 +20,7 @@ class OllamaBackend(TranscriptionBackend):
         self.base_url = p["ollama_url"].rstrip("/")
         self.model = p["ollama_model"]
         self.num_predict = p.get("ollama_num_predict", 4096)
+        self.think = p.get("ollama_think", False)
         self.max_retries = cfg["transcribe"]["max_retries"]
 
     def _request(self, image_b64: str) -> str:
@@ -29,6 +30,9 @@ class OllamaBackend(TranscriptionBackend):
                 "model": self.model,
                 "stream": False,
                 "format": "json",
+                # thinking off: transcription is perception, not reasoning —
+                # thinking models otherwise ramble for minutes on hard pages
+                "think": self.think,
                 "options": {"num_predict": self.num_predict, "temperature": 0},
                 "messages": [
                     {"role": "user", "content": PROMPT, "images": [image_b64]}
@@ -47,7 +51,8 @@ class OllamaBackend(TranscriptionBackend):
                     "model": self.model,
                     "stream": False,
                     "format": "json",
-                    # thinking models spend tokens reasoning before answering
+                    "think": self.think,
+                    # headroom in case thinking is enabled in config
                     "options": {"num_predict": 512, "temperature": 0},
                     "messages": [{
                         "role": "user", "content": ORIENTATION_PROMPT,
