@@ -91,7 +91,8 @@ def _run_stage(ws: Workspace, cfg: dict, stage: str) -> None:
 @click.option("--stage", "only_stage", type=click.Choice(STAGES), default=None,
               help="Run a single stage (implies re-running it).")
 @click.option("--force", is_flag=True, help="Re-run stages even if already done.")
-@click.option("--provider", type=click.Choice(["ollama", "anthropic", "hybrid"]), default=None)
+@click.option("--provider", type=click.Choice(["ollama", "anthropic", "hybrid", "mock"]),
+              default=None)
 @click.option("--model", default=None, help="Override the transcription model name.")
 @click.option("--ollama-url", default=None)
 def run(directory: Path, only_stage, force, provider, model, ollama_url):
