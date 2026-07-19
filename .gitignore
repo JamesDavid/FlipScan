@@ -1,0 +1,36 @@
+# Workspaces & media — never commit videos, frames, or generated books
+books/
+*.mov
+*.mp4
+*.MOV
+*.MP4
+frames/
+figures/
+*.epub
+
+# Secrets
+.env
+config.local.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
