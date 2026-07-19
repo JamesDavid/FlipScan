@@ -1,0 +1,15 @@
+services:
+  flipscan:
+    build: .
+    ports:
+      - "8321:8321"
+    volumes:
+      # workspaces live here: videos in, EPUB/PDF out — everything persists on the host
+      - ./books:/data
+    environment:
+      # your Ollama server's LAN IP works directly from the container;
+      # use host.docker.internal if Ollama runs on the Docker host itself
+      - FLIPSCAN_OLLAMA_URL=${FLIPSCAN_OLLAMA_URL:-http://host.docker.internal:11434}
+      - FLIPSCAN_PROVIDER=${FLIPSCAN_PROVIDER:-ollama}
+      - FLIPSCAN_OLLAMA_MODEL=${FLIPSCAN_OLLAMA_MODEL:-gemma4}
+      - FLIPSCAN_ANTHROPIC_API_KEY=${FLIPSCAN_ANTHROPIC_API_KEY:-}

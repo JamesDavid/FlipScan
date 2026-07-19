@@ -1,0 +1,10 @@
+.git
+.venv
+books
+__pycache__
+*.pyc
+*.egg-info
+.pytest_cache
+.dockerignore
+Dockerfile
+docker-compose.yml
