@@ -32,3 +32,6 @@ flipscan = "flipscan.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["flipscan*"]
+
+[tool.setuptools.package-data]
+flipscan = ["templates/*.j2"]

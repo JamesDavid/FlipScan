@@ -122,6 +122,64 @@ def run(directory: Path, only_stage, force, provider, model, ollama_url):
         click.echo(f"[{stage}] ok")
 
 
+# ---------------------------------------------------------------- review
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path))
+def review(directory: Path):
+    """Generate the HTML review page (frame vs markdown + reshoot list)."""
+    ws = Workspace.open(directory)
+    from .review import generate_review, reshoot_list
+    out = generate_review(ws, log=click.echo)
+    items = reshoot_list(ws)
+    if items:
+        click.echo(f"reshoot list ({len(items)} pages): "
+                   + ", ".join(i["id"] for i in items))
+    else:
+        click.echo("reshoot list: empty — all pages look good")
+    click.echo(f"open {out}")
+
+
+# ---------------------------------------------------------------- patch
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path))
+@click.option("--page", "page_id", required=True, help="Page id, e.g. p0142")
+@click.argument("image", type=click.Path(exists=True, path_type=Path))
+def patch(directory: Path, page_id: str, image: Path):
+    """Replace a page's capture with a re-shot photo and re-process it."""
+    import shutil
+
+    ws = Workspace.open(directory)
+    cfg = load_config(ws.root)
+    page = ws.page(page_id)
+    if page is None:
+        raise click.UsageError(f"no page {page_id!r} in {ws.root}")
+
+    patches = ws.root / "patches"
+    patches.mkdir(exist_ok=True)
+    dest = patches / f"{page_id}{image.suffix.lower()}"
+    shutil.copy2(image, dest)
+    page["patched_source"] = f"patches/{dest.name}"
+    page["status"] = "patched"
+    for key in ("md", "confidence", "flags", "transcribe_error"):
+        page.pop(key, None)
+    page["md"] = None
+
+    click.echo(f"{page_id}: preprocessing replacement photo")
+    from .stages.preprocess import preprocess_page
+    preprocess_page(ws, page, cfg)
+    ws.save()
+
+    click.echo(f"{page_id}: transcribing")
+    from .stages.transcribe import run as transcribe_run
+    transcribe_run(ws, cfg, log=click.echo)
+
+    ws.stage_reset("figures")  # re-run figures + assemble with the new page
+    click.echo(f"{page_id}: patched — run `flipscan run {directory}` then "
+               f"`flipscan build {directory}` to rebuild outputs")
+
+
 # ---------------------------------------------------------------- build
 
 @main.command()

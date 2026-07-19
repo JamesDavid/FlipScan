@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FlipScan review — {{ title }}</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f4; color: #1c1917; }
+  header { background: #292524; color: #fafaf9; padding: 1rem 2rem; }
+  header h1 { margin: 0; font-size: 1.3rem; }
+  .summary { padding: 1rem 2rem; }
+  .reshoot { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px;
+             padding: 1rem 1.5rem; margin: 1rem 2rem; }
+  .reshoot h2 { margin-top: 0; color: #b91c1c; font-size: 1.1rem; }
+  .page { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; gap: 1.5rem;
+          background: #fff; margin: 1rem 2rem; padding: 1.5rem; border-radius: 8px;
+          border: 1px solid #e7e5e4; }
+  .page.suspect { border: 2px solid #dc2626; }
+  .page img { width: 100%; border: 1px solid #d6d3d1; border-radius: 4px; }
+  .meta { font-size: 0.8rem; color: #78716c; margin-bottom: 0.5rem; }
+  .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
+           font-size: 0.75rem; font-weight: 600; }
+  .badge.ok { background: #dcfce7; color: #166534; }
+  .badge.suspect { background: #fee2e2; color: #b91c1c; }
+  .badge.patched { background: #dbeafe; color: #1d4ed8; }
+  .badge.missing { background: #f3f4f6; color: #374151; }
+  .md { overflow-x: auto; }
+  .md table { border-collapse: collapse; }
+  .md td, .md th { border: 1px solid #d6d3d1; padding: 0.3rem 0.6rem; }
+  .md img { max-width: 100%; }
+  code.cmd { background: #292524; color: #fafaf9; padding: 0.15rem 0.5rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header><h1>FlipScan review — {{ title }}</h1></header>
+
+<div class="summary">
+  {{ pages|length }} pages · {{ suspect_count }} suspect ·
+  generated from <code>{{ workspace }}</code>
+</div>
+
+{% if reshoot %}
+<div class="reshoot">
+  <h2>Reshoot list — re-photograph these pages individually</h2>
+  <ul>
+  {% for item in reshoot %}
+    <li><strong>{{ item.id }}</strong>{% if item.printed_number %} (printed page {{ item.printed_number }}){% endif %}
+        — {{ item.reasons|join(", ") }}</li>
+  {% endfor %}
+  </ul>
+  <p>Then patch each one back in:
+     <code class="cmd">flipscan patch {{ workspace }} --page PAGE_ID photo.jpg</code></p>
+</div>
+{% endif %}
+
+{% for p in pages %}
+<div class="page {{ p.status }}" id="{{ p.id }}">
+  <div>
+    <div class="meta">
+      <span class="badge {{ p.status }}">{{ p.status }}</span>
+      {{ p.id }}{% if p.printed_number %} · printed {{ p.printed_number }}{% endif %}
+      {% if p.confidence %} · confidence {{ p.confidence }}{% endif %}
+      {% if p.scores %} · score {{ "%.2f"|format(p.scores.composite) }}{% endif %}
+      {% if p.transcribed_by %} · via {{ p.transcribed_by }}{% endif %}
+      {% if p.flags %} · flags: {{ p.flags|join(", ") }}{% endif %}
+    </div>
+    {% if p.image %}<a href="{{ p.image }}"><img src="{{ p.image }}" loading="lazy"
+        alt="{{ p.id }}"></a>{% endif %}
+  </div>
+  <div class="md">{{ p.html|safe }}</div>
+</div>
+{% endfor %}
+</body>
+</html>

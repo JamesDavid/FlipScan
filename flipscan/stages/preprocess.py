@@ -50,11 +50,15 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
     """Correct one page's canonical frame; used by the stage and the patch flow."""
     out_dir = ws.work_file("pages")
     out_dir.mkdir(exist_ok=True)
-    fid = page["canonical"]
-    bgr = cv2.imread(str(frame_path(ws, fid)))
+    if page.get("patched_source"):
+        fid = None
+        bgr = cv2.imread(str(ws.root / page["patched_source"]))
+    else:
+        fid = page["canonical"]
+        bgr = cv2.imread(str(frame_path(ws, fid)))
 
     quad = None
-    if scores and fid in scores:
+    if fid is not None and scores and fid in scores:
         quad = scores[fid].get("quad")
     if quad is None:  # patched photos have no score record: detect now
         q, _ = detect_page_quad(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
