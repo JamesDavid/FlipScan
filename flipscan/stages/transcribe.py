@@ -133,6 +133,33 @@ def check_printed_numbers(pages: list[dict]) -> list[str]:
     return warnings
 
 
+def _cache_page(ws: Workspace, page: dict) -> None:
+    key = cache_key(page)
+    if key and page.get("md"):
+        cache = load_cache(ws)
+        cache[key] = {
+            "md": page["md"], "printed_number": page.get("printed_number"),
+            "confidence": page.get("confidence"), "regions": page.get("regions"),
+            "flags": page.get("flags"), "transcribed_by": page.get("transcribed_by"),
+        }
+        save_cache(ws, cache)
+
+
+def _run_incremental(ws: Workspace, backend, todo, by_id, log) -> dict[str, dict]:
+    """Transcribe page by page, persisting after each one — a multi-hour local
+    run must survive interruption (it resumes where it stopped)."""
+    results = {}
+    for i, item in enumerate(todo):
+        r = backend.transcribe([item], log=lambda m: None)[item[0]]
+        results[item[0]] = r
+        _write_result(ws, by_id[item[0]], r, backend.name)
+        _cache_page(ws, by_id[item[0]])
+        ws.save()
+        log(f"  {backend.name}: {item[0]} "
+            f"({'ok' if 'error' not in r else 'FAILED'}) [{i + 1}/{len(todo)}]")
+    return results
+
+
 def run(ws: Workspace, cfg: dict, log=print) -> None:
     pages = ws.manifest["pages"]
     todo = [(p["id"], ws.root / p["llm_image"]) for p in pages
@@ -144,12 +171,10 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
         provider = cfg["provider"]["name"]
         if provider == "hybrid":
             local = get_backend({**cfg, "provider": {**cfg["provider"], "name": "ollama"}})
-            results = local.transcribe(todo, log)
+            results = _run_incremental(ws, local, todo, by_id, log)
             escalate_on = cfg["provider"]["escalate_on"]
             escalate = [pid for pid, r in results.items()
                         if needs_escalation(r, escalate_on)]
-            for pid, r in results.items():
-                _write_result(ws, by_id[pid], r, "ollama")
             if escalate:
                 log(f"  hybrid: escalating {len(escalate)} pages to anthropic")
                 remote = get_backend(
@@ -160,23 +185,17 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
                     if "error" not in r:
                         by_id[pid]["status"] = "ok"
                         _write_result(ws, by_id[pid], r, "anthropic")
-        else:
-            backend = get_backend(cfg)
+                        _cache_page(ws, by_id[pid])
+                ws.save()
+        elif provider == "anthropic":
+            backend = get_backend(cfg)  # Batches API is inherently all-at-once
             for pid, r in backend.transcribe(todo, log).items():
                 _write_result(ws, by_id[pid], r, backend.name)
-        ws.save()
-
-    # cache results by capture identity so re-clustering reuses them
-    cache = load_cache(ws)
-    for p in pages:
-        key = cache_key(p)
-        if key and p.get("md"):
-            cache[key] = {
-                "md": p["md"], "printed_number": p.get("printed_number"),
-                "confidence": p.get("confidence"), "regions": p.get("regions"),
-                "flags": p.get("flags"), "transcribed_by": p.get("transcribed_by"),
-            }
-    save_cache(ws, cache)
+                _cache_page(ws, by_id[pid])
+            ws.save()
+        else:
+            backend = get_backend(cfg)
+            _run_incremental(ws, backend, todo, by_id, log)
 
     dedupe_by_printed(pages, log)
     reordered = reorder_by_printed(pages)
