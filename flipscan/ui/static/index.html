@@ -312,7 +312,7 @@ async function openProject(name, tab) {
     <div id="log"></div>
   </div>
   <div class="tabs">
-    ${["pipeline","pages","frames","figures","output"].map(t =>
+    ${["pipeline","frames","pages","figures","output"].map(t =>
       `<div class="tab ${t === (tab||"pipeline") ? "active" : ""}"
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
@@ -357,7 +357,8 @@ function renderTab(tab, p) {
       body.innerHTML = missingCard
         + `<div class="card"><h2>Reshoot list — captured badly</h2>` + (items.length
         ? "<ul>" + items.map(i =>
-            `<li><b>${i.id}</b>${i.printed_number ? ` (printed ${i.printed_number})` : ""}
+            `<li><a href="javascript:void(0)" onclick="gotoPage('${i.id}')"><b>${i.id}</b>${
+              i.printed_number ? ` (printed ${i.printed_number})` : ""}</a>
              — ${esc(i.reasons.join(", "))}</li>`).join("") + "</ul>"
         : "<div class='meta'>empty — all pages look good</div>") + `</div>`
         + addPagePanel();
@@ -438,11 +439,59 @@ function renderTab(tab, p) {
         ? `<img style="max-width:100%" src="/api/projects/${name}/file/work/contact_sheet.jpg">`
         : "<div class='meta'>run the pipeline first</div>"}</div>`;
   } else if (tab === "figures") {
-    const figs = p.pages.flatMap(pg => pg.figures || []);
-    body.innerHTML = `<div class="card"><h2>Figures</h2><div class="thumbs">
-      ${figs.map(f => `<a href="/api/projects/${name}/file/${f}">
-        <img src="/api/projects/${name}/file/${f}"></a>`).join("")
-        || "<div class='meta'>no figures yet</div>"}</div></div>`;
+    // chronological rows (book order), grouped by printed page number so
+    // duplicate captures of the same figure sit together
+    const rows = [];
+    p.pages.forEach(pg => {
+      if (pg.status === "duplicate" || pg.status === "deleted") return;
+      (pg.figures || []).forEach((f, i) => {
+        const letter = f.split("_").pop().split(".")[0];
+        const ridx = letter.charCodeAt(0) - 97;
+        rows.push({pg, f, i, caption: (pg.regions?.[ridx]?.caption) || ""});
+      });
+    });
+    const groups = [];
+    rows.forEach(r => {
+      const last = groups[groups.length - 1];
+      const num = r.pg.printed_number;
+      if (last && num != null && last.num === num) last.rows.push(r);
+      else groups.push({num, rows: [r]});
+    });
+    const figRow = (r) => `
+      <div class="row" style="border-top:1px solid var(--line);padding:.7rem 0">
+        <a href="/api/projects/${name}/file/${r.f}?t=${Date.now()}" target="_blank">
+          <img src="/api/projects/${name}/file/${r.f}?t=${Date.now()}"
+               style="height:130px;border:1px solid var(--line);border-radius:4px"></a>
+        <div style="flex:1;min-width:12rem">
+          <div><b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
+                    : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></div>
+          ${r.caption ? `<div class="meta">${esc(r.caption)}</div>` : ""}
+        </div>
+        <span class="row">
+          <button class="secondary" onclick="openCrop('${r.pg.id}', ${r.i})">Re-crop</button>
+          <input type="file" accept="image/*" id="figup-${r.pg.id}-${r.i}"
+                 style="display:none" onchange="uploadFigure('${r.pg.id}', ${r.i})">
+          <button class="secondary"
+                  onclick="$('figup-${r.pg.id}-${r.i}').click()">Re-upload</button>
+          <button class="danger" onclick="delFigure('${r.pg.id}', ${r.i})">Delete</button>
+        </span>
+      </div>`;
+    body.innerHTML = `<div class="card"><h2>Figures <span class="meta">
+      (book order — re-crop, replace, or delete; duplicate groups can keep the
+      sharpest automatically)</span></h2>` +
+      (groups.map(g => g.rows.length > 1 ? `
+        <div style="border:2px solid #f59e0b;border-radius:8px;padding:.2rem .8rem;
+             margin:.6rem 0">
+          <div class="row" style="padding:.4rem 0">
+            <span class="meta">⚠ ${g.rows.length} figures on printed page ${g.num}
+              — duplicates?</span>
+            <button class="secondary" onclick='keepBest(${JSON.stringify(
+              g.rows.map(r => ({page_id: r.pg.id, fig_idx: r.i})))})'>
+              Keep sharpest, delete rest</button>
+          </div>
+          ${g.rows.map(figRow).join("")}
+        </div>` : g.rows.map(figRow).join("")).join("")
+       || "<div class='meta'>no figures yet</div>") + `</div>` + cropModalHtml();
   } else if (tab === "output") {
     body.innerHTML = `<div class="card"><h2>Build</h2>
       <div class="row" style="margin-bottom:.6rem">
@@ -585,6 +634,16 @@ async function buildFmt(fmt) {
   } catch (e) { alert(e.message); }
 }
 
+async function gotoPage(pageId) {
+  await openProject(current, "pages");
+  const el = document.getElementById("cell-" + pageId);
+  if (el) {
+    el.scrollIntoView({behavior: "smooth", block: "start"});
+    el.style.outline = "3px solid var(--accent)";
+    setTimeout(() => el.style.outline = "", 2500);
+  }
+}
+
 function toggleCell(pageId) {
   const bodyEl = document.querySelector(`#cell-${pageId} .pagerow-body`);
   const btn = $("tgl-" + pageId);
@@ -684,6 +743,32 @@ async function saveCrop() {
     body: JSON.stringify({bbox_norm: cropCtx.bbox})});
   $("crop-modal").style.display = "none";
   openProject(current, "pages");
+}
+
+async function delFigure(pageId, figIdx) {
+  if (!confirm("Delete this figure from the book?")) return;
+  await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}`, {method:"DELETE"});
+  openProject(current, "figures");
+}
+
+async function uploadFigure(pageId, figIdx) {
+  const input = $(`figup-${pageId}-${figIdx}`);
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append("photo", input.files[0]);
+  const r = await fetch(
+    `/api/projects/${current}/pages/${pageId}/figures/${figIdx}/upload`,
+    {method:"POST", body: fd});
+  if (!r.ok) alert("upload failed");
+  openProject(current, "figures");
+}
+
+async function keepBest(items) {
+  if (!confirm(`Keep the sharpest of ${items.length} figures and delete the rest?`)) return;
+  await api(`/projects/${current}/figures/keep-best`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({items})});
+  openProject(current, "figures");
 }
 
 async function deletePage(pageId) {

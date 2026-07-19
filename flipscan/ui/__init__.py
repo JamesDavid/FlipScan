@@ -374,20 +374,29 @@ def create_app(root: Path) -> FastAPI:
     class CropEdit(BaseModel):
         bbox_norm: list[float]
 
+    def _figure(ws, page_id: str, fig_idx: int):
+        """Resolve (page, figure path, its region). fig_idx indexes
+        page['figures']; the region is recovered from the filename letter."""
+        page = ws.page(page_id)
+        figs = (page or {}).get("figures") or []
+        if page is None or fig_idx >= len(figs):
+            raise HTTPException(404, "no such figure")
+        rel = figs[fig_idx]
+        letter = Path(rel).stem.rsplit("_", 1)[-1]
+        ridx = ord(letter[0]) - ord("a") if letter and letter[0].isalpha() else fig_idx
+        regions = page.get("regions") or []
+        region = regions[ridx] if 0 <= ridx < len(regions) else None
+        return page, rel, region
+
     @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
     def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
         """Re-crop a figure to a user-drawn bbox (normalized to the page image)."""
-        import string
-
         import cv2
 
         ws = ws_for(name)
-        page = ws.page(page_id)
-        if page is None or not page.get("color"):
-            raise HTTPException(404, "no such page")
-        regions = page.get("regions") or []
-        if fig_idx >= len(regions) or len(edit.bbox_norm) != 4:
-            raise HTTPException(400, "bad figure index or bbox")
+        page, rel, region = _figure(ws, page_id, fig_idx)
+        if not page.get("color") or len(edit.bbox_norm) != 4:
+            raise HTTPException(400, "bad page or bbox")
         color = cv2.imread(str(ws.root / page["color"]))
         if color is None:
             raise HTTPException(500, "page image unreadable")
@@ -398,20 +407,84 @@ def create_app(root: Path) -> FastAPI:
         px = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
         if px[2] - px[0] < 10 or px[3] - px[1] < 10:
             raise HTTPException(400, "crop too small")
-        crop = color[px[1]:px[3], px[0]:px[2]]
-        figs = page.get("figures") or []
-        if fig_idx < len(figs):
-            rel = figs[fig_idx]
-        else:
-            rel = f"figures/{page_id}_{string.ascii_lowercase[fig_idx % 26]}.png"
-            figs = figs + [rel]
-            page["figures"] = figs
-        cv2.imwrite(str(ws.root / rel), crop)
-        regions[fig_idx]["bbox_norm"] = [x0, y0, x1, y1]
-        regions[fig_idx]["user_crop"] = True
+        cv2.imwrite(str(ws.root / rel), color[px[1]:px[3], px[0]:px[2]])
+        if region is not None:
+            region["bbox_norm"] = [x0, y0, x1, y1]
+            region["user_crop"] = True
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True, "figure": rel}
+
+    def _delete_figure(ws, page, rel):
+        import re as _re
+
+        letter = Path(rel).stem.rsplit("_", 1)[-1]
+        ridx = ord(letter[0]) - ord("a") if letter and letter[0].isalpha() else -1
+        regions = page.get("regions") or []
+        if 0 <= ridx < len(regions):
+            regions[ridx]["deleted"] = True  # tombstone keeps indexes stable
+        page["figures"] = [f for f in (page.get("figures") or []) if f != rel]
+        (ws.root / rel).unlink(missing_ok=True)
+        if page.get("md") and (ws.root / page["md"]).exists():
+            md_path = ws.root / page["md"]
+            md = _re.sub(r"!\[[^\]]*\]\(" + _re.escape(rel) + r"\)\n?", "",
+                         md_path.read_text(encoding="utf-8"))
+            md_path.write_text(md, encoding="utf-8")
+
+    @app.delete("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}")
+    def delete_figure(name: str, page_id: str, fig_idx: int):
+        """Remove a figure: file, markdown link, and region tombstone."""
+        ws = ws_for(name)
+        page, rel, _region = _figure(ws, page_id, fig_idx)
+        _delete_figure(ws, page, rel)
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True}
+
+    class KeepBest(BaseModel):
+        items: list[dict]  # [{page_id, fig_idx}, ...] — duplicates of one figure
+
+    @app.post("/api/projects/{name}/figures/keep-best")
+    def keep_best_figure(name: str, spec: KeepBest):
+        """Given duplicate captures of the same figure, keep the sharpest and
+        delete the rest."""
+        import cv2
+
+        ws = ws_for(name)
+        scored = []
+        for it in spec.items:
+            page, rel, _r = _figure(ws, it["page_id"], int(it["fig_idx"]))
+            img = cv2.imread(str(ws.root / rel), cv2.IMREAD_GRAYSCALE)
+            sharp = float(cv2.Laplacian(img, cv2.CV_64F).var()) if img is not None else -1
+            scored.append((sharp, page, rel))
+        if len(scored) < 2:
+            raise HTTPException(400, "need at least two figures to compare")
+        scored.sort(key=lambda t: t[0], reverse=True)
+        for _sharp, page, rel in scored[1:]:
+            _delete_figure(ws, page, rel)
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True, "kept": scored[0][2],
+                "deleted": [rel for _s, _p, rel in scored[1:]]}
+
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/upload")
+    async def upload_figure(name: str, page_id: str, fig_idx: int, photo: UploadFile):
+        """Replace a figure image with an uploaded photo (e.g. re-shot close-up)."""
+        import cv2
+        import numpy as np
+
+        ws = ws_for(name)
+        page, rel, region = _figure(ws, page_id, fig_idx)
+        data = await photo.read()
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(400, "not a readable image")
+        cv2.imwrite(str(ws.root / rel), img)  # keep filename: markdown link stays valid
+        if region is not None:
+            region["user_crop"] = True  # never let the figures stage overwrite it
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True}
 
     @app.delete("/api/projects/{name}/pages/{page_id}")
     def delete_page(name: str, page_id: str):

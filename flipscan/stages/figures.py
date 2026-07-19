@@ -59,8 +59,8 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
         page_figs = []
 
         for i, region in enumerate(regions):
-            if region.get("user_crop"):
-                continue  # the user hand-cropped this figure; never overwrite
+            if region.get("user_crop") or region.get("deleted"):
+                continue  # user-cropped: never overwrite; deleted: stay gone
             bx0, by0, bx1, by1 = region["bbox_norm"]
             dx, dy = (bx1 - bx0) * EXPAND, (by1 - by0) * EXPAND
             x0 = int(max(0.0, bx0 - dx) * w)
