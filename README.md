@@ -59,7 +59,7 @@ flipscan ui [--port 8321]
 - [x] M5 Assemble + EPUB
 - [x] M6 Review HTML + patch flow
 - [x] M7 Figures pipeline
-- [ ] M8 PDF outputs
+- [x] M8 PDF outputs
 - [ ] M9 GUI (`flipscan ui`)
 - [ ] M10 Docker packaging
 - [ ] M11 Dewarp, tuning, polish
