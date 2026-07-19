@@ -8,12 +8,14 @@ See [SPEC.md](SPEC.md) for the full architecture.
 
 ## Capture protocol: just keep filming until you have every page
 
-Shoot slow-mo videos of flipping through the book — any direction, any subset of pages,
-as many videos as you like. FlipScan matches pages **across videos** (perceptual hash +
-printed page numbers): a page captured in several videos keeps its sharpest capture, and
-pages only one video caught slot into the right place. Run the pipeline, look at the
-result, and if pages are missing or blurry just **add another video** of that part of the
-book and run again — already-good pages aren't re-transcribed.
+Shoot videos of flipping through the book — any direction, any subset of pages, as many
+videos as you like (mark a video "shot upside-down" in the GUI if needed). Page turns
+(motion bursts) split each video into page captures; the vision model transcribes the
+flat, readable page of each capture and reads its **printed page number**, which is how
+captures of the same page across videos are recognized: the best capture wins, the rest
+are marked duplicates, and everything is ordered by number. Run the pipeline, look at
+the result, and if pages are missing or blurry just **add another video** of that part
+of the book and run again — already-transcribed captures are cached.
 
 Tips:
 
@@ -77,10 +79,10 @@ flipscan init DIR --video V [--video V2 ...] [options]
     --title TEXT                book title (EPUB metadata)
     --expected-pages N          warn if the detected page count differs
 
-flipscan addvideo DIR VIDEO [--direction forward|reverse]
-    Add another capture video to an existing project: shared pages merge (best
-    capture wins), new pages slot into the order, and only pages whose best
-    frame changed get re-transcribed. Keep adding until every page is covered.
+flipscan addvideo DIR VIDEO [--direction forward|reverse] [--upside-down]
+    Add another capture video to an existing project. Its pages join the book;
+    duplicates collapse via printed page numbers (best capture wins). Keep
+    adding until every page is covered; cached transcriptions are reused.
 
 flipscan run DIR [--stage STAGE] [--force] [--provider ollama|anthropic|hybrid|mock]
                  [--model NAME] [--ollama-url URL]
