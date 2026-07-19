@@ -191,7 +191,7 @@ The GUI (`flipscan ui`) offers the same workflow with inline markdown editing an
 - [x] M8 PDF outputs
 - [x] M9 GUI (`flipscan ui`)
 - [x] M10 Docker packaging
-- [ ] M11 Dewarp, tuning, polish
+- [x] M11 Dewarp (simple cylindrical), tuning, tests, polish
 
 ## Development
 

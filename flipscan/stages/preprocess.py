@@ -3,7 +3,7 @@
 Per page writes into work/pages/:
   <id>_color.png  full-res corrected color frame (source for figure crops)
   <id>_llm.jpg    contrast-normalized grayscale copy downscaled for the LLM
-Dewarp (page curl) is deferred; config["preprocess"]["dewarp"] is a no-op hook.
+Set config [preprocess] dewarp=true to apply simple cylindrical curl correction.
 """
 
 from __future__ import annotations
@@ -32,6 +32,47 @@ def correct_page(bgr: np.ndarray, quad_norm) -> np.ndarray:
     dst = np.array([[0, 0], [tw - 1, 0], [tw - 1, th - 1], [0, th - 1]], dtype=np.float64)
     m = cv2.getPerspectiveTransform(quad.astype(np.float32), dst.astype(np.float32))
     return cv2.warpPerspective(bgr, m, (tw, th))
+
+
+def dewarp_cylindrical(color: np.ndarray) -> np.ndarray:
+    """Correct page curl with a simple cylindrical model: fit quadratics to the
+    top and bottom envelopes of the ink and remap each column so both run straight.
+    Falls back to the input untouched when the page has too little ink to fit."""
+    h, w = color.shape[:2]
+    gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+    ink = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                cv2.THRESH_BINARY_INV, 31, 15)
+    ink = cv2.dilate(ink, np.ones((5, 25), np.uint8))  # merge letters into lines
+
+    xs, tops, bots = [], [], []
+    step = max(1, w // 60)
+    for x in range(0, w, step):
+        col = np.nonzero(ink[:, x:x + step].any(axis=1))[0]
+        if len(col) > 10:
+            xs.append(x + step / 2)
+            tops.append(col[0])
+            bots.append(col[-1])
+    if len(xs) < 10:
+        return color
+
+    xs_a = np.array(xs, dtype=np.float64)
+    top_fit = np.poly1d(np.polyfit(xs_a, tops, 2))
+    bot_fit = np.poly1d(np.polyfit(xs_a, bots, 2))
+
+    col_x = np.arange(w, dtype=np.float32)
+    top_c = top_fit(col_x).astype(np.float32)
+    bot_c = bot_fit(col_x).astype(np.float32)
+    span = np.maximum(bot_c - top_c, 1.0)
+    if float(np.ptp(top_c) + np.ptp(bot_c)) < 4.0:
+        return color  # already flat — skip the remap
+
+    top_t, bot_t = float(top_c.min()), float(bot_c.max())
+    rows = np.arange(h, dtype=np.float32)[:, None]           # target y
+    # invert the per-column linear stretch: source y for each target y
+    map_y = top_c[None, :] + (rows - top_t) * (span[None, :] / max(bot_t - top_t, 1.0))
+    map_x = np.broadcast_to(col_x[None, :], (h, w)).copy()
+    return cv2.remap(color, map_x, map_y.astype(np.float32), cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_REPLICATE)
 
 
 def llm_copy(color: np.ndarray, long_edge: int) -> np.ndarray:
@@ -65,6 +106,8 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
         quad = q.tolist() if q is not None else None
 
     color = correct_page(bgr, quad) if quad is not None else bgr
+    if cfg["preprocess"].get("dewarp"):
+        color = dewarp_cylindrical(color)
     color_path = out_dir / f"{page['id']}_color.png"
     llm_path = out_dir / f"{page['id']}_llm.jpg"
     cv2.imwrite(str(color_path), color)
