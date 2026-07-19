@@ -83,6 +83,11 @@ async function refreshProjects() {
       <div>${esc(p.title || p.name)} ${p.running ? "⏳" : ""}</div>
       <div class="sub">${p.pages} pages · ${p.suspects} suspect</div>
     </div>`).join("") || '<div class="sub" style="color:#a8a29e">no projects yet</div>';
+  if (!current && list.length) {
+    const h = location.hash.slice(1).split("/");  // #project/tab deep links
+    const name = list.some(p => p.name === h[0]) ? h[0] : list[0].name;
+    openProject(name, h[1] || undefined);
+  }
 }
 
 function showNew() {

@@ -4,6 +4,8 @@ Turn an iPhone slow-motion video of thumbing through a book into a clean EPUB. F
 
 See [SPEC.md](SPEC.md) for the full architecture.
 
+![FlipScan web GUI — page review with side-by-side frame and markdown editing](docs/screenshot.png)
+
 ## Capture protocol: just keep filming until you have every page
 
 Shoot slow-mo videos of flipping through the book — any direction, any subset of pages,
