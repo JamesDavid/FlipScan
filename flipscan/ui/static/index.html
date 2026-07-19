@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlipScan</title>
+<style>
+  :root { --bg:#f5f5f4; --panel:#fff; --line:#e7e5e4; --ink:#1c1917; --dim:#78716c;
+          --accent:#0d9488; --bad:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink);
+         display:grid; grid-template-columns: 260px 1fr; height:100vh; }
+  aside { background:#292524; color:#fafaf9; padding:1rem; overflow-y:auto; }
+  aside h1 { font-size:1.1rem; margin:0 0 1rem; }
+  .proj { padding:.5rem .7rem; border-radius:6px; cursor:pointer; margin-bottom:.25rem;
+          font-size:.9rem; }
+  .proj:hover, .proj.active { background:#44403c; }
+  .proj .sub { font-size:.75rem; color:#a8a29e; }
+  main { overflow-y:auto; padding:1.5rem 2rem; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+          padding:1.25rem 1.5rem; margin-bottom:1.25rem; }
+  h2 { margin:.2rem 0 1rem; font-size:1.05rem; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px;
+           padding:.45rem .9rem; cursor:pointer; font-size:.85rem; }
+  button.secondary { background:#57534e; }
+  button:disabled { opacity:.5; cursor:default; }
+  .stages { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.8rem; }
+  .stage { padding:.25rem .6rem; border-radius:999px; font-size:.75rem;
+           background:#f3f4f6; color:#374151; }
+  .stage.done { background:#dcfce7; color:#166534; }
+  #log { background:#1c1917; color:#d6d3d1; font-family:ui-monospace,monospace;
+         font-size:.75rem; padding: .8rem 1rem; border-radius:6px; max-height:220px;
+         overflow-y:auto; white-space:pre-wrap; display:none; }
+  .tabs { display:flex; gap:.25rem; margin-bottom:1rem; }
+  .tab { padding:.4rem .9rem; border-radius:6px 6px 0 0; cursor:pointer; font-size:.85rem;
+         background:#e7e5e4; }
+  .tab.active { background:var(--panel); border:1px solid var(--line); border-bottom:0; }
+  .pagerow { display:grid; grid-template-columns: 300px 1fr; gap:1rem; padding:1rem 0;
+             border-top:1px solid var(--line); }
+  .pagerow img { width:100%; border:1px solid var(--line); border-radius:4px; }
+  .pagerow.suspect { background:#fef2f2; }
+  .meta { font-size:.75rem; color:var(--dim); margin-bottom:.4rem; }
+  textarea { width:100%; min-height:200px; font-family:ui-monospace,monospace;
+             font-size:.8rem; border:1px solid var(--line); border-radius:6px; padding:.6rem; }
+  input, select { border:1px solid var(--line); border-radius:6px; padding:.4rem .6rem;
+                  font-size:.85rem; width:100%; margin-bottom:.5rem; }
+  label { font-size:.75rem; color:var(--dim); }
+  .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+  .grid3 { display:grid; grid-template-columns:2fr 1fr 1fr; gap:.5rem; }
+  .badge { font-size:.7rem; padding:.1rem .45rem; border-radius:999px; }
+  .badge.suspect { background:#fee2e2; color:var(--bad); }
+  .badge.ok { background:#dcfce7; color:#166534; }
+  .badge.patched { background:#dbeafe; color:#1d4ed8; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:.6rem; }
+  .thumbs img { height:160px; border:1px solid var(--line); border-radius:4px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<aside>
+  <h1>FlipScan</h1>
+  <div id="projects"></div>
+  <div style="margin-top:1rem">
+    <button class="secondary" onclick="showNew()">+ New project</button>
+  </div>
+</aside>
+<main id="main"><div class="card">Select or create a project.</div></main>
+
+<script>
+let current = null;
+const $ = (id) => document.getElementById(id);
+const api = async (path, opts) => {
+  const r = await fetch("/api" + path, opts);
+  if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  return r.json();
+};
+const esc = (s) => (s || "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function refreshProjects() {
+  const list = await api("/projects");
+  $("projects").innerHTML = list.map(p => `
+    <div class="proj ${p.name === current ? "active" : ""}" onclick="openProject('${p.name}')">
+      <div>${esc(p.title || p.name)} ${p.running ? "⏳" : ""}</div>
+      <div class="sub">${p.pages} pages · ${p.suspects} suspect</div>
+    </div>`).join("") || '<div class="sub" style="color:#a8a29e">no projects yet</div>';
+}
+
+function showNew() {
+  current = null;
+  $("main").innerHTML = `
+  <div class="card">
+    <h2>New project</h2>
+    <label>Project name</label><input id="np-name" placeholder="mybook">
+    <label>Title (EPUB metadata)</label><input id="np-title">
+    <label>Expected pages (optional)</label><input id="np-pages" type="number">
+    <div id="np-videos"></div>
+    <div class="row" style="margin:.5rem 0">
+      <button class="secondary" onclick="addVideoRow()">+ add video</button>
+    </div>
+    <button onclick="createProject()">Create</button>
+    <div class="meta" style="margin-top:.5rem">Video paths are paths on the machine running
+    flipscan (drop files into the projects folder first — e.g. ./books in Docker).</div>
+  </div>`;
+  addVideoRow();
+}
+
+let vrows = 0;
+function addVideoRow() {
+  const d = document.createElement("div");
+  d.className = "grid3";
+  d.innerHTML = `
+    <span><label>Video path</label><input class="np-vpath" placeholder="/data/oddpass.mov"></span>
+    <span><label>Pages</label><select class="np-vpages">
+      <option>all</option><option>odd</option><option>even</option></select></span>
+    <span><label>Direction</label><select class="np-vdir">
+      <option>forward</option><option>reverse</option></select></span>`;
+  $("np-videos").appendChild(d);
+  vrows++;
+}
+
+async function createProject() {
+  const videos = [...document.querySelectorAll("#np-videos .grid3")].map(r => ({
+    path: r.querySelector(".np-vpath").value,
+    pages: r.querySelector(".np-vpages").value,
+    direction: r.querySelector(".np-vdir").value,
+  })).filter(v => v.path);
+  try {
+    await api("/projects", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        name: $("np-name").value, title: $("np-title").value || null,
+        expected_pages: $("np-pages").value ? +$("np-pages").value : null,
+        videos })});
+    await refreshProjects();
+    openProject($("np-name").value);
+  } catch (e) { alert(e.message); }
+}
+
+async function openProject(name, tab) {
+  current = name;
+  const p = await api("/projects/" + name);
+  window._proj = p;
+  const stages = Object.entries(p.stages).map(([s, st]) =>
+    `<span class="stage ${st}">${s}</span>`).join("");
+  $("main").innerHTML = `
+  <div class="card">
+    <h2>${esc(p.book.title || name)}</h2>
+    <div class="stages">${stages}</div>
+    <div class="row">
+      <button id="runbtn" onclick="runPipeline()" ${p.running ? "disabled" : ""}>
+        ${p.running ? "Running…" : "Run / Resume"}</button>
+      <select id="provider" style="width:auto">
+        <option value="">provider: config default</option>
+        <option>ollama</option><option>anthropic</option><option>hybrid</option><option>mock</option>
+      </select>
+      <span class="meta">${p.pages.length} pages ·
+        ${p.pages.filter(x => x.status === "suspect").length} suspect</span>
+    </div>
+    <div id="log"></div>
+  </div>
+  <div class="tabs">
+    ${["pipeline","pages","frames","figures","output"].map(t =>
+      `<div class="tab ${t === (tab||"pipeline") ? "active" : ""}"
+        onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
+  </div>
+  <div id="tabbody"></div>`;
+  if (p.running) attachEvents(name);
+  renderTab(tab || "pipeline", p);
+}
+
+function renderTab(tab, p) {
+  const name = p.name, body = $("tabbody");
+  if (tab === "pipeline") {
+    api("/projects/" + name + "/reshoot").then(items => {
+      body.innerHTML = `<div class="card"><h2>Reshoot list</h2>` + (items.length
+        ? "<ul>" + items.map(i =>
+            `<li><b>${i.id}</b>${i.printed_number ? ` (printed ${i.printed_number})` : ""}
+             — ${esc(i.reasons.join(", "))}</li>`).join("") + "</ul>"
+        : "<div class='meta'>empty — all pages look good</div>") + `</div>`;
+    });
+  } else if (tab === "pages") {
+    body.innerHTML = p.pages.map(pg => `
+      <div class="card pagerow ${pg.status}">
+        <div>
+          <div class="meta"><span class="badge ${pg.status}">${pg.status}</span>
+            ${pg.id}${pg.printed_number ? " · printed " + pg.printed_number : ""}
+            ${pg.confidence ? " · " + pg.confidence : ""}</div>
+          ${pg.color ? `<img loading="lazy" src="/api/projects/${name}/file/${pg.color}">` : ""}
+          <div style="margin-top:.5rem">
+            <input type="file" id="patch-${pg.id}" style="display:none"
+                   onchange="patchPage('${pg.id}')">
+            <button class="secondary" onclick="$('patch-${pg.id}').click()">Patch photo…</button>
+          </div>
+        </div>
+        <div>
+          <textarea id="md-${pg.id}" data-page="${pg.id}"></textarea>
+          <button style="margin-top:.4rem" onclick="saveMd('${pg.id}')">Save markdown</button>
+        </div>
+      </div>`).join("");
+    p.pages.forEach(async pg => {
+      if (pg.md) {
+        const r = await fetch(`/api/projects/${name}/file/${pg.md}`);
+        if (r.ok) $("md-" + pg.id).value = await r.text();
+      }
+    });
+  } else if (tab === "frames") {
+    body.innerHTML = `<div class="card"><h2>Canonical frames (contact sheet)</h2>
+      ${p.contact_sheet
+        ? `<img style="max-width:100%" src="/api/projects/${name}/file/work/contact_sheet.jpg">`
+        : "<div class='meta'>run the pipeline first</div>"}</div>`;
+  } else if (tab === "figures") {
+    const figs = p.pages.flatMap(pg => pg.figures || []);
+    body.innerHTML = `<div class="card"><h2>Figures</h2><div class="thumbs">
+      ${figs.map(f => `<a href="/api/projects/${name}/file/${f}">
+        <img src="/api/projects/${name}/file/${f}"></a>`).join("")
+        || "<div class='meta'>no figures yet</div>"}</div></div>`;
+  } else if (tab === "output") {
+    body.innerHTML = `<div class="card"><h2>Build</h2>
+      <div class="row">
+        ${["epub","pdf-facsimile","pdf"].map(f =>
+          `<button onclick="buildFmt('${f}')">Build ${f}</button>`).join("")}
+      </div>
+      <h2 style="margin-top:1rem">Downloads</h2>
+      <ul>${p.outputs.map(f =>
+        `<li><a href="/api/projects/${name}/file/out/${f}">${f}</a></li>`).join("")
+        || "<div class='meta'>nothing built yet</div>"}</ul></div>`;
+  }
+}
+
+async function runPipeline() {
+  const prov = $("provider").value;
+  await api(`/projects/${current}/run` + (prov ? `?provider=${prov}` : ""), {method:"POST"});
+  $("runbtn").disabled = true; $("runbtn").textContent = "Running…";
+  attachEvents(current);
+}
+
+function attachEvents(name) {
+  const log = $("log");
+  log.style.display = "block";
+  const es = new EventSource(`/api/projects/${name}/events`);
+  es.onmessage = (e) => {
+    log.textContent += JSON.parse(e.data) + "\n";
+    log.scrollTop = log.scrollHeight;
+  };
+  es.addEventListener("done", () => { es.close(); openProject(name); refreshProjects(); });
+  es.onerror = () => es.close();
+}
+
+async function saveMd(pageId) {
+  await api(`/projects/${current}/pages/${pageId}/md`, {
+    method:"PUT", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({markdown: $("md-" + pageId).value})});
+}
+
+async function patchPage(pageId) {
+  const input = $("patch-" + pageId);
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append("photo", input.files[0]);
+  const r = await fetch(`/api/projects/${current}/pages/${pageId}/patch`,
+                        {method:"POST", body: fd});
+  if (!r.ok) { alert("patch failed"); return; }
+  openProject(current, "pages");
+}
+
+async function buildFmt(fmt) {
+  try {
+    await api(`/projects/${current}/build?format=${fmt}`, {method:"POST"});
+    openProject(current, "output");
+  } catch (e) { alert(e.message); }
+}
+
+refreshProjects();
+</script>
+</body>
+</html>
