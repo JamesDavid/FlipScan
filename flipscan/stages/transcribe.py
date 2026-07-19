@@ -3,8 +3,31 @@ printed-page-number monotonicity checking (the most reliable gap detector)."""
 
 from __future__ import annotations
 
+import json
+
 from ..backends import get_backend, needs_escalation
 from ..workspace import Workspace
+
+# transcription results cached by capture identity, so re-clustering (e.g. after
+# adding another video) only re-transcribes pages whose best frame changed
+CACHE_FILE = "transcriptions.json"
+
+
+def cache_key(page: dict) -> str | None:
+    return page.get("patched_source") or page.get("canonical")
+
+
+def load_cache(ws: Workspace) -> dict:
+    path = ws.work_file(CACHE_FILE)
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_cache(ws: Workspace, cache: dict) -> None:
+    with open(ws.work_file(CACHE_FILE), "w", encoding="utf-8") as f:
+        json.dump(cache, f)
 
 
 def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) -> None:
@@ -23,6 +46,37 @@ def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) ->
     page.pop("transcribe_error", None)
     if result["confidence"] == "low" or result["flags"]:
         page["status"] = "suspect"
+
+
+def _is_pinned_start(p: dict) -> bool:
+    return p.get("pinned") == "start" or (p.get("role") == "cover"
+                                          and p.get("pinned") != "end")
+
+
+def reorder_by_printed(pages: list[dict]) -> list[dict]:
+    """Sort pages by printed page number where known; unnumbered pages keep
+    their position via interpolated keys. Pinned pages (covers etc.) stay put."""
+    start = [p for p in pages if _is_pinned_start(p)]
+    end = [p for p in pages if p.get("pinned") == "end"]
+    middle = [p for p in pages if p not in start and p not in end]
+
+    n = len(middle)
+    nums = [p.get("printed_number") for p in middle]
+    if not any(v is not None for v in nums):
+        return pages  # nothing to order by
+
+    # unnumbered pages ride along with the page before them
+    keys: list[float] = []
+    first_num = next(float(v) for v in nums if v is not None)
+    for i in range(n):
+        if nums[i] is not None:
+            keys.append(float(nums[i]))
+        elif keys:
+            keys.append(keys[-1] + 0.001)
+        else:
+            keys.append(first_num - 0.001 * (n - i))  # leading unnumbered pages
+    order = sorted(range(n), key=lambda i: keys[i])  # stable
+    return start + [middle[i] for i in order] + end
 
 
 def check_printed_numbers(pages: list[dict]) -> list[str]:
@@ -46,7 +100,8 @@ def check_printed_numbers(pages: list[dict]) -> list[str]:
 
 def run(ws: Workspace, cfg: dict, log=print) -> None:
     pages = ws.manifest["pages"]
-    todo = [(p["id"], ws.root / p["llm_image"]) for p in pages if not p.get("md")]
+    todo = [(p["id"], ws.root / p["llm_image"]) for p in pages
+            if not p.get("md") and p.get("llm_image") and p.get("role") != "cover"]
     by_id = {p["id"]: p for p in pages}
     if not todo:
         log("  all pages already transcribed")
@@ -74,6 +129,24 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             backend = get_backend(cfg)
             for pid, r in backend.transcribe(todo, log).items():
                 _write_result(ws, by_id[pid], r, backend.name)
+        ws.save()
+
+    # cache results by capture identity so re-clustering reuses them
+    cache = load_cache(ws)
+    for p in pages:
+        key = cache_key(p)
+        if key and p.get("md"):
+            cache[key] = {
+                "md": p["md"], "printed_number": p.get("printed_number"),
+                "confidence": p.get("confidence"), "regions": p.get("regions"),
+                "flags": p.get("flags"), "transcribed_by": p.get("transcribed_by"),
+            }
+    save_cache(ws, cache)
+
+    reordered = reorder_by_printed(pages)
+    if [p["id"] for p in reordered] != [p["id"] for p in pages]:
+        log("  reordered pages by printed page numbers")
+        ws.manifest["pages"] = pages = reordered
         ws.save()
 
     warnings = check_printed_numbers(pages)

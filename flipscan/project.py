@@ -31,19 +31,39 @@ def create_project(directory: Path, videos: list[dict[str, Any]],
     for i, spec in enumerate(videos):
         vid = f"v{i}"
         src = Path(spec["path"])
-        pages = spec.get("pages", "all")
         direction = spec.get("direction", "forward")
-        log(f"{vid}: importing {src} (pages={pages}, direction={direction})")
+        log(f"{vid}: importing {src}")
         rel = ws.import_video(src, vid)
         meta = probe_video(ws.root / rel)
         log(f"{vid}: {meta['fps_actual']} fps, {meta.get('nb_frames') or '?'} frames")
         entries.append({
             "id": vid, "path": str(rel).replace("\\", "/"), "source": str(src),
-            "pages": pages, "direction": direction, **meta,
+            "direction": direction, **meta,
         })
     ws.manifest["videos"] = entries
     ws.save()
     return ws
+
+
+def add_video(ws: Workspace, src: Path, direction: str = "forward",
+              log: Callable[[str], None] = print) -> dict:
+    """Add another capture video to an existing project. Pages it shares with
+    earlier videos merge (best capture wins); new pages slot into the order.
+    Already-transcribed pages whose best frame is unchanged are not re-transcribed."""
+    vid = f"v{len(ws.manifest['videos'])}"
+    src = Path(src)
+    log(f"{vid}: importing {src}")
+    rel = ws.import_video(src, vid)
+    meta = probe_video(ws.root / rel)
+    log(f"{vid}: {meta['fps_actual']} fps, {meta.get('nb_frames') or '?'} frames")
+    entry = {
+        "id": vid, "path": str(rel).replace("\\", "/"), "source": str(src),
+        "direction": direction, **meta,
+    }
+    ws.manifest["videos"].append(entry)
+    ws.stage_reset("extract")  # re-run; per-video skips keep it incremental
+    ws.save()
+    return entry
 
 
 def next_page_id(ws: Workspace) -> str:
@@ -80,6 +100,8 @@ def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
     }
     if role:
         page["role"] = role
+    if position in ("start", "end"):
+        page["pinned"] = position  # survives re-clustering at this end
 
     pages = ws.manifest["pages"]
     if position == "start":

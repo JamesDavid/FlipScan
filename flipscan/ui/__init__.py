@@ -21,7 +21,6 @@ SERVABLE = {"frames", "work", "figures", "review", "out", "pages", "videos"}
 
 class VideoSpec(BaseModel):
     path: str
-    pages: str = "all"
     direction: str = "forward"
 
 
@@ -155,6 +154,21 @@ def create_app(root: Path) -> FastAPI:
             while chunk := await file.read(1 << 22):  # 4 MB chunks — videos are big
                 f.write(chunk)
         return {"ok": True, "path": str(dest)}
+
+    @app.post("/api/projects/{name}/videos")
+    async def add_video_endpoint(name: str, video: UploadFile):
+        ws = ws_for(name)
+        if name in runs and runs[name]["thread"].is_alive():
+            raise HTTPException(409, "pipeline is running — wait for it to finish")
+        uploads = root / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        dest = uploads / Path(video.filename or "video.mov").name
+        with open(dest, "wb") as f:
+            while chunk := await video.read(1 << 22):
+                f.write(chunk)
+        from ..project import add_video
+        entry = add_video(ws, dest, log=lambda m: None)
+        return {"ok": True, "id": entry["id"]}
 
     @app.post("/api/projects/{name}/pages/add")
     async def add_page(name: str, photo: UploadFile, position: str = "end",

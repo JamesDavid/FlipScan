@@ -40,6 +40,8 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     }
 
     for page in ws.manifest["pages"]:
+        if not page.get("cluster_frames") or page.get("patched_source"):
+            continue  # photo-added or patched pages keep their capture
         ranked = sorted(
             page["cluster_frames"],
             key=lambda fid: composite(scores[fid], norms, w),
@@ -56,13 +58,34 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             "motion": best["motion"],
         }
 
+    # restore cached transcriptions for pages whose best capture is unchanged
+    # (re-clustering renumbers pages; the cache is keyed by capture identity)
+    from .transcribe import cache_key, load_cache
+    cache = load_cache(ws)
+    restores = []  # read all contents first: targets may overwrite sources
+    for page in ws.manifest["pages"]:
+        if page.get("md"):
+            continue
+        rec = cache.get(cache_key(page) or "")
+        if rec and (ws.root / rec["md"]).exists():
+            restores.append(
+                (page, rec, (ws.root / rec["md"]).read_text(encoding="utf-8")))
+    for page, rec, content in restores:
+        target = f"pages/{page['id']}.md"
+        (ws.root / target).write_text(content, encoding="utf-8")
+        page.update({k: rec[k] for k in
+                     ("printed_number", "confidence", "regions", "flags",
+                      "transcribed_by")})
+        page["md"] = target
+
     # bottom-percentile composite scores get flagged suspect
-    composites = [p["scores"]["composite"] for p in ws.manifest["pages"]]
+    composites = [p["scores"]["composite"] for p in ws.manifest["pages"]
+                  if p.get("scores")]
     if composites:
         cutoff = float(np.percentile(composites, cfg["cluster"]["suspect_score_percentile"]))
         for p in ws.manifest["pages"]:
-            if p["scores"]["composite"] < cutoff * 0.5:  # well below the low tail
-                p["status"] = "suspect"
+            if p.get("scores") and p["scores"]["composite"] < cutoff * 0.5:
+                p["status"] = "suspect"  # well below the low tail
 
     ws.save()
     sheet = contact_sheet(ws)
@@ -78,12 +101,18 @@ def contact_sheet(ws: Workspace, thumb_w: int = 240, cols: int = 8):
         return None
     thumbs = []
     for p in pages:
-        img = cv2.imread(str(frame_path(ws, p["canonical"])), cv2.IMREAD_REDUCED_COLOR_2)
+        if p.get("canonical"):
+            img = cv2.imread(str(frame_path(ws, p["canonical"])), cv2.IMREAD_REDUCED_COLOR_2)
+        elif p.get("color") and (ws.root / p["color"]).exists():
+            img = cv2.imread(str(ws.root / p["color"]), cv2.IMREAD_REDUCED_COLOR_2)
+        else:
+            img = None
         if img is None:
             continue
         scale = thumb_w / img.shape[1]
         t = cv2.resize(img, (thumb_w, int(img.shape[0] * scale)))
-        label = f"{p['id']} {p['scores']['composite']:.2f}"
+        score = p["scores"].get("composite") if p.get("scores") else None
+        label = f"{p['id']} {score:.2f}" if score is not None else p["id"]
         color = (0, 0, 255) if p["status"] == "suspect" else (0, 200, 0)
         cv2.rectangle(t, (0, 0), (t.shape[1] - 1, t.shape[0] - 1), color, 2)
         cv2.putText(t, label, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)

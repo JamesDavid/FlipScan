@@ -22,21 +22,18 @@ def main():
 @click.argument("directory", type=click.Path(path_type=Path))
 @click.option("--video", "videos", multiple=True, required=True,
               type=click.Path(exists=True, path_type=Path),
-              help="Source video. Repeat for two-pass capture.")
-@click.option("--pages", "pages_list", multiple=True,
-              type=click.Choice(["odd", "even", "all"]),
-              help="Which pages the corresponding --video captures (default: all).")
+              help="Source video. Repeat to add several; pages captured in "
+                   "more than one video merge automatically (best capture wins).")
 @click.option("--direction", "directions", multiple=True,
               type=click.Choice(["forward", "reverse"]),
-              help="Flip direction of the corresponding --video (default: forward).")
+              help="Optional flip-direction hint per --video (default: forward; "
+                   "order is fixed automatically from page matches and printed numbers).")
 @click.option("--reverse", is_flag=True, help="Shorthand: single video shot back-to-front.")
 @click.option("--title", default=None, help="Book title (EPUB metadata).")
 @click.option("--expected-pages", type=int, default=None,
               help="Expected page count for gap detection.")
-def init(directory: Path, videos, pages_list, directions, reverse, title, expected_pages):
+def init(directory: Path, videos, directions, reverse, title, expected_pages):
     """Create a workspace: copy videos in, probe fps, write manifest.json."""
-    if pages_list and len(pages_list) != len(videos):
-        raise click.UsageError("--pages must be given once per --video (or not at all)")
     if directions and len(directions) != len(videos):
         raise click.UsageError("--direction must be given once per --video (or not at all)")
 
@@ -44,7 +41,6 @@ def init(directory: Path, videos, pages_list, directions, reverse, title, expect
     specs = [
         {
             "path": str(src),
-            "pages": pages_list[i] if pages_list else "all",
             "direction": directions[i] if directions
                          else ("reverse" if reverse else "forward"),
         }
@@ -53,6 +49,23 @@ def init(directory: Path, videos, pages_list, directions, reverse, title, expect
     ws = create_project(directory, specs, title=title,
                         expected_pages=expected_pages, log=click.echo)
     click.echo(f"Workspace ready: {ws.root} — next: flipscan run {ws.root}")
+
+
+# ---------------------------------------------------------------- addvideo
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path))
+@click.argument("video", type=click.Path(exists=True, path_type=Path))
+@click.option("--direction", type=click.Choice(["forward", "reverse"]), default="forward")
+def addvideo(directory: Path, video: Path, direction: str):
+    """Add another capture video — shared pages merge, new pages slot in.
+
+    Keep adding videos until every page is covered; already-transcribed pages
+    are only re-transcribed if the new video has a better capture of them."""
+    ws = Workspace.open(directory)
+    from .project import add_video
+    add_video(ws, video, direction=direction, log=click.echo)
+    click.echo(f"video added — run `flipscan run {directory}` to merge it in")
 
 
 # ---------------------------------------------------------------- run

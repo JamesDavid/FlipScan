@@ -1,13 +1,20 @@
-"""Stage 4: cluster — group frames into page identities, per video, then parity-merge.
+"""Stage 4: cluster — group frames into page identities, then merge across videos.
 
-Approach per video:
+Per video:
 1. Rest frames = motion below median * spike_factor (turns are big spikes).
 2. Consecutive rest frames form segments (a page lying flat between turns).
 3. Adjacent segments whose majority pHash is within threshold merge into one
    cluster (page wobbled or paused twice).
-4. Clusters in chronological order, direction-normalized, map to the video's
-   parity sequence (odd: 1,3,5... / even: 2,4,6... / all: 1,2,3...).
-Then zip parities into the full page order and flag suspects.
+
+Across videos:
+- Any number of videos, shot in any direction, covering any subset of pages.
+  Each video's clusters are matched against the pages found so far by pHash;
+  a match means the same page was captured again, and its frames join the page
+  so `select` can pick the best capture overall. Unmatched clusters are
+  inserted in sequence position. Orientation of each additional video is
+  inferred from the match order.
+- Printed page numbers (read at transcription) refine the final order, so you
+  can keep adding videos until every page is covered.
 """
 
 from __future__ import annotations
@@ -55,69 +62,102 @@ def _segments(records: list[dict], spike_factor: float,
     ]
 
 
-def _cluster_video(records: list[dict], cfg: dict) -> list[list[int]]:
+def _cluster_video(records: list[dict], cfg: dict) -> list[dict]:
     """Merge rest segments into page clusters by pHash similarity."""
     threshold = cfg["cluster"]["hash_threshold"]
     segs = _segments(records, cfg["cluster"]["motion_spike_factor"])
-    clusters: list[list[int]] = []
-    cluster_hashes: list[int] = []
+    clusters: list[dict] = []
     for seg in segs:
         seg_hash = majority_hash([int(records[i]["phash"], 16) for i in seg])
-        if clusters and hamming(seg_hash, cluster_hashes[-1]) <= threshold:
-            clusters[-1].extend(seg)
-            cluster_hashes[-1] = majority_hash(
-                [int(records[i]["phash"], 16) for i in clusters[-1]]
-            )
+        if clusters and hamming(seg_hash, clusters[-1]["hash"]) <= threshold:
+            clusters[-1]["idx"].extend(seg)
         else:
-            clusters.append(list(seg))
-            cluster_hashes.append(seg_hash)
+            clusters.append({"idx": list(seg), "hash": seg_hash})
+    for c in clusters:
+        c["hash"] = majority_hash([int(records[i]["phash"], 16) for i in c["idx"]])
     return clusters
+
+
+def _best_match(cluster: dict, merged: list[dict], threshold: int) -> int | None:
+    best_i, best_d = None, threshold + 1
+    for mi, m in enumerate(merged):
+        d = hamming(cluster["hash"], m["hash"])
+        if d < best_d:
+            best_i, best_d = mi, d
+    return best_i
+
+
+def auto_merge(sequences: list[list[dict]], threshold: int) -> list[dict]:
+    """Merge per-video cluster sequences into one page order.
+
+    Each cluster dict: {"frames": [frame ids], "hash": int, "suspect": bool}.
+    Matched clusters pool their frames (best capture wins at select time);
+    unmatched clusters are inserted where their sequence neighbors landed.
+    A video whose matches run backwards is auto-reversed.
+    """
+    merged: list[dict] = []
+    for seq in sequences:
+        if not merged:
+            merged = [dict(c) for c in seq]
+            continue
+
+        matched = [(si, mi) for si, c in enumerate(seq)
+                   if (mi := _best_match(c, merged, threshold)) is not None]
+        if len(matched) >= 2:
+            inc = sum(1 for a, b in zip(matched, matched[1:]) if b[1] > a[1])
+            dec = sum(1 for a, b in zip(matched, matched[1:]) if b[1] < a[1])
+            if dec > inc:
+                seq = list(reversed(seq))
+
+        cursor = len(merged)  # default: unmatched pages go to the end
+        for si, c in enumerate(seq):
+            mi = _best_match(c, merged, threshold)
+            if mi is not None:
+                cursor = mi  # place any unmatched predecessors before this match
+                break
+
+        for c in seq:
+            mi = _best_match(c, merged, threshold)
+            if mi is not None:
+                merged[mi]["frames"] = merged[mi]["frames"] + c["frames"]
+                merged[mi]["suspect"] = merged[mi]["suspect"] and c["suspect"]
+                cursor = mi + 1
+            else:
+                merged.insert(cursor, dict(c))
+                cursor += 1
+    return merged
 
 
 def run(ws: Workspace, cfg: dict, log=print) -> None:
     min_frames = cfg["cluster"]["min_cluster_frames"]
+    threshold = cfg["cluster"]["hash_threshold"]
 
-    # per-video cluster sequences, direction-normalized to ascending page order
-    sequences: dict[str, list[dict]] = {}
+    old_pages = ws.manifest["pages"]
+    # manual pages survive re-clustering: photos added via addpage (pinned) and
+    # patched replacements (matched back onto their cluster below)
+    pinned = [p for p in old_pages if p.get("pinned") or p.get("role") == "cover"]
+    patched = [p for p in old_pages
+               if p.get("patched_source") and p not in pinned and p.get("cluster_frames")]
+
+    sequences: list[list[dict]] = []
     for video in ws.manifest["videos"]:
         vid = video["id"]
         records = load_scores(ws, vid)
         clusters = _cluster_video(records, cfg)
-        log(f"  {vid}: {len(clusters)} page clusters "
-            f"({video['pages']} pages, direction={video['direction']})")
+        log(f"  {vid}: {len(clusters)} page clusters")
         seq = [
             {
-                "video": vid,
-                "frames": [f"{vid}_{records[i]['frame']}" for i in c],
-                "suspect": len(c) < min_frames,
+                "frames": [f"{vid}_{records[i]['frame']}" for i in c["idx"]],
+                "hash": c["hash"],
+                "suspect": len(c["idx"]) < min_frames,
             }
             for c in clusters
         ]
-        if video["direction"] == "reverse":
+        if video.get("direction") == "reverse":
             seq.reverse()
-        sequences[video["pages"]] = seq
+        sequences.append(seq)
 
-    # merge parities into full page order
-    warnings: list[str] = []
-    if "odd" in sequences and "even" in sequences:
-        odd, even = sequences["odd"], sequences["even"]
-        if abs(len(odd) - len(even)) > 1:
-            warnings.append(
-                f"parity cluster counts differ by {abs(len(odd) - len(even))} "
-                f"(odd={len(odd)}, even={len(even)}) — expect a merge misalignment"
-            )
-        merged = []
-        for i in range(max(len(odd), len(even))):
-            if i < len(odd):
-                merged.append(odd[i])
-            if i < len(even):
-                merged.append(even[i])
-    elif "all" in sequences:
-        merged = sequences["all"]
-    else:
-        # single parity video only — half a book, but proceed
-        merged = next(iter(sequences.values()))
-        warnings.append("only one parity captured; book is missing half its pages")
+    merged = auto_merge(sequences, threshold)
 
     pages = []
     for idx, c in enumerate(merged):
@@ -129,11 +169,34 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             "status": "suspect" if c["suspect"] else "ok",
             "printed_number": None,
         })
+
+    # re-attach patched replacements: a patched page owns the merged cluster it
+    # shares frames with
+    for pp in patched:
+        own = set(pp["cluster_frames"])
+        for i, p in enumerate(pages):
+            if own & set(p["cluster_frames"]):
+                pp["cluster_frames"] = p["cluster_frames"]
+                pages[i] = pp
+                break
+        else:
+            pages.append(pp)
+
+    # re-attach pinned photo pages (covers etc.)
+    for pp in pinned:
+        if pp.get("pinned") == "start" or (pp.get("role") == "cover"
+                                           and pp.get("pinned") != "end"):
+            pages.insert(0, pp)
+        else:
+            pages.append(pp)
+
     ws.manifest["pages"] = pages
 
+    warnings: list[str] = []
     expected = ws.manifest["book"].get("expected_pages")
-    if expected and abs(len(pages) - expected) > 0:
-        warnings.append(f"found {len(pages)} pages, expected {expected}")
+    detected = sum(1 for p in pages if not p.get("role"))
+    if expected and detected != expected:
+        warnings.append(f"found {detected} pages, expected {expected}")
     for w in warnings:
         log(f"  WARNING: {w}")
     ws.stage_done("cluster", page_count=len(pages), warnings=warnings)

@@ -30,7 +30,7 @@ class MockBackend(TranscriptionBackend):
                     f"assemble and build stages can be tested offline.\n\n"
                     f"A second paragraph continues the mock content of {page_id}."
                 ),
-                "page_number_printed": i + 1,
+                "page_number_printed": None,  # a real backend reads it off the page
                 "confidence": "high",
                 "regions": [],
                 "flags": [],

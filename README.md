@@ -4,19 +4,23 @@ Turn an iPhone slow-motion video of thumbing through a book into a clean EPUB. F
 
 See [SPEC.md](SPEC.md) for the full architecture.
 
-## Capture protocol (two passes, recommended)
+## Capture protocol: just keep filming until you have every page
 
-1. **Pass 1**: flip back-to-front, camera framed on the side of the spread that lays flat — this captures the odd pages, each appearing flat and unoccluded.
-2. **Pass 2**: flip front-to-back, same framing — captures the even pages.
+Shoot slow-mo videos of flipping through the book — any direction, any subset of pages,
+as many videos as you like. FlipScan matches pages **across videos** (perceptual hash +
+printed page numbers): a page captured in several videos keeps its sharpest capture, and
+pages only one video caught slot into the right place. Run the pipeline, look at the
+result, and if pages are missing or blurry just **add another video** of that part of the
+book and run again — already-good pages aren't re-transcribed.
 
 Tips:
 
-- Keep the book at the same angle and distance between passes.
-- Use 240 fps slow-mo if your phone supports it; more frames = more chances to catch each page at rest.
-- Let each page rest briefly before flipping the next — clusters need a few stable frames.
-- Expect stiff pages near the covers to need individual reshoots — the review step lists them.
-
-Single-video mode (`--pages all`) is supported as the quick-and-dirty path.
+- Two passes in opposite directions works great: each pass catches the side of the spread
+  that lays flat, so between them every page appears flat and unoccluded.
+- Use 240 fps slow-mo if your phone supports it; more frames = more chances to catch each
+  page at rest, and let each page rest briefly before flipping the next.
+- Expect stiff pages near the covers to need an extra video or a photo — the review step
+  lists exactly which pages are weak.
 
 ## Quickstart
 
@@ -32,8 +36,9 @@ The `./books` folder is mounted as `/data` inside the container: videos go in, E
 CLI through the same image:
 
 ```sh
-docker compose run --rm flipscan init /data/mybook --video /data/oddpass.mov --pages odd --direction reverse --video /data/evenpass.mov --pages even --direction forward
+docker compose run --rm flipscan init /data/mybook --video /data/flip1.mov --video /data/flip2.mov
 docker compose run --rm flipscan run /data/mybook --provider hybrid
+docker compose run --rm flipscan addvideo /data/mybook /data/flip3.mov   # more pages later
 docker compose run --rm flipscan build /data/mybook
 ```
 
@@ -64,11 +69,16 @@ to keep the GUI private to this machine.
 
 ```
 flipscan init DIR --video V [--video V2 ...] [options]
-    --pages odd|even|all        which pages each --video captures (once per --video)
-    --direction forward|reverse flip direction of each --video (once per --video)
+    --direction forward|reverse optional per-video hint (order is fixed automatically
+                                from cross-video page matches and printed numbers)
     --reverse                   shorthand: single video shot back-to-front
     --title TEXT                book title (EPUB metadata)
     --expected-pages N          warn if the detected page count differs
+
+flipscan addvideo DIR VIDEO [--direction forward|reverse]
+    Add another capture video to an existing project: shared pages merge (best
+    capture wins), new pages slot into the order, and only pages whose best
+    frame changed get re-transcribed. Keep adding until every page is covered.
 
 flipscan run DIR [--stage STAGE] [--force] [--provider ollama|anthropic|hybrid|mock]
                  [--model NAME] [--ollama-url URL]
@@ -155,7 +165,7 @@ Every stage is idempotent and resumable; state lives in the workspace's `manifes
 | init (ingest) | copies videos, probes real capture fps (stream-level — slow-mo containers lie) | `videos/`, `manifest.json` |
 | extract | dumps every frame as JPEG q=2 | `frames/<vid>/` |
 | score | per-frame sharpness, page-quad flatness, thumb occlusion, motion, pHash | `work/scores_<vid>.json` |
-| cluster | rest-segment detection + pHash merge -> page identities; parity zip of odd/even videos; gap warnings | `manifest.json` pages |
+| cluster | rest-segment detection + pHash merge -> page identities; cross-video page matching (best capture wins, auto-orientation); gap warnings | `manifest.json` pages |
 | select | best composite-scored frame per page + debug contact sheet | `work/contact_sheet.jpg` |
 | preprocess | page crop, perspective correction, optional dewarp, contrast-normalized LLM copy | `work/pages/` |
 | transcribe | vision LLM -> strict JSON (markdown, printed page number, regions, flags); printed-number monotonicity check | `pages/*.md` |
@@ -191,8 +201,7 @@ The GUI (`flipscan ui`) offers the same workflow with inline markdown editing an
 ## Troubleshooting
 
 - **Wrong page count / cluster miscounts** — check `work/contact_sheet.jpg`. Duplicated pages: raise `[cluster] hash_threshold` (more merging). Merged distinct pages: lower it. Fragmented pages (many tiny clusters): raise `motion_spike_factor`. Pass `--expected-pages` to get a count check.
-- **"parity cluster counts differ" warning** — one pass missed a page (usually near the covers). Find it via the printed-number gap in the review page, reshoot, patch.
-- **"printed page numbers not monotonic" warning** — the most reliable gap signal: a page was missed, duplicated, or the odd/even merge misaligned. Inspect the review page around the named pages.
+- **"printed page numbers not monotonic" warning** — the most reliable gap signal: a page was missed, duplicated, or matched wrongly across videos. Inspect the review page around the named pages; adding another video of that stretch usually fixes it.
 - **Blurry pages / low-confidence transcriptions** — they're on the reshoot list; patch them. If *many* pages are blurry, re-shoot the pass with more light and slower flipping.
 - **Curled page text bows near the spine** — set `[preprocess] dewarp = true` and re-run `flipscan run DIR --stage preprocess` (then transcribe onward with `--force`).
 - **Local model returns garbage JSON** — happens more with small models; the schema is deliberately flat and retried once, then escalated in hybrid mode. Try a larger model variant or hybrid.

@@ -7,7 +7,8 @@ from flipscan.backends import TranscriptionError, needs_escalation, parse_result
 from flipscan.build_epub import split_chapters
 from flipscan.imaging import hamming, majority_hash, phash64
 from flipscan.stages.assemble import _join_pages, _strip_repeated_lines
-from flipscan.stages.cluster import _segments
+from flipscan.stages.cluster import _segments, auto_merge
+from flipscan.stages.transcribe import reorder_by_printed
 from flipscan.stages.figures import snap_bbox
 
 
@@ -83,6 +84,56 @@ def test_segments_keep_genuinely_still_short_rest():
                + [_rec(20.0)] * 4 + [_rec(2.0)] * 10)
     segs = _segments(records, spike_factor=2.5)
     assert len(segs) == 3
+
+
+# ---------------- cross-video auto merge
+
+def _mkcluster(page_key: int, video: str):
+    rng = np.random.default_rng(page_key)  # deterministic per-page hash
+    h = int(rng.integers(0, 2**63))
+    return {"frames": [f"{video}_f{page_key:03d}"], "hash": h, "suspect": False}
+
+
+def test_auto_merge_overlap_and_reverse():
+    # video A: pages 1..4 forward; video B: pages 5,4,3 (shot back-to-front)
+    va = [_mkcluster(k, "v0") for k in (1, 2, 3, 4)]
+    vb = [_mkcluster(k, "v1") for k in (5, 4, 3)]
+    merged = auto_merge([va, vb], threshold=10)
+    assert len(merged) == 5  # 1,2,3,4,5 — B auto-reversed, 3+4 merged, 5 appended
+    assert len(merged[2]["frames"]) == 2 and len(merged[3]["frames"]) == 2
+    assert merged[4]["frames"] == ["v1_f005"]
+
+
+def test_auto_merge_fills_gap_in_middle():
+    va = [_mkcluster(k, "v0") for k in (1, 2, 4, 5)]   # page 3 missed
+    vb = [_mkcluster(k, "v1") for k in (2, 3, 4)]      # re-flip caught it
+    merged = auto_merge([va, vb], threshold=10)
+    assert len(merged) == 5
+    assert merged[2]["frames"] == ["v1_f003"]          # inserted between 2 and 4
+
+
+def test_auto_merge_disjoint_videos_appended():
+    va = [_mkcluster(k, "v0") for k in (1, 2)]
+    vb = [_mkcluster(k, "v1") for k in (8, 9)]         # no overlap at all
+    merged = auto_merge([va, vb], threshold=10)
+    assert [c["frames"][0] for c in merged] == ["v0_f001", "v0_f002", "v1_f008", "v1_f009"]
+
+
+def test_reorder_by_printed_numbers():
+    pages = [
+        {"id": "a", "printed_number": 3},
+        {"id": "b", "printed_number": None},   # follows page 3
+        {"id": "c", "printed_number": 1},
+        {"id": "d", "printed_number": 2},
+        {"id": "cov", "role": "cover", "pinned": "start"},
+    ]
+    out = reorder_by_printed(pages)
+    assert [p["id"] for p in out] == ["cov", "c", "d", "a", "b"]
+
+
+def test_reorder_no_numbers_is_stable():
+    pages = [{"id": i, "printed_number": None} for i in range(5)]
+    assert [p["id"] for p in reorder_by_printed(pages)] == [0, 1, 2, 3, 4]
 
 
 # ---------------- assembly

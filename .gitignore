@@ -34,3 +34,5 @@ htmlcov/
 Thumbs.db
 .idea/
 .vscode/
+user_files/
+uploads/

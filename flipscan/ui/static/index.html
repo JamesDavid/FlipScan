@@ -98,8 +98,10 @@ function showNew() {
       <button class="secondary" onclick="addVideoRow()">+ add video</button>
     </div>
     <button onclick="createProject()">Create</button>
-    <div class="meta" style="margin-top:.5rem">Video paths are paths on the machine running
-    flipscan (drop files into the projects folder first — e.g. ./books in Docker).</div>
+    <div class="meta" style="margin-top:.5rem">Upload one or more flip-through videos —
+    any direction, any subset of pages. Pages captured in more than one video are merged
+    automatically and the sharpest capture wins; you can keep adding videos later until
+    every page is covered.</div>
   </div>`;
   addVideoRow();
 }
@@ -107,15 +109,11 @@ function showNew() {
 let vrows = 0;
 function addVideoRow() {
   const d = document.createElement("div");
-  d.className = "grid3";
+  d.className = "vrow";
   d.innerHTML = `
-    <span><label>Video (upload or server path)</label>
-      <input type="file" accept="video/*" class="np-vfile" onchange="uploadVideo(this)">
-      <input class="np-vpath" placeholder="…or path, e.g. /data/oddpass.mov"></span>
-    <span><label>Pages</label><select class="np-vpages">
-      <option>all</option><option>odd</option><option>even</option></select></span>
-    <span><label>Direction</label><select class="np-vdir">
-      <option>forward</option><option>reverse</option></select></span>`;
+    <label>Video (upload or server path)</label>
+    <input type="file" accept="video/*" class="np-vfile" onchange="uploadVideo(this)">
+    <input class="np-vpath" placeholder="…or path, e.g. /data/flip1.mov">`;
   $("np-videos").appendChild(d);
   vrows++;
 }
@@ -135,10 +133,8 @@ async function uploadVideo(input) {
 }
 
 async function createProject() {
-  const videos = [...document.querySelectorAll("#np-videos .grid3")].map(r => ({
+  const videos = [...document.querySelectorAll("#np-videos .vrow")].map(r => ({
     path: r.querySelector(".np-vpath").value,
-    pages: r.querySelector(".np-vpages").value,
-    direction: r.querySelector(".np-vdir").value,
   })).filter(v => v.path);
   try {
     await api("/projects", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -168,7 +164,11 @@ async function openProject(name, tab) {
         <option value="">provider: config default</option>
         <option>ollama</option><option>anthropic</option><option>hybrid</option><option>mock</option>
       </select>
-      <span class="meta">${p.pages.length} pages ·
+      <input type="file" accept="video/*" id="addvideo-file" style="display:none"
+             onchange="addVideoToProject()">
+      <button class="secondary" onclick="$('addvideo-file').click()"
+              ${p.running ? "disabled" : ""}>+ Add video</button>
+      <span class="meta">${p.videos.length} videos · ${p.pages.length} pages ·
         ${p.pages.filter(x => x.status === "suspect").length} suspect</span>
     </div>
     <div id="log"></div>
@@ -292,6 +292,21 @@ async function patchPage(pageId) {
                         {method:"POST", body: fd});
   if (!r.ok) { alert("patch failed"); return; }
   openProject(current, "pages");
+}
+
+async function addVideoToProject() {
+  const input = $("addvideo-file");
+  if (!input.files.length) return;
+  const btn = input.nextElementSibling;
+  btn.textContent = "uploading…"; btn.disabled = true;
+  const fd = new FormData();
+  fd.append("video", input.files[0]);
+  const r = await fetch(`/api/projects/${current}/videos`, {method:"POST", body: fd});
+  if (!r.ok) { alert("add video failed: " + (await r.json()).detail); }
+  else if (confirm("Video added. Run the pipeline now to merge its pages in?")) {
+    await api(`/projects/${current}/run`, {method:"POST"});
+  }
+  openProject(current);
 }
 
 async function addPagePhoto() {
