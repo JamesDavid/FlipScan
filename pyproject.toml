@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flipscan"
+version = "0.1.0"
+description = "Turn an iPhone slow-motion video of thumbing through a book into a clean EPUB"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1",
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "Pillow>=10.0",
+    "imagehash>=4.3",
+    "jinja2>=3.1",
+    "httpx>=0.27",
+    "anthropic>=0.40",
+    "ebooklib>=0.18",
+    "markdown>=3.5",
+]
+
+[project.optional-dependencies]
+pdf = ["reportlab>=4.0", "pikepdf>=8.0", "weasyprint>=61"]
+ui = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9", "sse-starlette>=2.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+flipscan = "flipscan.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["flipscan*"]

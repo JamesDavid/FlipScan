@@ -51,8 +51,8 @@ flipscan ui [--port 8321]
 
 ## Implementation status
 
-- [ ] M0 Repo setup
-- [ ] M1 Workspace + manifest + init/extract
+- [x] M0 Repo setup
+- [x] M1 Workspace + manifest + init/extract
 - [ ] M2 Scoring + clustering + selection (+ contact sheet)
 - [ ] M3 Preprocess (crop/perspective)
 - [ ] M4 Transcribe (backends + JSON schema)
