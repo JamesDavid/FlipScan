@@ -54,7 +54,7 @@ flipscan ui [--port 8321]
 - [x] M0 Repo setup
 - [x] M1 Workspace + manifest + init/extract
 - [x] M2 Scoring + clustering + selection (+ contact sheet) — validated on synthetic two-pass video (`tools/make_test_video.py`); validate on a real book video before trusting thresholds
-- [ ] M3 Preprocess (crop/perspective)
+- [x] M3 Preprocess (crop/perspective)
 - [ ] M4 Transcribe (backends + JSON schema)
 - [ ] M5 Assemble + EPUB
 - [ ] M6 Review HTML + patch flow
