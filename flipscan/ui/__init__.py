@@ -40,6 +40,7 @@ class PageEdit(BaseModel):
     printed_number: int | None = None
     needs_reshoot: bool | None = None
     unduplicate: bool | None = None
+    mark_duplicate: bool | None = None
 
 
 class CropEdit(BaseModel):
@@ -379,6 +380,10 @@ def create_app(root: Path) -> FastAPI:
         if edit.unduplicate:
             page["status"] = "ok"
             page["dedupe_exempt"] = True
+            page.pop("manual_duplicate", None)
+        if edit.mark_duplicate:
+            page["status"] = "duplicate"
+            page["manual_duplicate"] = True  # auto-dedupe keeps hands off
         _reconcile(ws)
         return {"ok": True, "page": ws.page(page_id)}
 

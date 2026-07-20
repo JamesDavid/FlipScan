@@ -46,6 +46,11 @@
              border-top:1px solid var(--line); }
   .pagerow img { width:100%; border:1px solid var(--line); border-radius:4px; }
   .pagerow.suspect { background:#fef2f2; }
+  .pagegrid { display:grid; grid-template-columns: minmax(240px, 340px) 1fr;
+              gap:1rem; margin-top:.6rem; }
+  .card.suspect { border-left:4px solid var(--bad); }
+  .card.duplicate { opacity:.75; }
+  .card.deleted { opacity:.55; }
   .meta { font-size:.75rem; color:var(--dim); margin-bottom:.4rem; }
   textarea { width:100%; min-height:200px; font-family:ui-monospace,monospace;
              font-size:.8rem; border:1px solid var(--line); border-radius:6px; padding:.6rem; }
@@ -76,7 +81,7 @@
     aside > div:last-child { margin:0 !important; flex:none; }
     main { padding:.8rem; }
     .card { padding:1rem; margin-bottom:.8rem; border-radius:10px; }
-    .page, .pagerow { grid-template-columns:1fr; gap:.8rem; }
+    .page, .pagerow, .pagegrid { grid-template-columns:1fr; gap:.8rem; }
     .tabs { overflow-x:auto; }
     .tab { flex:none; padding:.55rem 1rem; }
     button { padding:.6rem 1.1rem; font-size:.9rem; }   /* finger-sized */
@@ -408,59 +413,65 @@ function renderTab(tab, p) {
         ? "printed " + pg.printed_number + (pg.number_inferred ? " (inferred)" : "")
           + (pg.number_manual ? " (manual)" : "")
         : "no page number";
+      // row 1: identity + page-number reassignment
       const header = `
         <div class="row" style="padding:.15rem 0">
           <span class="badge ${pg.status}">${pg.status}</span>
-          <span class="meta" style="margin:0">${pg.id} · ${numLabel}
+          <b>${pg.id}</b>
+          <span class="meta" style="margin:0">${numLabel}
             ${pg.confidence ? " · " + pg.confidence : ""}
             ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}</span>
-          ${collapsed ? `
-            <span style="margin-left:auto" class="row">
+          <span class="row" style="margin-left:auto">
+            ${collapsed ? `
               ${pg.status === "duplicate" ? `<button class="secondary"
                  onclick="unduplicate('${pg.id}')">Not a duplicate</button>` : ""}
               ${pg.status === "deleted" ? `<button class="secondary"
                  onclick="restorePage('${pg.id}')">Restore</button>` : ""}
               <button class="secondary" onclick="toggleCell('${pg.id}')"
-                      id="tgl-${pg.id}">expand ▾</button>
-            </span>` : ""}
+                      id="tgl-${pg.id}">expand ▾</button>`
+            : `<label style="margin:0">page #</label>
+               <input type="number" id="num-${pg.id}" value="${pg.printed_number ?? ""}"
+                      style="width:5.5rem;margin:0" onchange="setPageNumber('${pg.id}')">`}
+          </span>
         </div>`;
       const figs = (pg.figures || []).map((f, i) => `
-        <a href="javascript:void(0)" onclick="openCrop('${pg.id}', ${i})"
-           title="click to edit crop">
+        <span style="position:relative;display:inline-block">
           <img src="/api/projects/${name}/file/${f}?t=${Date.now()}"
-               style="height:80px;border:1px solid var(--line);border-radius:4px"></a>`)
-        .join("");
+               style="height:90px;border:1px solid var(--line);border-radius:4px">
+          <button class="secondary" style="position:absolute;bottom:4px;right:4px;
+                  padding:.15rem .5rem;font-size:.7rem"
+                  onclick="openCrop('${pg.id}', ${i})">re-crop</button>
+        </span>`).join("");
       return `
-      <div class="card ${collapsed ? "" : "pagerow"} ${pg.status}" id="cell-${pg.id}">
-        ${collapsed ? header : ""}
-        <div class="pagerow-body" style="${collapsed ? "display:none" : ""};
-             ${collapsed ? "" : "display:contents"}">
-          <div>
-            ${collapsed ? "" : header}
-            ${pg.color ? `<img loading="lazy"
-               src="/api/projects/${name}/file/${pg.color}">` : ""}
-            ${figs ? `<div class="row" style="margin-top:.4rem">${figs}
-              <span class="meta">figures — click to re-crop</span></div>` : ""}
-            <div style="margin-top:.5rem" class="row">
-              <label style="margin:0">page #</label>
-              <input type="number" id="num-${pg.id}" value="${pg.printed_number ?? ""}"
-                     style="width:5.5rem;margin:0"
-                     onchange="setPageNumber('${pg.id}')">
-              <input type="file" id="patch-${pg.id}" style="display:none"
-                     onchange="patchPage('${pg.id}')">
-              <button class="secondary" onclick="$('patch-${pg.id}').click()">Patch photo…</button>
-              <button class="secondary" onclick="toggleReshoot('${pg.id}', ${!pg.needs_reshoot})">
-                ${pg.needs_reshoot ? "Unmark re-acquire" : "Mark for re-acquisition"}</button>
-              ${pg.status === "duplicate" ? `<button class="secondary"
-                 onclick="unduplicate('${pg.id}')">Not a duplicate</button>` : ""}
-              ${pg.status === "deleted"
-                ? `<button class="secondary" onclick="restorePage('${pg.id}')">Restore</button>`
-                : `<button class="danger" onclick="deletePage('${pg.id}')">Delete</button>`}
+      <div class="card ${pg.status}" id="cell-${pg.id}">
+        ${header}
+        <div class="pagerow-body" style="${collapsed ? "display:none" : ""}">
+          <div class="pagegrid">
+            <div>
+              ${pg.color ? `<img loading="lazy" style="width:100%;border:1px solid
+                 var(--line);border-radius:4px"
+                 src="/api/projects/${name}/file/${pg.color}">` : ""}
+              ${figs ? `<div class="row" style="margin-top:.4rem">${figs}</div>` : ""}
+            </div>
+            <div>
+              <textarea id="md-${pg.id}" data-page="${pg.id}"></textarea>
+              <button style="margin-top:.4rem" onclick="saveMd('${pg.id}')">Save markdown</button>
             </div>
           </div>
-          <div>
-            <textarea id="md-${pg.id}" data-page="${pg.id}"></textarea>
-            <button style="margin-top:.4rem" onclick="saveMd('${pg.id}')">Save markdown</button>
+          <div class="row" style="border-top:1px solid var(--line);margin-top:.8rem;
+               padding-top:.7rem">
+            <input type="file" id="patch-${pg.id}" style="display:none"
+                   onchange="patchPage('${pg.id}')">
+            <button class="secondary" onclick="$('patch-${pg.id}').click()">
+              Replace photo &amp; re-process…</button>
+            <button class="secondary" onclick="toggleReshoot('${pg.id}', ${!pg.needs_reshoot})">
+              ${pg.needs_reshoot ? "Unmark re-acquire" : "Mark for re-acquisition"}</button>
+            ${pg.status === "duplicate"
+              ? `<button class="secondary" onclick="unduplicate('${pg.id}')">Not a duplicate</button>`
+              : `<button class="secondary" onclick="markDuplicate('${pg.id}')">Mark as duplicate</button>`}
+            ${pg.status === "deleted"
+              ? `<button class="secondary" onclick="restorePage('${pg.id}')">Restore</button>`
+              : `<button class="danger" onclick="deletePage('${pg.id}')">Delete</button>`}
           </div>
         </div>
       </div>`;
@@ -501,8 +512,9 @@ function renderTab(tab, p) {
           <img src="/api/projects/${name}/file/${r.f}?t=${Date.now()}"
                style="height:130px;border:1px solid var(--line);border-radius:4px"></a>
         <div style="flex:1;min-width:12rem">
-          <div><b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
-                    : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></div>
+          <div><a href="javascript:void(0)" onclick="gotoPage('${r.pg.id}')">
+            <b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
+                : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></a></div>
           ${r.caption ? `<div class="meta">${esc(r.caption)}</div>` : ""}
         </div>
         <span class="row">
@@ -686,9 +698,16 @@ function toggleCell(pageId) {
   const bodyEl = document.querySelector(`#cell-${pageId} .pagerow-body`);
   const btn = $("tgl-" + pageId);
   const hidden = bodyEl.style.display === "none";
-  bodyEl.style.display = hidden ? "contents" : "none";
-  document.getElementById("cell-" + pageId).classList.toggle("pagerow", hidden);
+  bodyEl.style.display = hidden ? "block" : "none";
   if (btn) btn.textContent = hidden ? "collapse ▴" : "expand ▾";
+}
+
+async function markDuplicate(pageId) {
+  try { await api(`/projects/${current}/pages/${pageId}`, {
+    method: "PATCH", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({mark_duplicate: true})});
+  } catch (e) { alert('save failed: ' + e.message); return; }
+  openProject(current, "pages");
 }
 
 async function setPageNumber(pageId) {

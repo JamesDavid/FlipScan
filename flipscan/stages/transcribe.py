@@ -97,8 +97,10 @@ def dedupe_by_printed(pages: list[dict], log=print) -> int:
     deduped = 0
     for group in groups.values():
         # a previous run may have marked duplicates; re-decide from scratch —
-        # except pages the user explicitly rescued ("not a duplicate")
-        group = [p for p in group if not p.get("dedupe_exempt")]
+        # except pages the user explicitly rescued ("not a duplicate") or
+        # manually marked duplicate (their call stands)
+        group = [p for p in group
+                 if not p.get("dedupe_exempt") and not p.get("manual_duplicate")]
         for p in group:
             if p["status"] == "duplicate":
                 p["status"] = "ok"
