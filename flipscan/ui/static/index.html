@@ -803,8 +803,7 @@ async function startWizard() {
     const anyPages = (window._proj?.pages || []).some(x => !x.role);
     if (!anyPages) {
       const last = parseInt(prompt(
-        "Photograph the whole book!
-What is the last printed page number?") || "");
+        "Photograph the whole book!\nWhat is the last printed page number?") || "");
       if (!last || last < 1) return;
       items = Array.from({length: last}, (_, i) => ({
         kind: "missing", number: i + 1, label: `page ${i + 1}`,
