@@ -892,7 +892,8 @@ async function wizardShot() {
     ? `kind=missing&number=${it.number}`
     : it.kind === "figure"
     ? `kind=figure&page_id=${it.page_id}&fig_idx=${it.fig_idx}`
-    : `kind=reshoot&page_id=${it.page_id}`;
+    : `kind=reshoot&page_id=${it.page_id}`
+      + (it.number != null ? `&number=${it.number}` : "");
   try {
     await uploadXHR(`/api/projects/${current}/capture?${params}`, fd,
                     pct => btn.textContent = `uploading ${pct}%`);

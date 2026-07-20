@@ -778,6 +778,13 @@ def create_app(root: Path) -> FastAPI:
             page["status"] = "patched"
             page["md"] = None
             page.pop("needs_reshoot", None)
+            # the wizard told the user "photograph page N" and they did —
+            # that's a human confirmation of the number, even if the printed
+            # folio isn't visible on the page (full-page plates often have
+            # none). Without this the next reconcile drops the number.
+            if number is not None:
+                page["printed_number"] = number
+                page["number_manual"] = True
             for key in ("confidence", "flags", "transcribe_error"):
                 page.pop(key, None)
             from ..stages.preprocess import preprocess_page
