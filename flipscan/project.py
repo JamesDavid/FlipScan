@@ -127,8 +127,9 @@ def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
         log(f"{page_id}: transcribing")
         transcribe_run(ws, cfg, log=log)
     else:
-        ws.save()  # transcription deferred to the next pipeline run
-    ws.stage_reset("figures")
+        ws.save()
+    # deferred pages must actually get transcribed on the next run
+    ws.stage_reset("figures" if transcribe or role == "cover" else "transcribe")
     return page
 
 

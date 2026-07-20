@@ -350,7 +350,7 @@ def create_app(root: Path) -> FastAPI:
 
         from ..stages.preprocess import preprocess_page
         await asyncio.to_thread(preprocess_page, ws, page, cfg)
-        ws.stage_reset("figures")
+        ws.stage_reset("transcribe")  # the deferred page must transcribe next run
         ws.save()
         return {"ok": True, "transcription": "deferred — run the pipeline"}
 
@@ -706,6 +706,8 @@ def create_app(root: Path) -> FastAPI:
                 page["printed_number"] = number
                 page["number_manual"] = True
             _reconcile(ws)
+            ws.stage_reset("transcribe")
+            ws.save()
             result = page["id"]
         elif kind == "figure" and page_id is not None and fig_idx is not None:
             # fig_idx is the REGION index here (queue items address regions)
@@ -745,7 +747,7 @@ def create_app(root: Path) -> FastAPI:
                 page.pop(key, None)
             from ..stages.preprocess import preprocess_page
             await asyncio.to_thread(preprocess_page, ws, page, cfg)
-            ws.stage_reset("figures")
+            ws.stage_reset("transcribe")
             ws.save()
             result = page_id
         else:

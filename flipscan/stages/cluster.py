@@ -79,8 +79,10 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
 
     old_pages = ws.manifest["pages"]
     pinned = [p for p in old_pages if p.get("pinned") or p.get("role") == "cover"]
+    # photo-sourced pages survive re-clustering whether or not they replaced a
+    # video capture (wizard shots of missing pages have no cluster frames)
     patched = [p for p in old_pages
-               if p.get("patched_source") and p not in pinned and p.get("cluster_frames")]
+               if p.get("patched_source") and p not in pinned]
 
     entries: list[dict] = []
     for video in ws.manifest["videos"]:
@@ -114,11 +116,12 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             "printed_number": None,
         })
 
-    # re-attach patched replacements (they share frames with a rebuilt page)
+    # re-attach patched replacements (they share frames with a rebuilt page;
+    # pure photo pages just append — reconcile orders them by page number)
     for pp in patched:
-        own = set(pp["cluster_frames"])
+        own = set(pp.get("cluster_frames") or [])
         for i, p in enumerate(pages):
-            if own & set(p["cluster_frames"]):
+            if own and own & set(p["cluster_frames"]):
                 pp["cluster_frames"] = p["cluster_frames"]
                 pages[i] = pp
                 break

@@ -109,6 +109,9 @@
 <body>
 <aside>
   <h1>FlipScan</h1>
+  <div id="global-status" style="display:none;background:#0d9488;color:#fff;
+       border-radius:999px;padding:.3rem .8rem;font-size:.75rem;margin-bottom:.8rem;
+       white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
   <div id="projects"></div>
   <div style="margin-top:1rem; display:flex; gap:.4rem">
     <button class="secondary" onclick="showNew()">+ New project</button>
@@ -313,8 +316,33 @@ async function openProject(name, tab) {
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
   <div id="tabbody"></div>`;
-  if (p.running) { attachEvents(name); startProgress(name); }
+  if (p.running) attachEvents(name);
+  startProgress(name);
   renderTab(tab || "pipeline", p);
+}
+
+function wizardCardHtml(todo, anyPages) {
+  const desc = !anyPages
+    ? "no pages yet — photograph the whole book page by page (it asks for the last page number)"
+    : todo
+    ? `walk through all ${todo} missing / weak pages in order and photograph them one after another — transcription runs once at the end`
+    : "book looks complete — the wizard has nothing queued";
+  return `
+    <div class="card" style="background:#f0fdfa;border:2px solid var(--accent)">
+      <div class="row">
+        <div style="flex:1;min-width:14rem">
+          <h2 style="margin-bottom:.2rem">📷 Capture wizard</h2>
+          <div class="meta">${desc}</div>
+        </div>
+        <span class="row">
+          <button style="font-size:1.05rem;padding:.7rem 1.4rem"
+                  onclick="startWizard()">${!anyPages ? "Photograph the book"
+                                            : "Capture by page number"}</button>
+          ${anyPages ? `<button class="secondary" onclick="startUnidentifiedWizard()">
+            Unidentified pages…</button>` : ""}
+        </span>
+      </div>
+    </div>`;
 }
 
 function addPagePanel() {
@@ -344,23 +372,8 @@ function renderTab(tab, p) {
     api("/projects/" + name + "/reshoot").then(r => {
       const items = r.items || [];
       const todo = (r.missing?.length || 0) + items.length;
-      const wizardCard = todo ? `
-        <div class="card" style="background:#f0fdfa;border:2px solid var(--accent)">
-          <div class="row">
-            <div style="flex:1;min-width:14rem">
-              <h2 style="margin-bottom:.2rem">📷 Capture wizard</h2>
-              <div class="meta">walk through all ${todo} missing / weak pages in
-                order and photograph them one after another — transcription runs
-                once at the end</div>
-            </div>
-            <span class="row">
-              <button style="font-size:1.05rem;padding:.7rem 1.4rem"
-                      onclick="startWizard()">Capture by page number</button>
-              <button class="secondary" onclick="startUnidentifiedWizard()">
-                Unidentified pages…</button>
-            </span>
-          </div>
-        </div>` : "";
+      const anyPages = (p.pages || []).some(x => !x.role);
+      const wizardCard = wizardCardHtml(todo, anyPages);
       const missingCard = r.missing && r.missing.length ? `
         <div class="card" style="border:2px solid #f59e0b">
           <h2>Missing pages — never captured</h2>
@@ -378,7 +391,12 @@ function renderTab(tab, p) {
     });
   } else if (tab === "media") {
     const photoPages = p.pages.filter(pg => pg.patched_source);
-    body.innerHTML = `
+    api(`/projects/${name}/capture-queue`).then(q => {
+      const holder = $("media-wizard");
+      if (holder) holder.innerHTML = wizardCardHtml(
+        q.items.length, (p.pages || []).some(x => !x.role));
+    });
+    body.innerHTML = `<div id="media-wizard"></div>` + `
       <div class="card">
         <h2>Add media</h2>
         <div class="row" style="margin-bottom:.6rem">
@@ -647,6 +665,24 @@ function startProgress(name) {
     let p;
     try { p = await api(`/projects/${name}/progress`); } catch { return; }
     if (name !== current) { clearInterval(progressTimer); return; }
+    const chip = $("global-status");
+    if (chip) {
+      if (p.running) {
+        chip.style.display = "block";
+        chip.textContent = p.detail && p.detail.total
+          ? `⚙ ${p.current} ${Math.round(100 * p.detail.done / p.detail.total)}%`
+            + (p.eta_seconds > 90 ? ` · ~${Math.round(p.eta_seconds / 60)} min`
+               : p.eta_seconds != null ? ` · ~${p.eta_seconds}s` : "")
+          : `⚙ ${p.current || "running"}…`;
+      } else {
+        chip.style.display = "none";
+      }
+    }
+    const rb = $("runbtn");
+    if (rb) {
+      rb.disabled = p.running;
+      rb.textContent = p.running ? "Running…" : "Run / Resume";
+    }
     // live stage chips
     for (const [s, st] of Object.entries(p.stages)) {
       const el = $("stage-" + s);
@@ -669,8 +705,7 @@ function startProgress(name) {
       $("ptext").textContent = p.current ? `${p.current}: working…` : "starting…";
       $("peta").textContent = "";
     } else {
-      clearInterval(progressTimer);
-      box.style.display = "none";
+      box.style.display = "none";  // keep polling: a run may start elsewhere
     }
   };
   tick();
@@ -763,8 +798,23 @@ async function buildFmt(fmt) {
 let wiz = null;
 async function startWizard() {
   const q = await api(`/projects/${current}/capture-queue`);
-  if (!q.items.length) { alert("Nothing to capture — the book looks complete!"); return; }
-  wiz = {items: q.items, i: 0, done: 0, mode: "numbered"};
+  let items = q.items;
+  if (!items.length) {
+    const anyPages = (window._proj?.pages || []).some(x => !x.role);
+    if (!anyPages) {
+      const last = parseInt(prompt(
+        "Photograph the whole book!
+What is the last printed page number?") || "");
+      if (!last || last < 1) return;
+      items = Array.from({length: last}, (_, i) => ({
+        kind: "missing", number: i + 1, label: `page ${i + 1}`,
+        reasons: ["photograph every page in order"]}));
+    } else {
+      alert("Nothing to capture — the book looks complete!");
+      return;
+    }
+  }
+  wiz = {items, i: 0, done: 0, mode: "numbered"};
   renderWizard();
 }
 
