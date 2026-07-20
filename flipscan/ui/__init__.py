@@ -50,6 +50,7 @@ class PageEdit(BaseModel):
     unduplicate: bool | None = None
     mark_duplicate: bool | None = None
     ignore_suspect: bool | None = None
+    section: str | None = None   # "" clears; this page then opens a chapter
 
 
 class CropEdit(BaseModel):
@@ -112,6 +113,19 @@ def create_app(root: Path) -> FastAPI:
                        title=spec.title, expected_pages=spec.expected_pages)
         return {"ok": True, "name": spec.name}
 
+    def printed_toc(ws: Workspace) -> list[dict]:
+        """Chapter list read from the book's own contents page (front matter)."""
+        from ..stages.assemble import parse_printed_toc
+        texts = []
+        for p in ws.manifest["pages"]:
+            n = p.get("printed_number")
+            if ((n is None or n < 5) and p.get("md") and not p.get("role")
+                    and len(texts) < 40):
+                f = ws.root / p["md"]
+                if f.exists():
+                    texts.append(f.read_text(encoding="utf-8"))
+        return [{"title": t, "start": s} for t, s in parse_printed_toc(texts)]
+
     @app.get("/api/projects/{name}")
     def project_detail(name: str):
         from ..review import page_reasons
@@ -120,6 +134,7 @@ def create_app(root: Path) -> FastAPI:
         return {
             "name": name,
             "book": m["book"],
+            "toc": printed_toc(ws),
             "videos": m["videos"],
             "stages": {s: ws.stage_status(s) for s in STAGES},
             "pages": [{**p, "reasons": page_reasons(p)} for p in m["pages"]],
@@ -493,6 +508,13 @@ def create_app(root: Path) -> FastAPI:
             page["manual_duplicate"] = True  # auto-dedupe keeps hands off
         if edit.ignore_suspect:
             page["suspect_ignored"] = True   # the user vouches for this page
+        if "section" in fields:
+            s = (edit.section or "").strip()
+            if s:
+                page["section"] = s
+            else:
+                page.pop("section", None)
+            ws.stage_reset("assemble")   # the book structure changed
             if page["status"] == "suspect":
                 page["status"] = "ok"
         _reconcile(ws)

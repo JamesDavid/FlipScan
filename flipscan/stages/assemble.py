@@ -163,6 +163,26 @@ def _insert_chapter_breaks(pages: list[dict], texts: list[str],
     return texts
 
 
+def _apply_manual_sections(pages: list[dict], texts: list[str]) -> list[str]:
+    """A user-assigned section heading on a page outranks everything: that
+    page opens a chapter with exactly that title."""
+    for i, p in enumerate(pages):
+        title = (p.get("section") or "").strip()
+        if not title:
+            continue
+        lines = texts[i].splitlines()
+        first = next((j for j, ln in enumerate(lines) if ln.strip()), None)
+        if first is not None and _HEADING.match(lines[first]):
+            lines[first] = f"# {title}"      # replace the page's own heading
+            texts[i] = "\n".join(lines)
+        elif texts[i].strip():
+            texts[i] = f"# {title}\n\n{texts[i]}"
+        else:
+            texts[i] = f"# {title}"          # content still missing — keep
+            #                                  the chapter break regardless
+    return texts
+
+
 def _join_pages(pages: list[str]) -> str:
     """Concatenate page texts, healing hyphenation and mid-sentence page breaks."""
     book = ""
@@ -210,6 +230,7 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     texts = _strip_repeated_lines(texts, extra_refs=extra_refs)
     texts = _dedupe_headings(texts)
     texts = _insert_chapter_breaks(kept, texts, toc, log)
+    texts = _apply_manual_sections(kept, texts)  # user's word is final
     # unresolved figure placeholders (region never cropped) must not reach
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
