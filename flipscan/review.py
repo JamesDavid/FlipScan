@@ -10,6 +10,28 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 from .workspace import Workspace
 
 
+def find_page_by_text(ws: Workspace, snippet: str) -> dict | None:
+    """Map a passage of assembled/rendered text back to its source page.
+    Squashing to lowercase alphanumerics makes the match survive hyphenation,
+    spacing, and punctuation differences between page OCR and book text."""
+    import re
+
+    def squash(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s.lower())
+
+    target = squash(snippet)[:160]
+    if len(target) < 12:
+        return None
+    for p in ws.manifest["pages"]:
+        if (p.get("status") in ("duplicate", "deleted") or p.get("role")
+                or not p.get("md")):
+            continue
+        f = ws.root / p["md"]
+        if f.exists() and target in squash(f.read_text(encoding="utf-8")):
+            return p
+    return None
+
+
 def page_reasons(p: dict) -> list[str]:
     """Why this page needs attention — shared by the reshoot list, the page
     cells, and the capture wizards."""

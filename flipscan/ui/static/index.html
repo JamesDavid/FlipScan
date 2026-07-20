@@ -379,7 +379,7 @@ async function openProject(name, tab) {
     <div id="log"></div>
   </div>
   <div class="tabs">
-    ${["pipeline","media","frames","pages","figures","output"].map(t =>
+    ${["pipeline","media","frames","pages","figures","proof","output"].map(t =>
       `<div class="tab ${t === (tab||"pipeline") ? "active" : ""}"
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
@@ -782,6 +782,66 @@ function renderTab(tab, p) {
           ${g.rows.map(figRow).join("")}
         </div>` : g.rows.map(figRow).join("")).join("")
        || "<div class='meta'>no figures yet</div>") + `</div>` + cropModalHtml();
+  } else if (tab === "proof") {
+    const sevColor = {high: "#dc2626", medium: "#d97706", low: "#78716c"};
+    const findingHtml = (f) => `
+      <div style="border-top:1px solid var(--line);padding:.45rem 0;font-size:.85rem">
+        <span style="color:${sevColor[f.severity] || "#78716c"}">●</span>
+        <b>${esc(f.type)}</b>
+        ${f.page ? ` · <a href="javascript:void(0)"
+            onclick="gotoPage('${f.page}')">${f.printed_number != null
+              ? "page " + f.printed_number : f.page}</a>` : ""}
+        ${f.source === "lint" ? ' · <span class="meta">auto-check</span>' : ""}
+        <div style="font-family:ui-monospace,monospace;font-size:.78rem;margin:.15rem 0">
+          “${esc(f.quote)}”${f.replacement != null ? ` → “${esc(f.replacement)}”` : ""}
+          ${f.applied ? ' <span style="color:#166534">✓ applied</span>'
+            : f.replacement != null
+            ? ' <span style="color:#b45309">suggested only</span>' : ""}
+        </div>
+        ${f.note ? `<div class="meta" style="margin:0">${esc(f.note)}</div>` : ""}
+      </div>`;
+    const chCard = (c, d) => {
+      const badgeCls = {review: "patched", accepted: "ok", rejected: "deleted",
+                        stale: "acceptable"}[c.status] || "";
+      return `<div class="card">
+        <div class="row">
+          <b>${c.idx}. ${esc(c.title)}</b>
+          <span class="badge ${badgeCls}">${c.status}</span>
+          <span class="meta" style="margin:0">${(c.chars / 1000).toFixed(1)}k chars${
+            c.findings != null
+              ? ` · ${c.findings} findings · ${c.applied} auto-applied` : ""}${
+            c.heavy ? ' · <span style="color:#b45309">⚠ large change — review carefully</span>' : ""}</span>
+          <span class="row" style="margin-left:auto">
+            <button class="secondary" onclick="runProof(${c.idx}, this)">
+              ${c.status === "unproofed" ? "Proofread" : "Re-run"}</button>
+            ${c.status === "review" || c.status === "rejected"
+              ? `<button onclick="reviewProof(${c.idx}, true)">Accept</button>` : ""}
+            ${c.status === "review" || c.status === "accepted"
+              ? `<button class="secondary" onclick="reviewProof(${c.idx}, false)">Reject</button>` : ""}
+          </span>
+        </div>
+        ${c.status === "stale" ? `<div class="meta" style="color:#b45309;margin:.3rem 0 0">
+           chapter text changed since this proof — re-run before accepting</div>` : ""}
+        ${d && d.findings?.length
+          ? `<div style="margin-top:.5rem">${d.findings.map(findingHtml).join("")}</div>`
+          : d ? `<div class="meta" style="margin-top:.4rem">clean — no findings</div>` : ""}
+      </div>`;
+    };
+    api(`/projects/${name}/proof`).then(async r => {
+      const chs = r.chapters;
+      const details = await Promise.all(chs.map(c =>
+        c.status === "unproofed" ? null
+          : api(`/projects/${name}/proof/${c.idx}`).catch(() => null)));
+      body.innerHTML = `<div class="card">
+        <h2>Proofread <span class="meta">(chapter by chapter — the model returns
+          an edit list, never a rewrite; accepted chapters feed the next build;
+          page OCR data is never touched)</span></h2>
+        <div class="row">
+          <button onclick="proofAll()">Proofread all pending</button>
+          <span class="meta" id="proofall-status" style="margin:0"></span>
+        </div></div>` + chs.map((c, i) => chCard(c, details[i])).join("");
+    }).catch(e => body.innerHTML =
+      `<div class="card"><div class="meta">${esc(e.message)}</div></div>`);
   } else if (tab === "output") {
     body.innerHTML = `<div class="card"><h2>Build</h2>
       <div class="row" style="margin-bottom:.6rem">
@@ -1107,6 +1167,37 @@ function toggleCell(pageId) {
 }
 
 let pageFilters = {chapter: "", unnumbered: false};
+
+async function runProof(idx, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "proofreading…"; }
+  try { await api(`/projects/${current}/proof/${idx}/run`, {method: "POST"}); }
+  catch (e) { alert(e.message); }
+  renderTab("proof", window._proj);
+}
+
+async function reviewProof(idx, accept) {
+  try { await api(`/projects/${current}/proof/${idx}/review?accept=${accept}`,
+                  {method: "POST"}); }
+  catch (e) { alert(e.message); return; }
+  renderTab("proof", window._proj);
+}
+
+async function proofAll() {
+  const r = await api(`/projects/${current}/proof`);
+  const todo = r.chapters.filter(c => c.status === "unproofed" || c.status === "stale");
+  if (!todo.length) { alert("Nothing pending — all chapters are proofed."); return; }
+  for (let i = 0; i < todo.length; i++) {
+    const st = $("proofall-status");
+    if (st) st.textContent = `proofreading ${i + 1}/${todo.length}: ${todo[i].title}…`;
+    try { await api(`/projects/${current}/proof/${todo[i].idx}/run`, {method: "POST"}); }
+    catch (e) {
+      if ($("proofall-status"))
+        $("proofall-status").textContent = `failed on ${todo[i].title}: ${e.message}`;
+      break;
+    }
+  }
+  renderTab("proof", window._proj);
+}
 
 async function setSection(pageId) {
   const pg = (window._proj?.pages || []).find(x => x.id === pageId);

@@ -938,29 +938,64 @@ def create_app(root: Path) -> FastAPI:
         """Flag an issue from inside the EPUB reader: match the passage the
         reader is showing back to its source page and mark that page for
         re-acquisition."""
-        import re as _re
+        from ..review import find_page_by_text
         ws = ws_for(name)
+        p = find_page_by_text(ws, flag.snippet)
+        if p is None:
+            raise HTTPException(404, "couldn't match this passage to a page — "
+                                     "flag it from the Pages tab instead")
+        p["needs_reshoot"] = True
+        if flag.note:
+            p["flag_note"] = flag.note.strip()
+        ws.save()
+        return {"ok": True, "page": p["id"],
+                "printed_number": p.get("printed_number")}
 
-        def squash(s: str) -> str:  # hyphenation/whitespace differ between
-            return _re.sub(r"[^a-z0-9]", "", s.lower())  # book.md and page md
+    # ---------------- proofread: a distinct, non-destructive layer
 
-        target = squash(flag.snippet)[:160]
-        if len(target) < 12:
-            raise HTTPException(400, "snippet too short to locate the page")
-        for p in ws.manifest["pages"]:
-            if (p.get("status") in ("duplicate", "deleted") or p.get("role")
-                    or not p.get("md")):
-                continue
-            f = ws.root / p["md"]
-            if f.exists() and target in squash(f.read_text(encoding="utf-8")):
-                p["needs_reshoot"] = True
-                if flag.note:
-                    p["flag_note"] = flag.note.strip()
-                ws.save()
-                return {"ok": True, "page": p["id"],
-                        "printed_number": p.get("printed_number")}
-        raise HTTPException(404, "couldn't match this passage to a page — "
-                                 "flag it from the Pages tab instead")
+    @app.get("/api/projects/{name}/proof")
+    def proof_list(name: str):
+        from ..proofread import proof_status
+        ws = ws_for(name)
+        try:
+            return {"chapters": proof_status(ws)}
+        except FileNotFoundError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/projects/{name}/proof/{idx}")
+    def proof_detail(name: str, idx: int):
+        from ..proofread import load_proof
+        ws = ws_for(name)
+        d = load_proof(ws, idx)
+        if d is None:
+            raise HTTPException(404, "chapter not proofread yet")
+        return d
+
+    @app.post("/api/projects/{name}/proof/{idx}/run")
+    async def proof_run(name: str, idx: int):
+        """Proofread one chapter (lint + LLM edit list). Heavy work off the
+        event loop; the frontend runs chapters sequentially for 'proof all'."""
+        from ..proofread import proofread_chapter
+        ws = ws_for(name)
+        cfg = load_config(ws.root)
+        try:
+            d = await asyncio.to_thread(proofread_chapter, ws, cfg, idx)
+        except FileNotFoundError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(502, f"proofread failed: {e}")
+        return d
+
+    @app.post("/api/projects/{name}/proof/{idx}/review")
+    def proof_review(name: str, idx: int, accept: bool):
+        from ..proofread import load_proof, save_proof
+        ws = ws_for(name)
+        d = load_proof(ws, idx)
+        if d is None:
+            raise HTTPException(404, "chapter not proofread yet")
+        d["status"] = "accepted" if accept else "rejected"
+        save_proof(ws, idx, d)
+        return {"ok": True, "status": d["status"]}
 
     @app.get("/api/projects/{name}/reshoot")
     def reshoot(name: str):

@@ -183,6 +183,24 @@ def _apply_manual_sections(pages: list[dict], texts: list[str]) -> list[str]:
     return texts
 
 
+def _with_gap_markers(pages: list[dict], texts: list[str]) -> list[str]:
+    """Make missing pages visible in the built book itself: a jump in the
+    printed numbers gets an inline ⟦ missing ⟧ notice at the exact spot.
+    (In practice these get fixed, but a production copy must say so.)"""
+    out, last = [], None
+    for p, t in zip(pages, texts):
+        n = p.get("printed_number")
+        if isinstance(n, int) and n >= 1:
+            if last is not None and n > last + 1:
+                a, b = last + 1, n - 1
+                rng = f"pages {a}–{b}" if b > a else f"page {a}"
+                out.append(f"> ⟦ {rng} missing from this scan — "
+                           f"not yet captured. ⟧")
+            last = n
+        out.append(t)
+    return out
+
+
 def _join_pages(pages: list[str]) -> str:
     """Concatenate page texts, healing hyphenation and mid-sentence page breaks."""
     book = ""
@@ -199,7 +217,8 @@ def _join_pages(pages: list[str]) -> str:
             # hyphenated word split across the page boundary
             book = book.rstrip("-") + text
         elif (starts_lower and not _SENTENCE_END.search(book.splitlines()[-1])
-              and not _HEADING.match(text)):
+              and not book.splitlines()[-1].startswith("> ⟦")  # gap notices
+              and not _HEADING.match(text)):                   # stand alone
             # paragraph continues across the page break
             book = book + " " + text
         else:
@@ -234,7 +253,12 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     # unresolved figure placeholders (region never cropped) must not reach
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
-    book = _join_pages(texts)
+    book = _join_pages(_with_gap_markers(kept, texts))
+    missing_nums = ws.manifest.get("missing_pages") or []
+    if missing_nums:
+        from .transcribe import format_ranges
+        book = (f"> ⟦ PRODUCTION COPY — {len(missing_nums)} pages not yet "
+                f"captured: {format_ranges(missing_nums)}. ⟧\n\n" + book)
     out = ws.work_file("book.md")
     out.write_text(book, encoding="utf-8")
     headings = sum(1 for ln in book.splitlines() if ln.startswith("# "))

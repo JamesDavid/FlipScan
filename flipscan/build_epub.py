@@ -76,8 +76,23 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
             ))
             added_images[rel] = epub_name
 
+    from .proofread import chapter_hash, load_proof
+    proofed_count = 0
+
+    def with_proof(i: int, md: str) -> str:
+        """Use the accepted proofed copy — but only while the underlying
+        chapter text is unchanged (otherwise the proof is stale)."""
+        nonlocal proofed_count
+        d = load_proof(ws, i)
+        if (d and d.get("status") == "accepted" and d.get("proofed_md")
+                and d.get("base_hash") == chapter_hash(md)):
+            proofed_count += 1
+            return d["proofed_md"]
+        return md
+
     chapters = []
     for i, (ch_title, ch_md) in enumerate(split_chapters(book_md)):
+        ch_md = with_proof(i, ch_md)
         for rel, epub_name in added_images.items():
             ch_md = ch_md.replace(f"({rel})", f"({epub_name})")
         html = md_lib.markdown(ch_md, extensions=["tables"])
@@ -96,5 +111,5 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
     book.add_item(epub.EpubNav())
     epub.write_epub(str(out_path), book)
     log(f"EPUB written: {out_path} ({len(chapters)} chapters, "
-        f"{len(added_images)} images)")
+        f"{proofed_count} proofed, {len(added_images)} images)")
     return out_path

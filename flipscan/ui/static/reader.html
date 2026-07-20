@@ -140,10 +140,12 @@ rendition.hooks.content.register(contents => {
       bar.appendChild(b);
     };
     mkBtn("✂ re-crop", () => {
-      // hand off to the main app's crop tool on this figure
+      // hand off to the main app's crop tool on this figure — navigate this
+      // tab (window.open gets eaten by mobile popup blockers); the reader
+      // remembers its position so coming back is free
       localStorage.setItem("flipscan-open-crop",
         JSON.stringify({project, pageId: pid, figIdx: idx}));
-      window.open("/#" + encodeURIComponent(project) + "/pages", "_blank");
+      window.top.location.assign("/#" + encodeURIComponent(project) + "/pages");
     });
     mkBtn("📷 re-capture", async (b) => {
       try {

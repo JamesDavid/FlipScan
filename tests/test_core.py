@@ -330,3 +330,46 @@ def test_split_chapters_merges_consecutive_duplicates():
     got = split_chapters(md)
     assert [t for t, _ in got] == ["INDEX", "NOTES"]
     assert "Beta" in got[0][1]
+
+
+# ---------------- proofread layer
+
+def test_apply_edits_safety():
+    from flipscan.proofread import apply_edits
+    md = "The airship sailled on. The crew slept. The airship sailled on."
+    finds = [
+        {"quote": "crew slept", "replacement": "crew slept.", "note": ""},
+        {"quote": "sailled", "replacement": "sailed", "note": ""},   # 2 hits
+        {"quote": "not present", "replacement": "x", "note": ""},
+        {"quote": "on.", "replacement": None, "note": "just a note"},
+    ]
+    out, applied = apply_edits(md, finds)
+    assert applied == 1
+    assert "crew slept." in out
+    assert "sailled" in out               # ambiguous edit NOT applied
+    assert finds[1]["applied"] is False and "2×" in finds[1]["note"]
+    assert finds[2]["applied"] is False and "not found" in finds[2]["note"]
+
+
+def test_lint_finds_duplicate_paragraph_and_garble():
+    from flipscan.proofread import lint_chapter
+    para = "A long paragraph about airships that repeats itself " * 3
+    md = f"Andr�e went north.\n\n{para}\n\n{para}\n\n[[region-0]]"
+    types = {f["type"] for f in lint_chapter(md)}
+    assert {"ocr", "continuity", "formatting"} <= types
+
+
+def test_gap_markers_inserted():
+    from flipscan.stages.assemble import _with_gap_markers
+    pages = [{"printed_number": 11}, {"printed_number": 14}, {"printed_number": 15}]
+    texts = ["page eleven text", "page fourteen text", "page fifteen text"]
+    out = _with_gap_markers(pages, texts)
+    assert len(out) == 4
+    assert "pages 12–13 missing" in out[1]
+
+
+def test_build_uses_accepted_proof_only_when_hash_matches(tmp_path):
+    from flipscan.proofread import chapter_hash
+    md = "# ONE\n\nsome chapter text"
+    assert chapter_hash(md) == chapter_hash(md + "  \n")   # strip-insensitive
+    assert chapter_hash(md) != chapter_hash(md + " changed")
