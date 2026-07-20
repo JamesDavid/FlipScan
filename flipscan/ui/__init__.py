@@ -956,13 +956,23 @@ def create_app(root: Path) -> FastAPI:
 
     # ---------------- frontend
 
-    static = Path(__file__).parent / "static" / "index.html"
+    static_dir = Path(__file__).parent / "static"
 
     @app.get("/")
     def index():
         # always revalidate the app shell — stale cached UI on phones is worse
         # than the tiny refetch
-        return FileResponse(static, headers={"Cache-Control": "no-cache"})
+        return FileResponse(static_dir / "index.html",
+                            headers={"Cache-Control": "no-cache"})
+
+    @app.get("/static/{path:path}")
+    def static_file(path: str):
+        target = (static_dir / path).resolve()
+        if not str(target).startswith(str(static_dir.resolve())) or not target.is_file():
+            raise HTTPException(404, "not found")
+        cache = ("max-age=86400" if path.startswith("vendor/")  # libs are pinned
+                 else "no-cache")
+        return FileResponse(target, headers={"Cache-Control": cache})
 
     return app
 

@@ -729,7 +729,10 @@ function renderTab(tab, p) {
       </div>
       <h2 style="margin-top:1rem">Downloads</h2>
       <ul>${p.outputs.map(f =>
-        `<li><a href="/api/projects/${name}/file/out/${f}">${f}</a></li>`).join("")
+        `<li><a href="/api/projects/${name}/file/out/${f}">${f}</a>
+           ${f.endsWith(".epub") ? `<a href="/static/reader.html?project=${
+               encodeURIComponent(name)}&file=${encodeURIComponent(f)}"
+             style="margin-left:.6rem">📖 read in browser</a>` : ""}</li>`).join("")
         || "<div class='meta'>nothing built yet</div>"}</ul></div>`;
   }
 }

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlipScan reader</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#f5f5f4;
+         height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  header { display:flex; align-items:center; gap:.6rem; padding:.5rem .8rem;
+           background:#292524; color:#fafaf9; flex:none; }
+  header a { color:#5eead4; text-decoration:none; font-size:.9rem; }
+  header .title { flex:1; text-align:center; font-size:.9rem; overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap; }
+  header button, header select {
+    background:#44403c; color:#fafaf9; border:0; border-radius:6px;
+    padding:.35rem .7rem; font-size:.85rem; cursor:pointer; max-width:9rem; }
+  #viewer { flex:1; min-height:0; background:#fff; position:relative; }
+  #viewer .arrow { position:absolute; top:0; bottom:0; width:18%; z-index:5;
+                   cursor:pointer; background:transparent; border:0; }
+  #prev { left:0; } #next { right:0; }
+  footer { flex:none; padding:.3rem .8rem; font-size:.75rem; color:#78716c;
+           text-align:center; background:#f5f5f4; }
+  #loading { position:absolute; inset:0; display:flex; align-items:center;
+             justify-content:center; color:#78716c; font-size:.95rem; }
+</style>
+</head>
+<body>
+<header>
+  <a href="#" id="back">← back</a>
+  <div class="title" id="title">loading…</div>
+  <select id="toc" title="table of contents"><option>contents…</option></select>
+  <button id="font-minus" title="smaller text">A−</button>
+  <button id="font-plus" title="larger text">A+</button>
+</header>
+<div id="viewer">
+  <div id="loading">loading book…</div>
+  <button class="arrow" id="prev" title="previous page"></button>
+  <button class="arrow" id="next" title="next page"></button>
+</div>
+<footer id="pos"></footer>
+
+<script src="/static/vendor/jszip.min.js"></script>
+<script src="/static/vendor/epub.min.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const project = params.get("project"), file = params.get("file");
+document.getElementById("back").href =
+  "/#" + encodeURIComponent(project || "") + "/output";
+if (!project || !file) {
+  document.getElementById("loading").textContent = "missing ?project= and ?file=";
+  throw new Error("bad params");
+}
+document.getElementById("title").textContent = file;
+
+const book = ePub(`/api/projects/${encodeURIComponent(project)}/file/out/${encodeURIComponent(file)}`);
+const rendition = book.renderTo("viewer", {
+  width: "100%", height: "100%", spread: "none", allowScriptedContent: false });
+
+let fontPct = +(localStorage.getItem("flipscan-reader-font") || 100);
+const applyFont = () => rendition.themes.fontSize(fontPct + "%");
+applyFont();
+
+// resume where we left off (per book)
+const posKey = `flipscan-reader-pos:${project}/${file}`;
+rendition.display(localStorage.getItem(posKey) || undefined);
+
+book.loaded.metadata.then(m => {
+  if (m.title) document.getElementById("title").textContent = m.title;
+});
+book.loaded.navigation.then(nav => {
+  const sel = document.getElementById("toc");
+  sel.innerHTML = '<option value="">contents…</option>' + nav.toc.map(i =>
+    `<option value="${i.href}">${i.label.trim()}</option>`).join("");
+  sel.onchange = () => sel.value && rendition.display(sel.value);
+});
+book.ready.then(() => {
+  document.getElementById("loading").style.display = "none";
+  return book.locations.generate(900);   // enables the % position readout
+}).then(() => updatePos(rendition.currentLocation()));
+
+function updatePos(loc) {
+  if (!loc || !loc.start) return;
+  localStorage.setItem(posKey, loc.start.cfi);
+  const pct = book.locations.length()
+    ? Math.round(book.locations.percentageFromCfi(loc.start.cfi) * 100) : null;
+  document.getElementById("pos").textContent = pct == null ? "" : pct + "%";
+}
+rendition.on("relocated", updatePos);
+
+document.getElementById("prev").onclick = () => rendition.prev();
+document.getElementById("next").onclick = () => rendition.next();
+document.getElementById("font-minus").onclick = () => {
+  fontPct = Math.max(60, fontPct - 10);
+  localStorage.setItem("flipscan-reader-font", fontPct); applyFont();
+};
+document.getElementById("font-plus").onclick = () => {
+  fontPct = Math.min(220, fontPct + 10);
+  localStorage.setItem("flipscan-reader-font", fontPct); applyFont();
+};
+const keys = (e) => {
+  if (e.key === "ArrowLeft") rendition.prev();
+  if (e.key === "ArrowRight" || e.key === " ") rendition.next();
+};
+document.addEventListener("keyup", keys);
+rendition.on("rendered", (s, view) =>   // keys must work inside the iframe too
+  view.document.addEventListener("keyup", keys));
+</script>
+</body>
+</html>
