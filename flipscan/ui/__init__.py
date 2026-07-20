@@ -796,9 +796,13 @@ def create_app(root: Path) -> FastAPI:
         target = (ws.root / path).resolve()
         if not str(target).startswith(str(ws.root.resolve())) or not target.is_file():
             raise HTTPException(404, "not found")
-        if path.split("/")[0] not in SERVABLE:
+        top = path.split("/")[0]
+        if top not in SERVABLE:
             raise HTTPException(403, "not servable")
-        return FileResponse(target)
+        # extracted frames are immutable; everything else (corrected pages,
+        # figures, patches, outputs) gets rewritten in place — always revalidate
+        headers = None if top == "frames" else {"Cache-Control": "no-cache"}
+        return FileResponse(target, headers=headers)
 
     # ---------------- frontend
 

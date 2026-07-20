@@ -413,7 +413,7 @@ function renderTab(tab, p) {
         <h2>Page photos (${photoPages.length})</h2>
         ${photoPages.map(pg => `
           <div class="row" style="border-top:1px solid var(--line);padding:.6rem 0">
-            <img src="/api/projects/${name}/file/${pg.patched_source}"
+            <img src="/api/projects/${name}/file/${pg.patched_source}?t=${Date.now()}"
                  style="height:90px;border:1px solid var(--line);border-radius:4px">
             <div style="flex:1;min-width:10rem">
               <a href="javascript:void(0)" onclick="gotoPage('${pg.id}')"><b>${pg.id}</b></a>
@@ -509,7 +509,7 @@ function renderTab(tab, p) {
             <div>
               ${pg.color ? `<img loading="lazy" style="width:100%;border:1px solid
                  var(--line);border-radius:4px"
-                 src="/api/projects/${name}/file/${pg.color}">` : ""}
+                 src="/api/projects/${name}/file/${pg.color}?t=${Date.now()}">` : ""}
               ${figs ? `<div class="row" style="margin-top:.4rem">${figs}</div>` : ""}
             </div>
             <div>
@@ -785,7 +785,7 @@ function renderWizard() {
   if (!it) { return finishWizard(); }
   const preview = wiz.mode === "unidentified" ? it.color : it.preview;
   const img = preview ? `
-    <img src="/api/projects/${current}/file/${preview}"
+    <img src="/api/projects/${current}/file/${preview}?t=${Date.now()}"
          style="max-height:45vh;border:1px solid var(--line);border-radius:6px;
                 margin-bottom:1rem">` : "";
   const title = wiz.mode === "unidentified"
