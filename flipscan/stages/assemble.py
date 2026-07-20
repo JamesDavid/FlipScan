@@ -82,6 +82,9 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
         log(f"  WARNING: {len(missing)} pages have no transcription: {', '.join(missing)}")
 
     texts = _strip_repeated_lines(texts)
+    # unresolved figure placeholders (region never cropped) must not reach
+    # the book — the review/reshoot flow surfaces them instead
+    texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
     book = _join_pages(texts)
     out = ws.work_file("book.md")
     out.write_text(book, encoding="utf-8")

@@ -444,7 +444,17 @@ function renderTab(tab, p) {
           <button class="secondary" style="position:absolute;bottom:4px;right:4px;
                   padding:.15rem .5rem;font-size:.7rem"
                   onclick="openCrop('${pg.id}', ${i}, 'pages')">re-crop</button>
-        </span>`).join("");
+        </span>`).join("")
+        // regions whose figure crop never happened: offer to draw one
+        + (pg.regions || []).map((r, ri) => {
+            const expected = `figures/${pg.id}_${String.fromCharCode(97 + ri % 26)}.png`;
+            return (!r.deleted && !(pg.figures || []).includes(expected)) ? `
+              <button class="secondary" style="border:2px dashed #f59e0b;background:#fffbeb;
+                      color:#b45309"
+                      onclick="openCrop('${pg.id}', ${ri}, 'pages', true)">
+                + add figure for region ${ri}${r.caption ? " · " + esc(r.caption).slice(0, 30) : ""}
+              </button>` : "";
+          }).join("");
       return `
       <div class="card ${pg.status}" id="cell-${pg.id}">
         ${header}
@@ -767,11 +777,11 @@ function cropModalHtml() {
 }
 
 let cropCtx = null;
-function openCrop(pageId, figIdx, origin = "figures") {
+function openCrop(pageId, figIdx, origin = "figures", isRegion = false) {
   const pg = window._proj.pages.find(p => p.id === pageId);
   // corners ordered tl,tr,br,bl (normalized); start from the existing region
   const bb = pg.regions?.[figIdx]?.bbox_norm;
-  cropCtx = {pageId, figIdx, origin, mode: null, corner: -1,
+  cropCtx = {pageId, figIdx, origin, isRegion, mode: null, corner: -1,
              quad: bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]] : null};
   const img = $("crop-img");
   img.src = `/api/projects/${current}/file/${pg.color}?t=${Date.now()}`;
@@ -835,7 +845,8 @@ function drawCropQuad() {
 async function saveCrop() {
   if (!cropCtx?.quad) { alert("draw a box first"); return; }
   try {
-    await api(`/projects/${current}/pages/${cropCtx.pageId}/figures/${cropCtx.figIdx}/crop`, {
+    await api(`/projects/${current}/pages/${cropCtx.pageId}/`
+      + (cropCtx.isRegion ? `regions/${cropCtx.figIdx}/crop` : `figures/${cropCtx.figIdx}/crop`), {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({quad_norm: cropCtx.quad})});
   } catch (e) { alert("crop failed: " + e.message); return; }

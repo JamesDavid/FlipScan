@@ -401,18 +401,15 @@ def create_app(root: Path) -> FastAPI:
         region = regions[ridx] if 0 <= ridx < len(regions) else None
         return page, rel, region
 
-    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
-    def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
-        """Re-crop a figure. Axis-aligned bbox crops directly; a 4-corner quad
-        (user adjusted the corners) is perspective-warped back to a rectangle."""
+    def _compute_crop(ws, page, edit: CropEdit):
+        """Shared crop math: bbox crops directly; a 4-corner quad is
+        perspective-warped back to a rectangle. Returns (crop, bbox, quad)."""
         import cv2
         import numpy as np
 
         from ..imaging import order_quad
         from ..stages.preprocess import correct_page
 
-        ws = ws_for(name)
-        page, rel, region = _figure(ws, page_id, fig_idx)
         if not page.get("color"):
             raise HTTPException(400, "page has no corrected image")
         color = cv2.imread(str(ws.root / page["color"]))
@@ -422,7 +419,7 @@ def create_app(root: Path) -> FastAPI:
 
         if edit.quad_norm and len(edit.quad_norm) == 4:
             quad = order_quad(np.clip(np.array(edit.quad_norm, dtype=np.float64), 0, 1))
-            crop = correct_page(color, quad)  # skew -> rectangle
+            crop = correct_page(color, quad)
             xs, ys = quad[:, 0], quad[:, 1]
             bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
             stored_quad = quad.tolist()
@@ -431,8 +428,6 @@ def create_app(root: Path) -> FastAPI:
             x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
             y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
             px = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
-            if px[2] - px[0] < 10 or px[3] - px[1] < 10:
-                raise HTTPException(400, "crop too small")
             crop = color[px[1]:px[3], px[0]:px[2]]
             bbox = [x0, y0, x1, y1]
             stored_quad = None
@@ -440,13 +435,68 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "need bbox_norm or quad_norm")
         if crop.shape[0] < 10 or crop.shape[1] < 10:
             raise HTTPException(400, "crop too small")
+        return crop, bbox, stored_quad
 
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
+    def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
+        """Re-crop an existing figure."""
+        import cv2
+
+        ws = ws_for(name)
+        page, rel, region = _figure(ws, page_id, fig_idx)
+        crop, bbox, stored_quad = _compute_crop(ws, page, edit)
         cv2.imwrite(str(ws.root / rel), crop)
         if region is not None:
             region["bbox_norm"] = bbox
             if stored_quad:
                 region["quad_norm"] = stored_quad
             region["user_crop"] = True
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True, "figure": rel}
+
+    @app.post("/api/projects/{name}/pages/{page_id}/regions/{ridx}/crop")
+    def crop_region(name: str, page_id: str, ridx: int, edit: CropEdit):
+        """Create the figure for a region that has none (its [[region-N]]
+        marker sits in the markdown with nothing to show) — or re-crop it."""
+        import re as _re
+
+        import cv2
+
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        crop, bbox, stored_quad = _compute_crop(ws, page, edit)
+
+        rel = f"figures/{page_id}_{chr(97 + ridx % 26)}.png"
+        cv2.imwrite(str(ws.root / rel), crop)
+
+        regions = page.setdefault("regions", [])
+        while len(regions) <= ridx:
+            regions.append({"type": "figure", "bbox_norm": [0, 0, 1, 1], "caption": ""})
+        region = regions[ridx]
+        region["bbox_norm"] = bbox
+        if stored_quad:
+            region["quad_norm"] = stored_quad
+        region["user_crop"] = True
+        region.pop("deleted", None)
+
+        figs = page.setdefault("figures", [])
+        if rel not in figs:
+            figs.append(rel)
+
+        if page.get("md") and (ws.root / page["md"]).exists():
+            md_path = ws.root / page["md"]
+            md = md_path.read_text(encoding="utf-8")
+            img_md = f"![{region.get('caption') or ''}]({rel})"
+            placeholder = f"[[region-{ridx}]]"
+            if placeholder in md:
+                md = md.replace(placeholder, img_md)
+            elif rel not in md:
+                md = md.rstrip() + f"\n\n{img_md}\n"
+            md_path.write_text(md, encoding="utf-8")
+
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True, "figure": rel}

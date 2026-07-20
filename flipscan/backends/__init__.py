@@ -79,9 +79,12 @@ def parse_result(raw: str) -> dict[str, Any]:
         bbox = r.get("bbox_norm")
         if (isinstance(bbox, list) and len(bbox) == 4
                 and all(isinstance(v, (int, float)) for v in bbox)):
+            vals = [max(0.0, min(1.0, float(v))) for v in bbox]
+            x0, x1 = sorted((vals[0], vals[2]))  # models sometimes emit
+            y0, y1 = sorted((vals[1], vals[3]))  # inverted corners
             regions.append({
                 "type": r.get("type", "figure"),
-                "bbox_norm": [max(0.0, min(1.0, float(v))) for v in bbox],
+                "bbox_norm": [x0, y0, x1, y1],
                 "caption": r.get("caption") or "",
             })
     obj["regions"] = regions

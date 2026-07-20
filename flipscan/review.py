@@ -25,6 +25,13 @@ def reshoot_list(ws: Workspace) -> list[dict]:
             reasons.append("figure source frame is low quality")
         if p.get("needs_reshoot"):
             reasons.append("marked for re-acquisition by you")
+        figs = p.get("figures") or []
+        for ri, r in enumerate(p.get("regions") or []):
+            expected = f"figures/{p['id']}_{chr(97 + ri % 26)}.png"
+            if not r.get("deleted") and expected not in figs:
+                reasons.append(f"figure region {ri} has no crop — add one in the "
+                               f"page view")
+                break
         if p["status"] == "suspect" and not reasons:
             reasons.append("weak capture (short cluster or low frame score)")
         if p["status"] == "missing":
