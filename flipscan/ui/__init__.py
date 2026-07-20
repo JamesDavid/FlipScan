@@ -381,6 +381,57 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/retranscribe")
+    async def retranscribe_page(name: str, page_id: str):
+        """Retry OCR for one page right now (e.g. after a model hiccup) —
+        heavy work off the event loop; other requests keep flowing."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        if not page.get("llm_image"):
+            raise HTTPException(400, "page has no processed image yet — run the pipeline first")
+        cfg = load_config(ws.root)
+        if cfg["provider"]["name"] == "hybrid":  # one page: local is plenty
+            cfg = {**cfg, "provider": {**cfg["provider"], "name": "ollama"}}
+        from ..backends import get_backend
+        from ..stages.transcribe import _cache_page, _write_result
+        backend = get_backend(cfg)
+
+        def work():
+            src = ws.root / page["llm_image"]
+            r = backend.transcribe([(page_id, src)], log=lambda m: None)[page_id]
+            if "error" in r:
+                # repetition loops are usually triggered by the neighboring
+                # page's curled text at the frame edge — retry with each
+                # vertical edge shaved off (p0093 taught us this)
+                import cv2
+                img = cv2.imread(str(src))
+                if img is not None:
+                    w = img.shape[1]
+                    for sl in (slice(0, int(w * 0.86)), slice(int(w * 0.14), w)):
+                        tmp = ws.work_file(f"_retry_{page_id}.jpg")
+                        cv2.imwrite(str(tmp), img[:, sl],
+                                    [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        r2 = backend.transcribe([(page_id, tmp)],
+                                                log=lambda m: None)[page_id]
+                        tmp.unlink(missing_ok=True)
+                        if "error" not in r2:
+                            r = r2
+                            break
+            _write_result(ws, page, r, backend.name)
+            _cache_page(ws, page)
+            return r
+
+        r = await asyncio.to_thread(work)
+        if "error" in r:
+            ws.save()
+            raise HTTPException(502, f"failed again: {r['error']}")
+        _reconcile(ws)  # the retry may have brought a page number with it
+        ws.stage_reset("figures")
+        ws.save()
+        return {"ok": True}
+
     @app.post("/api/projects/{name}/pages/{page_id}/patch")
     async def patch_page(name: str, page_id: str, photo: UploadFile):
         """Replace a page's capture. Transcription is DEFERRED to the next

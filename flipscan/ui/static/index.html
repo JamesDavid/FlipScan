@@ -556,6 +556,10 @@ function renderTab(tab, p) {
             ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}
             ${pg.reasons?.length
               ? ` · <span style="color:#b45309">⚠ ${esc(pg.reasons.join("; "))}</span>`
+                + (pg.transcribe_error
+                  ? ` <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+                       title="run OCR again on this page now"
+                       onclick="retryOcr('${pg.id}', this)">↻ retry OCR</button>` : "")
                 + (pg.status === "suspect"
                   ? ` <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
                        title="page is actually fine — clear the suspect flag"
@@ -1028,6 +1032,20 @@ function toggleCell(pageId) {
   const hidden = bodyEl.style.display === "none";
   bodyEl.style.display = hidden ? "block" : "none";
   if (btn) btn.textContent = hidden ? "collapse ▴" : "expand ▾";
+}
+
+async function retryOcr(pageId, btn) {
+  btn.disabled = true;
+  btn.textContent = "retrying…";
+  try {
+    await api(`/projects/${current}/pages/${pageId}/retranscribe`, {method: "POST"});
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "↻ retry OCR";
+    alert(e.message);
+    return;
+  }
+  gotoPage(pageId);   // re-render and land back on this page
 }
 
 async function ignoreSuspect(pageId) {

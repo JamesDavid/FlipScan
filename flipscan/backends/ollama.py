@@ -24,7 +24,8 @@ class OllamaBackend(TranscriptionBackend):
         self.concurrency = int(p.get("ollama_concurrency", 1))
         self.max_retries = cfg["transcribe"]["max_retries"]
 
-    def _request(self, image_b64: str) -> str:
+    def _request(self, image_b64: str, num_predict: int | None = None,
+                 extra_options: dict | None = None) -> str:
         resp = httpx.post(
             f"{self.base_url}/api/chat",
             json={
@@ -34,7 +35,8 @@ class OllamaBackend(TranscriptionBackend):
                 # thinking off: transcription is perception, not reasoning —
                 # thinking models otherwise ramble for minutes on hard pages
                 "think": self.think,
-                "options": {"num_predict": self.num_predict, "temperature": 0},
+                "options": {"num_predict": num_predict or self.num_predict,
+                            "temperature": 0, **(extra_options or {})},
                 "messages": [
                     {"role": "user", "content": PROMPT, "images": [image_b64]}
                 ],
@@ -76,7 +78,14 @@ class OllamaBackend(TranscriptionBackend):
             last_err = None
             for attempt in range(self.max_retries + 1):
                 try:
-                    results[page_id] = parse_result(self._request(image_b64))
+                    # retries get a doubled token budget (dense pages truncate
+                    # their JSON) and a repetition penalty (greedy decoding can
+                    # lock into repeating one phrase forever)
+                    budget = self.num_predict * (2 ** attempt)
+                    opts = None if attempt == 0 else {
+                        "repeat_penalty": 1.15, "repeat_last_n": 256}
+                    results[page_id] = parse_result(
+                        self._request(image_b64, budget, opts))
                     break
                 except (TranscriptionError, httpx.HTTPError) as e:
                     last_err = e
