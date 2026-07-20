@@ -321,11 +321,17 @@ async function openProject(name, tab) {
   renderTab(tab || "pipeline", p);
 }
 
-function wizardCardHtml(todo, anyPages) {
+function wizardCardHtml(items, anyPages) {
+  // honest breakdown of what the wizard will actually walk
+  const n = (k) => (items || []).filter(i => i.kind === k).length;
+  const parts = [];
+  if (n("missing")) parts.push(`${n("missing")} never-captured page${n("missing") > 1 ? "s" : ""}`);
+  if (n("reshoot")) parts.push(`${n("reshoot")} weak capture${n("reshoot") > 1 ? "s" : ""} worth re-shooting`);
+  if (n("figure")) parts.push(`${n("figure")} figure close-up${n("figure") > 1 ? "s" : ""}`);
   const desc = !anyPages
     ? "no pages yet — photograph the whole book page by page (it asks for the last page number)"
-    : todo
-    ? `walk through all ${todo} missing / weak pages in order and photograph them one after another — transcription runs once at the end`
+    : parts.length
+    ? `${parts.join(" + ")} — walk through them in page order; transcription runs once at the end`
     : "book looks complete — the wizard has nothing queued";
   return `
     <div class="card" style="background:#f0fdfa;border:2px solid var(--accent)">
@@ -369,11 +375,11 @@ function addPagePanel() {
 function renderTab(tab, p) {
   const name = p.name, body = $("tabbody");
   if (tab === "pipeline") {
-    api("/projects/" + name + "/reshoot").then(r => {
+    Promise.all([api("/projects/" + name + "/reshoot"),
+                 api(`/projects/${name}/capture-queue`)]).then(([r, q]) => {
       const items = r.items || [];
-      const todo = (r.missing?.length || 0) + items.length;
       const anyPages = (p.pages || []).some(x => !x.role);
-      const wizardCard = wizardCardHtml(todo, anyPages);
+      const wizardCard = wizardCardHtml(q.items, anyPages);
       const missingCard = r.missing && r.missing.length ? `
         <div class="card" style="border:2px solid #f59e0b">
           <h2>Missing pages — never captured</h2>
@@ -394,7 +400,7 @@ function renderTab(tab, p) {
     api(`/projects/${name}/capture-queue`).then(q => {
       const holder = $("media-wizard");
       if (holder) holder.innerHTML = wizardCardHtml(
-        q.items.length, (p.pages || []).some(x => !x.role));
+        q.items, (p.pages || []).some(x => !x.role));
     });
     body.innerHTML = `<div id="media-wizard"></div>` + `
       <div class="card">
