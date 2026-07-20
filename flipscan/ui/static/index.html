@@ -48,6 +48,8 @@
   .pagerow.suspect { background:#fef2f2; }
   .pagegrid { display:grid; grid-template-columns: minmax(240px, 340px) 1fr;
               gap:1rem; margin-top:.6rem; }
+  .pagegrid > div:last-child { display:flex; flex-direction:column; }
+  .pagegrid textarea { flex:1 1 auto; min-height:200px; }  /* fill the cell */
   .card.suspect { border-left:4px solid var(--bad); }
   .card.duplicate { opacity:.75; }
   .card.deleted { opacity:.55; }
