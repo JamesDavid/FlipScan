@@ -16,6 +16,8 @@
           font-size:.9rem; }
   .proj:hover, .proj.active { background:#44403c; }
   .proj .sub { font-size:.75rem; color:#a8a29e; }
+  #burger { display:none; background:#44403c; flex:none; padding:.35rem .75rem; }
+  #nav-current { display:none; }
   main { overflow-y:auto; padding:1.5rem 2rem; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
           padding:1.25rem 1.5rem; margin-bottom:1.25rem; }
@@ -75,12 +77,22 @@
     .row select { max-width:100%; }
     body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
     aside { display:flex; align-items:center; gap:.6rem; padding:.55rem .8rem;
-            overflow-x:auto; white-space:nowrap; }
+            white-space:nowrap; overflow:visible; position:relative; }
     aside h1 { margin:0; font-size:1rem; flex:none; }
-    #projects { display:flex; gap:.4rem; }
-    .proj { flex:none; margin:0; padding:.35rem .7rem; }
-    .proj .sub { display:none; }
-    aside > div:last-child { margin:0 !important; flex:none; }
+    #burger { display:inline-block; }
+    #nav-current { display:inline; flex:1; min-width:0; overflow:hidden;
+                   text-overflow:ellipsis; text-align:right; font-size:.85rem;
+                   color:#d6d3d1; }
+    #global-status { margin:0 !important; flex:none; max-width:40vw; }
+    /* project list becomes a drop-down drawer under the navbar */
+    #nav-drawer { display:none; }
+    #nav-drawer.open { display:block; position:absolute; top:100%; left:0; right:0;
+                       z-index:60; background:#292524; padding:.8rem;
+                       max-height:70vh; overflow-y:auto; white-space:normal;
+                       box-shadow:0 10px 24px rgba(0,0,0,.45);
+                       border-bottom:1px solid #44403c; }
+    #nav-drawer.open .proj { padding:.6rem .8rem; }
+    #nav-drawer.open .proj .sub { display:block; }
     main { padding:.8rem; }
     .card { padding:1rem; margin-bottom:.8rem; border-radius:10px; }
     .page, .pagerow, .pagegrid { grid-template-columns:1fr; gap:.8rem; }
@@ -108,14 +120,18 @@
 </head>
 <body>
 <aside>
+  <button id="burger" onclick="toggleNav()" title="projects">☰</button>
   <h1>FlipScan</h1>
+  <span id="nav-current"></span>
   <div id="global-status" style="display:none;background:#0d9488;color:#fff;
        border-radius:999px;padding:.3rem .8rem;font-size:.75rem;margin-bottom:.8rem;
        white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
-  <div id="projects"></div>
-  <div style="margin-top:1rem; display:flex; gap:.4rem">
-    <button class="secondary" onclick="showNew()">+ New project</button>
-    <button class="secondary" onclick="showSettings()" title="Settings">⚙</button>
+  <div id="nav-drawer">
+    <div id="projects"></div>
+    <div style="margin-top:1rem; display:flex; gap:.4rem">
+      <button class="secondary" onclick="showNew()">+ New project</button>
+      <button class="secondary" onclick="showSettings()" title="Settings">⚙</button>
+    </div>
   </div>
 </aside>
 <main id="main"><div class="card">Select or create a project.</div></main>
@@ -139,13 +155,19 @@ async function refreshProjects() {
     </div>`).join("") || '<div class="sub" style="color:#a8a29e">no projects yet</div>';
   if (!current && list.length) {
     const h = location.hash.slice(1).split("/").map(decodeURIComponent);  // #project/tab
-    const name = list.some(p => p.name === h[0]) ? h[0] : list[0].name;
-    openProject(name, h[1] || undefined);
+    let saved = {};                       // last project survives new visits
+    try { saved = JSON.parse(localStorage.getItem("flipscan-last") || "{}"); } catch {}
+    const name = list.some(p => p.name === h[0]) ? h[0]
+               : list.some(p => p.name === saved.name) ? saved.name
+               : list[0].name;
+    const tab = (h[0] === name && h[1]) || (saved.name === name && saved.tab) || undefined;
+    openProject(name, tab || undefined);
   }
 }
 
 function showNew() {
   current = null;
+  closeNav();
   $("main").innerHTML = `
   <div class="card">
     <h2>New project</h2>
@@ -167,6 +189,7 @@ function showNew() {
 
 async function showSettings() {
   current = null;
+  closeNav();
   const s = await api("/settings");
   $("main").innerHTML = `
   <div class="card">
@@ -284,10 +307,18 @@ async function createProject() {
   } catch (e) { alert(e.message); }
 }
 
+function toggleNav() { $("nav-drawer").classList.toggle("open"); }
+function closeNav() { $("nav-drawer").classList.remove("open"); }
+
 async function openProject(name, tab) {
   current = name;
   const p = await api("/projects/" + name);
   window._proj = p;
+  closeNav();
+  $("nav-current").textContent = p.book.title || name;
+  localStorage.setItem("flipscan-last", JSON.stringify({name, tab: tab || "pipeline"}));
+  history.replaceState(null, "",
+    "#" + encodeURIComponent(name) + "/" + (tab || "pipeline"));
   const stages = Object.entries(p.stages).map(([s, st]) =>
     `<span class="stage ${st}" id="stage-${s}">${s}</span>`).join("");
   $("main").innerHTML = `
