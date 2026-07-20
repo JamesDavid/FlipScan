@@ -353,8 +353,12 @@ function renderTab(tab, p) {
                 order and photograph them one after another — transcription runs
                 once at the end</div>
             </div>
-            <button style="font-size:1.05rem;padding:.7rem 1.4rem"
-                    onclick="startWizard()">Start capturing</button>
+            <span class="row">
+              <button style="font-size:1.05rem;padding:.7rem 1.4rem"
+                      onclick="startWizard()">Capture by page number</button>
+              <button class="secondary" onclick="startUnidentifiedWizard()">
+                Unidentified pages…</button>
+            </span>
           </div>
         </div>` : "";
       const missingCard = r.missing && r.missing.length ? `
@@ -459,7 +463,9 @@ function renderTab(tab, p) {
           <b>${pg.id}</b>
           <span class="meta" style="margin:0">${numLabel}
             ${pg.confidence ? " · " + pg.confidence : ""}
-            ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}</span>
+            ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}
+            ${pg.status === "suspect" && pg.reasons?.length
+              ? ` · <span style="color:#b45309">⚠ ${esc(pg.reasons.join("; "))}</span>` : ""}</span>
           <span class="row" style="margin-left:auto">
             ${collapsed ? `
               ${pg.status === "duplicate" ? `<button class="secondary"
@@ -736,38 +742,72 @@ async function buildFmt(fmt) {
   } catch (e) { alert(e.message); }
 }
 
-// ---- capture wizard: walk missing/poor pages in order, camera-first
+// ---- capture wizards: numbered pages in order, and unidentified captures
 let wiz = null;
 async function startWizard() {
   const q = await api(`/projects/${current}/capture-queue`);
   if (!q.items.length) { alert("Nothing to capture — the book looks complete!"); return; }
-  wiz = {items: q.items, i: 0, done: 0};
+  wiz = {items: q.items, i: 0, done: 0, mode: "numbered"};
+  renderWizard();
+}
+
+function startUnidentifiedWizard() {
+  const items = (window._proj.pages || [])
+    .filter(pg => !pg.role && !["duplicate", "deleted", "patched"].includes(pg.status)
+                  && (pg.printed_number == null || pg.printed_number < 1)
+                  && (pg.reasons || []).length)
+    .map(pg => ({kind: "reshoot", page_id: pg.id, color: pg.color,
+                 label: pg.id, reasons: pg.reasons}));
+  if (!items.length) { alert("No unidentified problem pages — nice."); return; }
+  wiz = {items, i: 0, done: 0, mode: "unidentified"};
   renderWizard();
 }
 
 function renderWizard() {
   const it = wiz.items[wiz.i];
   if (!it) { return finishWizard(); }
+  const img = wiz.mode === "unidentified" && it.color ? `
+    <img src="/api/projects/${current}/file/${it.color}"
+         style="max-height:45vh;border:1px solid var(--line);border-radius:6px;
+                margin-bottom:1rem">` : "";
+  const title = wiz.mode === "unidentified"
+    ? "Find this page in the book" : `📖 ${esc(it.label)}`;
   $("main").innerHTML = `
   <div class="card" style="max-width:34rem;margin:0 auto;text-align:center">
-    <div class="meta">capture wizard · ${wiz.i + 1} of ${wiz.items.length}
-      · ${wiz.done} captured</div>
-    <h2 style="font-size:2.2rem;margin:.6rem 0">📖 ${esc(it.label)}</h2>
+    <div class="meta">${wiz.mode === "unidentified" ? "unidentified pages" : "capture"}
+      wizard · ${wiz.i + 1} of ${wiz.items.length} · ${wiz.done} handled</div>
+    <h2 style="font-size:${wiz.mode === "unidentified" ? "1.4" : "2.2"}rem;
+        margin:.6rem 0">${title}</h2>
     <div class="meta" style="margin-bottom:1rem">${esc(it.reasons.join(", "))}</div>
     <div class="ptrack" style="margin-bottom:1.2rem"><div class="pfill"
          style="width:${Math.round(100 * wiz.i / wiz.items.length)}%"></div></div>
+    ${img}
     <input type="file" accept="image/*" capture="environment" id="wiz-file"
            style="display:none" onchange="wizardShot()">
     <button style="font-size:1.3rem;padding:1rem 2.2rem;width:100%"
             onclick="$('wiz-file').click()" id="wiz-btn">📷 Take photo</button>
     <div class="row" style="margin-top:1rem;justify-content:center">
+      ${wiz.mode === "unidentified" ? `<button class="danger"
+         onclick="wizardHide()">Junk — hide it</button>` : ""}
       <button class="secondary" onclick="wiz.i++; renderWizard()">Skip</button>
       <button class="secondary" onclick="finishWizard()">Finish</button>
     </div>
-    <div class="meta" style="margin-top:1rem">Lay the book flat, fill the frame with
-      the page, keep the printed page number visible. Photos queue up —
-      transcription happens in one go when you finish.</div>
+    <div class="meta" style="margin-top:1rem">${wiz.mode === "unidentified"
+      ? "Use the capture above to locate the page, then photograph it flat — or " +
+        "hide it if it's not really a page (mid-turn shot, desk, etc.)."
+      : "Lay the book flat, fill the frame with the page, keep the printed page " +
+        "number visible. Photos queue up — transcription happens in one go when " +
+        "you finish."}</div>
   </div>`;
+}
+
+async function wizardHide() {
+  const it = wiz.items[wiz.i];
+  try { await api(`/projects/${current}/pages/${it.page_id}`, {method:"DELETE"}); }
+  catch (e) { alert("hide failed: " + e.message); return; }
+  wiz.done++;
+  wiz.i++;
+  renderWizard();
 }
 
 async function wizardShot() {

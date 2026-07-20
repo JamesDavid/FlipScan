@@ -105,6 +105,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/projects/{name}")
     def project_detail(name: str):
+        from ..review import page_reasons
         ws = ws_for(name)
         m = ws.manifest
         return {
@@ -112,7 +113,7 @@ def create_app(root: Path) -> FastAPI:
             "book": m["book"],
             "videos": m["videos"],
             "stages": {s: ws.stage_status(s) for s in STAGES},
-            "pages": m["pages"],
+            "pages": [{**p, "reasons": page_reasons(p)} for p in m["pages"]],
             "running": name in runs and runs[name]["thread"].is_alive(),
             "outputs": [f.name for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
@@ -596,12 +597,15 @@ def create_app(root: Path) -> FastAPI:
             items.append({"kind": "missing", "number": n,
                           "label": f"page {n}", "reasons": ["never captured"]})
         for it in reshoot_list(ws):
+            # only pages the user can actually find in the physical book —
+            # an internal p#### id means nothing at the bookshelf
+            if it.get("printed_number") is None or it["printed_number"] < 1:
+                continue
             items.append({"kind": "reshoot", "page_id": it["id"],
-                          "number": it.get("printed_number"),
-                          "label": (f"page {it['printed_number']}"
-                                    if it.get("printed_number") else it["id"]),
+                          "number": it["printed_number"],
+                          "label": f"page {it['printed_number']}",
                           "reasons": it["reasons"]})
-        items.sort(key=lambda i: (i["number"] is None, i["number"] or 0))
+        items.sort(key=lambda i: i["number"])
         return {"items": items}
 
     @app.post("/api/projects/{name}/capture")

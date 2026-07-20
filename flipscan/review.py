@@ -10,32 +10,42 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 from .workspace import Workspace
 
 
+def page_reasons(p: dict) -> list[str]:
+    """Why this page needs attention — shared by the reshoot list, the page
+    cells, and the capture wizards."""
+    reasons = []
+    if p.get("transcribe_error"):
+        reasons.append(f"transcription failed ({p['transcribe_error'][:80]})")
+    if p.get("confidence") == "low":
+        reasons.append("low transcription confidence")
+    for f in p.get("flags") or []:
+        reasons.append(f"flagged: {f}")
+    if p.get("figure_quality"):
+        reasons.append("figure source frame is low quality")
+    if p.get("needs_reshoot"):
+        reasons.append("marked for re-acquisition by you")
+    if p.get("number_rejected"):
+        reasons.append("page number misread (broke the page order)")
+    if p.get("number_conflict"):
+        reasons.append("more captures than page numbers fit here")
+    figs = p.get("figures") or []
+    for ri, r in enumerate(p.get("regions") or []):
+        expected = f"figures/{p['id']}_{chr(97 + ri % 26)}.png"
+        if not r.get("deleted") and expected not in figs:
+            reasons.append(f"figure region {ri} has no crop")
+            break
+    if p["status"] == "suspect" and not reasons:
+        reasons.append("weak capture (short cluster or low frame score)")
+    if p["status"] == "missing":
+        reasons.append("no usable frame captured")
+    return reasons
+
+
 def reshoot_list(ws: Workspace) -> list[dict]:
     """Pages that should be re-photographed, with reasons."""
     items = []
     for p in ws.manifest["pages"]:
-        reasons = []
-        if p.get("transcribe_error"):
-            reasons.append(f"transcription failed ({p['transcribe_error'][:80]})")
-        if p.get("confidence") == "low":
-            reasons.append("low transcription confidence")
-        for f in p.get("flags") or []:
-            reasons.append(f"flagged: {f}")
-        if p.get("figure_quality"):
-            reasons.append("figure source frame is low quality")
-        if p.get("needs_reshoot"):
-            reasons.append("marked for re-acquisition by you")
-        figs = p.get("figures") or []
-        for ri, r in enumerate(p.get("regions") or []):
-            expected = f"figures/{p['id']}_{chr(97 + ri % 26)}.png"
-            if not r.get("deleted") and expected not in figs:
-                reasons.append(f"figure region {ri} has no crop — add one in the "
-                               f"page view")
-                break
-        if p["status"] == "suspect" and not reasons:
-            reasons.append("weak capture (short cluster or low frame score)")
-        if p["status"] == "missing":
-            reasons.append("no usable frame captured")
+        reasons = page_reasons(p)
         if reasons and p["status"] not in ("patched", "duplicate", "deleted"):
             items.append({"id": p["id"], "printed_number": p.get("printed_number"),
                           "reasons": reasons})
