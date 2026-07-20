@@ -13,6 +13,8 @@ from .workspace import Workspace
 def page_reasons(p: dict) -> list[str]:
     """Why this page needs attention — shared by the reshoot list, the page
     cells, and the capture wizards."""
+    if p.get("suspect_ignored"):
+        return []  # the user reviewed it and vouched for it
     reasons = []
     if p.get("transcribe_error"):
         reasons.append(f"transcription failed ({p['transcribe_error'][:80]})")

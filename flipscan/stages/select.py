@@ -92,7 +92,8 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     if composites:
         cutoff = float(np.percentile(composites, cfg["cluster"]["suspect_score_percentile"]))
         for p in ws.manifest["pages"]:
-            if p.get("scores") and p["scores"]["composite"] < cutoff * 0.5:
+            if (p.get("scores") and p["scores"]["composite"] < cutoff * 0.5
+                    and not p.get("suspect_ignored")):
                 p["status"] = "suspect"  # well below the low tail
 
     ws.save()

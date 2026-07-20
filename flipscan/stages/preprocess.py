@@ -115,14 +115,13 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
     pad = cfg["preprocess"].get("quad_pad", 0.025)
 
     if page.get("patched_source"):
-        # a deliberate photo is already flat and framed — perspective-warping
-        # it with a detected quad distorts good shots. Crop to the text block
-        # when confident, otherwise keep the photo untouched.
+        # a deliberate photo is already flat and framed by a human — any crop
+        # or warp risks cutting exactly what they framed (page numbers!).
+        # Use it as-is.
         bgr = cv2.imread(str(ws.root / page["patched_source"]))
         if bgr is None:
             return
-        box = find_flat_page(bgr)
-        color = bgr[box[1]:box[3], box[0]:box[2]] if box is not None else bgr
+        color = bgr
         if cfg["preprocess"].get("dewarp"):
             color = dewarp_cylindrical(color)
         color_path = out_dir / f"{page['id']}_color.png"
@@ -132,7 +131,7 @@ def preprocess_page(ws: Workspace, page: dict, cfg: dict,
                     [cv2.IMWRITE_JPEG_QUALITY, 85])
         page["color"] = f"work/pages/{page['id']}_color.png"
         page["llm_image"] = f"work/pages/{page['id']}_llm.jpg"
-        page["isolated"] = box is not None
+        page.pop("isolated", None)
         return
 
     fid = page["canonical"]

@@ -42,6 +42,7 @@ class PageEdit(BaseModel):
     needs_reshoot: bool | None = None
     unduplicate: bool | None = None
     mark_duplicate: bool | None = None
+    ignore_suspect: bool | None = None
 
 
 class CropEdit(BaseModel):
@@ -385,6 +386,10 @@ def create_app(root: Path) -> FastAPI:
         if edit.mark_duplicate:
             page["status"] = "duplicate"
             page["manual_duplicate"] = True  # auto-dedupe keeps hands off
+        if edit.ignore_suspect:
+            page["suspect_ignored"] = True   # the user vouches for this page
+            if page["status"] == "suspect":
+                page["status"] = "ok"
         _reconcile(ws)
         return {"ok": True, "page": ws.page(page_id)}
 
@@ -527,6 +532,36 @@ def create_app(root: Path) -> FastAPI:
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True}
+
+    @app.post("/api/projects/{name}/pages/{page_id}/magic-crop")
+    def magic_crop(name: str, page_id: str, edit: CropEdit):
+        """Edge-detection crop suggestion for the crop modal: returns a bbox
+        for the user to review and adjust before saving."""
+        import cv2
+        import numpy as np
+
+        from ..imaging import refine_figure_bbox
+
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None or not page.get("color"):
+            raise HTTPException(404, "no page image")
+        color = cv2.imread(str(ws.root / page["color"]))
+        if color is None:
+            raise HTTPException(500, "page image unreadable")
+        if edit.quad_norm:
+            q = np.array(edit.quad_norm, dtype=np.float64)
+            prior = [float(q[:, 0].min()), float(q[:, 1].min()),
+                     float(q[:, 0].max()), float(q[:, 1].max())]
+        elif edit.bbox_norm:
+            prior = edit.bbox_norm
+        else:
+            prior = [0.05, 0.05, 0.95, 0.95]
+        box = refine_figure_bbox(color, prior)
+        if box is None:
+            return {"ok": False, "detail": "no confident detection here — "
+                                           "draw the box manually"}
+        return {"ok": True, "bbox_norm": box}
 
     @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/reshoot")
     def figure_reshoot(name: str, page_id: str, fig_idx: int, flag: bool = True):

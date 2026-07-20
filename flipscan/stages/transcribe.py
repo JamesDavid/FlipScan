@@ -48,7 +48,8 @@ def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) ->
     page["flags"] = result["flags"]
     page["transcribed_by"] = backend_name
     page.pop("transcribe_error", None)
-    if result["confidence"] == "low" or result["flags"]:
+    if ((result["confidence"] == "low" or result["flags"])
+            and not page.get("suspect_ignored")):
         page["status"] = "suspect"
 
 

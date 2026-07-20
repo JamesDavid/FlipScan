@@ -483,7 +483,10 @@ function renderTab(tab, p) {
             ${pg.confidence ? " · " + pg.confidence : ""}
             ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}
             ${pg.status === "suspect" && pg.reasons?.length
-              ? ` · <span style="color:#b45309">⚠ ${esc(pg.reasons.join("; "))}</span>` : ""}</span>
+              ? ` · <span style="color:#b45309">⚠ ${esc(pg.reasons.join("; "))}</span>
+                 <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+                   title="page is actually fine — clear the suspect flag"
+                   onclick="ignoreSuspect('${pg.id}')">ignore</button>` : ""}</span>
           <span class="row" style="margin-left:auto">
             ${collapsed ? `
               ${pg.status === "duplicate" ? `<button class="secondary"
@@ -930,6 +933,14 @@ function toggleCell(pageId) {
   if (btn) btn.textContent = hidden ? "collapse ▴" : "expand ▾";
 }
 
+async function ignoreSuspect(pageId) {
+  try { await api(`/projects/${current}/pages/${pageId}`, {
+    method: "PATCH", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ignore_suspect: true})});
+  } catch (e) { alert('failed: ' + e.message); return; }
+  openProject(current, "pages");
+}
+
 async function markDuplicate(pageId) {
   try { await api(`/projects/${current}/pages/${pageId}`, {
     method: "PATCH", headers: {"Content-Type": "application/json"},
@@ -971,7 +982,9 @@ function cropModalHtml() {
         <b>Re-crop figure</b>
         <span class="meta">drag to draw a box, then drag corners to fine-tune —
           skewed shapes are straightened back to a rectangle</span>
-        <button style="margin-left:auto" onclick="saveCrop()">Save crop</button>
+        <button class="secondary" style="margin-left:auto"
+                onclick="magicCrop()">✨ Magic crop</button>
+        <button onclick="saveCrop()">Save crop</button>
         <button class="secondary" onclick="$('crop-modal').style.display='none'">Cancel</button>
       </div>
       <div id="crop-stage" style="position:relative;touch-action:none;cursor:crosshair;
@@ -1080,6 +1093,18 @@ function drawCropQuad() {
     hd.setAttribute("cx", c[0]*w);
     hd.setAttribute("cy", c[1]*h);
   });
+}
+
+async function magicCrop() {
+  try {
+    const r = await api(`/projects/${current}/pages/${cropCtx.pageId}/magic-crop`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(cropCtx.quad ? {quad_norm: cropCtx.quad} : {})});
+    if (!r.ok) { alert(r.detail || "no confident detection"); return; }
+    const [x0, y0, x1, y1] = r.bbox_norm;
+    cropCtx.quad = [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
+    drawCropQuad();
+  } catch (e) { alert("magic crop failed: " + e.message); }
 }
 
 async function saveCrop() {
