@@ -433,7 +433,14 @@ def reconcile(ws: Workspace, pages: list[dict], log=print) -> list[dict]:
     is ever permanent state — a bad edit or a bug can't poison the manifest."""
     cache = load_cache(ws)
     for p in pages:
-        if p.get("number_manual") or p.get("role"):
+        if p.get("role"):
+            continue
+        if p.get("number_manual"):
+            # a hand-entered number is by definition neither misread nor
+            # inferred — drop stale flags from before it became manual
+            # (the later passes re-set them if a real conflict remains)
+            for k in ("number_inferred", "number_rejected", "number_conflict"):
+                p.pop(k, None)
             continue
         rec = cache.get(cache_key(p) or "")
         if rec is not None and p.get("md"):

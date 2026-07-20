@@ -482,11 +482,12 @@ function renderTab(tab, p) {
           <span class="meta" style="margin:0">${numLabel}
             ${pg.confidence ? " · " + pg.confidence : ""}
             ${pg.needs_reshoot ? " · 📷 re-acquire" : ""}
-            ${pg.status === "suspect" && pg.reasons?.length
-              ? ` · <span style="color:#b45309">⚠ ${esc(pg.reasons.join("; "))}</span>
-                 <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
-                   title="page is actually fine — clear the suspect flag"
-                   onclick="ignoreSuspect('${pg.id}')">ignore</button>` : ""}</span>
+            ${pg.reasons?.length
+              ? ` · <span style="color:#b45309">⚠ ${esc(pg.reasons.join("; "))}</span>`
+                + (pg.status === "suspect"
+                  ? ` <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+                       title="page is actually fine — clear the suspect flag"
+                       onclick="ignoreSuspect('${pg.id}')">ignore</button>` : "") : ""}</span>
           <span class="row" style="margin-left:auto">
             ${collapsed ? `
               ${pg.status === "duplicate" ? `<button class="secondary"

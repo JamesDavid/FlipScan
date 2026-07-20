@@ -12,12 +12,31 @@ import string
 import cv2
 import numpy as np
 
-from ..imaging import sharpness
+from ..imaging import order_quad, sharpness
 from ..workspace import Workspace
 
 EXPAND = 0.075          # grow the LLM bbox by 7.5% per side before snapping
 SNAP_MARGIN = 8         # px kept around detected content
 MIN_FIGURE_SHARPNESS = 40.0
+
+
+def crop_from_region(color: np.ndarray, region: dict) -> np.ndarray | None:
+    """Reproduce a stored crop exactly: perspective-correct quad_norm when the
+    user skewed the corners, else a straight bbox_norm slice."""
+    from .preprocess import correct_page
+
+    h, w = color.shape[:2]
+    if region.get("quad_norm") and len(region["quad_norm"]) == 4:
+        quad = order_quad(np.clip(np.array(region["quad_norm"], dtype=np.float64), 0, 1))
+        crop = correct_page(color, quad)
+    elif region.get("bbox_norm"):
+        x0, y0, x1, y1 = region["bbox_norm"]
+        crop = color[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
+    else:
+        return None
+    if crop.shape[0] < 10 or crop.shape[1] < 10:
+        return None
+    return crop
 
 
 def snap_bbox(gray: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> tuple[int, int, int, int]:
@@ -59,9 +78,28 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
         page_figs = []
 
         for i, region in enumerate(regions):
-            if (region.get("user_crop") or region.get("deleted")
-                    or region.get("auto_refined")):
-                continue  # user/auto-refined crops stay; deleted stays gone
+            if region.get("deleted"):
+                continue
+            letter = string.ascii_lowercase[i % 26]
+            name = f"{page['id']}_{letter}.png"
+            rel = f"figures/{name}"
+            if region.get("user_crop") or region.get("auto_refined"):
+                # a human placed (or accepted) this crop — keep it in the
+                # figure list and markdown, and regenerate the file from the
+                # stored geometry if it went missing
+                if not (fig_dir / name).exists():
+                    crop = crop_from_region(color, region)
+                    if crop is None:
+                        continue
+                    cv2.imwrite(str(fig_dir / name), crop)
+                page_figs.append(rel)
+                img_md = f"![{region.get('caption') or ''}]({rel})"
+                placeholder = f"[[region-{i}]]"
+                if placeholder in md:
+                    md = md.replace(placeholder, img_md)
+                elif rel not in md:
+                    md = md.rstrip() + f"\n\n{img_md}\n"
+                continue
             bx0, by0, bx1, by1 = region["bbox_norm"]
             dx, dy = (bx1 - bx0) * EXPAND, (by1 - by0) * EXPAND
             x0 = int(max(0.0, bx0 - dx) * w)
@@ -72,10 +110,7 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             if x1 - x0 < 20 or y1 - y0 < 20:
                 continue
             crop = color[y0:y1, x0:x1]
-            letter = string.ascii_lowercase[i % 26]
-            name = f"{page['id']}_{letter}.png"
             cv2.imwrite(str(fig_dir / name), crop)
-            rel = f"figures/{name}"
             page_figs.append(rel)
             total += 1
 
@@ -88,7 +123,7 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             placeholder = f"[[region-{i}]]"
             if placeholder in md:
                 md = md.replace(placeholder, img_md)
-            else:
+            elif rel not in md:  # don't stack a second copy on re-runs
                 md = md.rstrip() + f"\n\n{img_md}\n"
 
         md_path.write_text(md, encoding="utf-8")
