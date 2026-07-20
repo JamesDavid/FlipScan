@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import queue
@@ -276,7 +277,7 @@ def create_app(root: Path) -> FastAPI:
             while chunk := await video.read(1 << 22):
                 f.write(chunk)
         from ..project import add_video
-        entry = add_video(ws, dest, log=lambda m: None)
+        entry = await asyncio.to_thread(add_video, ws, dest, log=lambda m: None)
         return {"ok": True, "id": entry["id"]}
 
     @app.put("/api/projects/{name}/videos/{vid}")
@@ -302,11 +303,13 @@ def create_app(root: Path) -> FastAPI:
         tmp = uploads / Path(photo.filename or "page.jpg").name
         tmp.write_bytes(await photo.read())
         from ..project import add_page_from_photo
-        page = add_page_from_photo(ws, cfg, tmp, position=position,
-                                   role="cover" if cover else None,
-                                   log=lambda m: None)
+        page = await asyncio.to_thread(
+            add_page_from_photo, ws, cfg, tmp, position=position,
+            role="cover" if cover else None, transcribe=False,
+            log=lambda m: None)
         tmp.unlink(missing_ok=True)
-        return {"ok": True, "id": page["id"]}
+        return {"ok": True, "id": page["id"],
+                "transcription": "deferred — run the pipeline"}
 
     # ---------------- pages / patch / review
 
@@ -325,6 +328,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/pages/{page_id}/patch")
     async def patch_page(name: str, page_id: str, photo: UploadFile):
+        """Replace a page's capture. Transcription is DEFERRED to the next
+        pipeline run — running a model synchronously inside a request froze
+        the whole server (async endpoints run on the event loop)."""
         ws = ws_for(name)
         cfg = load_config(ws.root)
         page = ws.page(page_id)
@@ -343,12 +349,10 @@ def create_app(root: Path) -> FastAPI:
             page.pop(key, None)
 
         from ..stages.preprocess import preprocess_page
-        from ..stages.transcribe import run as transcribe_run
-        preprocess_page(ws, page, cfg)
-        ws.save()
-        transcribe_run(ws, cfg, log=lambda m: None)
+        await asyncio.to_thread(preprocess_page, ws, page, cfg)
         ws.stage_reset("figures")
-        return {"ok": True}
+        ws.save()
+        return {"ok": True, "transcription": "deferred — run the pipeline"}
 
     def _reconcile(ws):
         from ..stages.transcribe import reconcile
@@ -694,8 +698,9 @@ def create_app(root: Path) -> FastAPI:
 
         from ..project import add_page_from_photo
         if kind == "missing":
-            page = add_page_from_photo(ws, cfg, tmp, position="end",
-                                       transcribe=False, log=lambda m: None)
+            page = await asyncio.to_thread(
+                add_page_from_photo, ws, cfg, tmp, position="end",
+                transcribe=False, log=lambda m: None)
             page.pop("pinned", None)  # order by page number, not by "end"
             if number is not None:
                 page["printed_number"] = number
@@ -739,7 +744,7 @@ def create_app(root: Path) -> FastAPI:
             for key in ("confidence", "flags", "transcribe_error"):
                 page.pop(key, None)
             from ..stages.preprocess import preprocess_page
-            preprocess_page(ws, page, cfg)
+            await asyncio.to_thread(preprocess_page, ws, page, cfg)
             ws.stage_reset("figures")
             ws.save()
             result = page_id

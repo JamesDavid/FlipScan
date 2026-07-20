@@ -703,6 +703,9 @@ async function patchPage(pageId) {
   const r = await fetch(`/api/projects/${current}/pages/${pageId}/patch`,
                         {method:"POST", body: fd});
   if (!r.ok) { alert("patch failed"); return; }
+  if (confirm("Photo replaced. Run the pipeline now to re-transcribe it?")) {
+    await api(`/projects/${current}/run`, {method:"POST"});
+  }
   openProject(current, "pages");
 }
 
@@ -742,6 +745,9 @@ async function addPagePhoto() {
     `/api/projects/${current}/pages/add?position=${pos}&cover=${cover}`,
     {method:"POST", body: fd});
   if (!r.ok) { alert("add page failed"); return; }
+  if (confirm("Page added. Run the pipeline now to transcribe it?")) {
+    await api(`/projects/${current}/run`, {method:"POST"});
+  }
   openProject(current, "media");
 }
 
