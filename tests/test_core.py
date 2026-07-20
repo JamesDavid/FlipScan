@@ -185,6 +185,17 @@ def test_sanitize_keeps_manual_numbers():
     assert pages[1]["printed_number"] == 99  # user-entered survives
 
 
+def test_infer_from_video_capture_order():
+    from flipscan.stages.transcribe import infer_from_video_order
+    # descending pass, step 2: 117, ?, 113 -> the unknown must be 115
+    pages = [_cap("a", 100, 121), _cap("b", 200, 119), _cap("c", 300, 117),
+             _cap("d", 400, None, number_rejected=True),
+             _cap("e", 500, 113), _cap("f", 600, 111)]
+    assert infer_from_video_order(pages, log=lambda m: None) == 1
+    assert pages[3]["printed_number"] == 115
+    assert pages[3]["number_inferred"] and "number_rejected" not in pages[3]
+
+
 def test_front_matter_negative_numbers():
     from flipscan.stages.transcribe import compute_missing_pages
     pages = [_cap("toc", 100, -2), _cap("fwd", 200, -1),

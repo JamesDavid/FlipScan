@@ -409,7 +409,30 @@ function renderTab(tab, p) {
              "for covers, inside-cover text, or missed pages</div>"}
       </div>`;
   } else if (tab === "pages") {
-    body.innerHTML = p.pages.map(pg => {
+    // inline gap markers: two sequential known pages that aren't consecutive
+    // mean the pages between them were never captured
+    let lastNum = null;
+    const gapBefore = (pg) => {
+      if (pg.status === "duplicate" || pg.status === "deleted" || pg.role) return "";
+      const n = pg.printed_number;
+      if (n == null || n < 1) return "";
+      let out = "";
+      if (lastNum != null && n > lastNum + 1) {
+        const a = lastNum + 1, b = n - 1;
+        out = `<div class="card" style="border:2px dashed #f59e0b;background:#fffbeb;
+                 padding:.5rem 1.5rem;display:flex;gap:.8rem;align-items:center">
+          <span style="color:#b45309"><b>missing:</b>
+            page${b > a ? "s " + a + "–" + b : " " + a} — never captured</span>
+          <span class="meta" style="margin:0 0 0 auto">film this part of the book and
+            add the video, or add a photo (Media tab)</span>
+        </div>`;
+      }
+      lastNum = n;
+      return out;
+    };
+    body.innerHTML = p.pages.map(pg => gapBefore(pg) + (pg2html(pg))).join("")
+      + cropModalHtml();
+    function pg2html(pg) {
       const collapsed = pg.status === "deleted" || pg.status === "duplicate";
       const numLabel = pg.printed_number != null
         ? "printed " + pg.printed_number + (pg.number_inferred ? " (inferred)" : "")
@@ -488,7 +511,7 @@ function renderTab(tab, p) {
           </div>
         </div>
       </div>`;
-    }).join("") + cropModalHtml();
+    }
     p.pages.forEach(async pg => {
       if (pg.md) {
         const r = await fetch(`/api/projects/${name}/file/${pg.md}`);

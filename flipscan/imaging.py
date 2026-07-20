@@ -209,8 +209,10 @@ def find_flat_page(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
                 and (nx1 - nx0) < 0.75 * w):          # never the whole spread
             x0, y0, x1, y1 = nx0, ny0, nx1, ny1
 
-    mx, my = int((x1 - x0) * 0.10), int((y1 - y0) * 0.07)
-    box = (max(0, x0 - mx), max(0, y0 - my), min(w, x1 + mx), min(h, y1 + my))
+    mx = int((x1 - x0) * 0.10)
+    my_top = int((y1 - y0) * 0.07)
+    my_bot = int((y1 - y0) * 0.13)  # printed page numbers sit below the text block
+    box = (max(0, x0 - mx), max(0, y0 - my_top), min(w, x1 + mx), min(h, y1 + my_bot))
     bw, bh = box[2] - box[0], box[3] - box[1]
     bcx, bcy = box[0] + bw / 2, box[1] + bh / 2
     ok = (0.40 < bw / bh < 0.95

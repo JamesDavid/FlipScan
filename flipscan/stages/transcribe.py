@@ -68,12 +68,38 @@ def reorder_by_printed(pages: list[dict]) -> list[dict]:
     if not any(v is not None for v in nums):
         return pages  # nothing to order by
 
-    # unnumbered pages ride along with the page before them
+    # an unnumbered page's best position comes from its OWN video's capture
+    # order (two opposite-direction passes interleave by page number, so a
+    # global predecessor may belong to the other pass entirely)
+    def video_key(p) -> float | None:
+        vid, f = p.get("video"), _frame_no(p)
+        if vid is None or f is None:
+            return None
+        mates = sorted((q for q in middle
+                        if q.get("video") == vid and _frame_no(q) is not None
+                        and q.get("printed_number") is not None),
+                       key=_frame_no)
+        before = [q for q in mates if _frame_no(q) < f]
+        after = [q for q in mates if _frame_no(q) > f]
+        a = before[-1]["printed_number"] if before else None
+        b = after[0]["printed_number"] if after else None
+        if a is not None and b is not None:
+            return (a + b) / 2
+        if a is not None:
+            return a + 0.5 if not before or a >= (b or a) else a - 0.5
+        if b is not None:
+            return b - 0.5
+        return None
+
     keys: list[float] = []
     first_num = next(float(v) for v in nums if v is not None)
     for i in range(n):
         if nums[i] is not None:
             keys.append(float(nums[i]))
+            continue
+        vk = video_key(middle[i])
+        if vk is not None:
+            keys.append(vk + i * 1e-6)  # stable within ties
         elif keys:
             keys.append(keys[-1] + 0.001)
         else:
@@ -157,14 +183,14 @@ def sanitize_numbers_by_video(pages: list[dict], log=print) -> int:
         if n < 3:
             continue
 
-        def best_monotonic(sign: int) -> tuple[int, list[int]]:
+        def best_monotonic(sign: int, wts: list[int]) -> tuple[int, list[int]]:
             # O(n^2) weighted longest non-decreasing (sign=1) / non-increasing
-            best = list(weights)
+            best = list(wts)
             prev = [-1] * n
             for i in range(n):
                 for j in range(i):
-                    if (nums[i] - nums[j]) * sign >= 0 and best[j] + weights[i] > best[i]:
-                        best[i] = best[j] + weights[i]
+                    if (nums[i] - nums[j]) * sign >= 0 and best[j] + wts[i] > best[i]:
+                        best[i] = best[j] + wts[i]
                         prev[i] = j
             end = max(range(n), key=lambda i: best[i])
             keep, i = [], end
@@ -173,9 +199,23 @@ def sanitize_numbers_by_video(pages: list[dict], log=print) -> int:
                 i = prev[i]
             return best[end], keep
 
-        asc_w, asc_keep = best_monotonic(1)
-        desc_w, desc_keep = best_monotonic(-1)
-        keep = set(asc_keep if asc_w >= desc_w else desc_keep)
+        def pick(wts):
+            asc_w, asc_keep = best_monotonic(1, wts)
+            desc_w, desc_keep = best_monotonic(-1, wts)
+            return set(asc_keep if asc_w >= desc_w else desc_keep)
+
+        keep = pick(weights)
+        if any(w > 1 for w in weights):
+            # a manual anchor must never cost the rest of the video its numbers:
+            # if honoring it rejects noticeably more pages than ignoring it,
+            # the anchor itself is the outlier — keep it on its own page only
+            unweighted = pick([1] * n)
+            if len(unweighted) > len(keep) + 3:
+                log("  WARNING: a manually-set page number conflicts with its "
+                    "video's sequence — keeping it, but not letting it reject "
+                    "other pages")
+                keep = unweighted | {i for i in range(n)
+                                     if group[i].get("number_manual")}
         for i, p in enumerate(group):
             if i not in keep and not p.get("number_manual"):
                 p["printed_number"] = None
@@ -186,6 +226,57 @@ def sanitize_numbers_by_video(pages: list[dict], log=print) -> int:
         log(f"  rejected {rejected} printed numbers that break their video's "
             f"page order (misreads) — re-inferring from neighbors")
     return rejected
+
+
+def video_parity(pages: list[dict]) -> dict[str, int | None]:
+    """One flip pass captures every other page: detect each video's page-number
+    parity (0=even, 1=odd) when >80% of its read numbers agree; None if mixed."""
+    by_video: dict[str, list[int]] = {}
+    for p in _body_pages(pages):
+        n = p.get("printed_number")
+        if n is not None and n >= 1 and not p.get("number_inferred"):
+            by_video.setdefault(p.get("video") or "?", []).append(n % 2)
+    out: dict[str, int | None] = {}
+    for vid, bits in by_video.items():
+        if len(bits) >= 5:
+            frac = sum(bits) / len(bits)
+            out[vid] = 1 if frac > 0.8 else 0 if frac < 0.2 else None
+        else:
+            out[vid] = None
+    return out
+
+
+def infer_from_video_order(pages: list[dict], log=print) -> int:
+    """Fill unnumbered pages from their CAPTURE-ORDER neighbors in the same
+    video — the strongest signal there is. Neighbors 117, ?, 113 (descending,
+    step 2) pin the unknown to 115 even when the page landed far away in the
+    global order after its misread number was rejected."""
+    by_video: dict[str, list[dict]] = {}
+    for p in _body_pages(pages):
+        if _frame_no(p) is not None:
+            by_video.setdefault(p.get("video") or "?", []).append(p)
+
+    inferred = 0
+    for group in by_video.values():
+        group.sort(key=_frame_no)
+        numbered = [i for i, p in enumerate(group)
+                    if p.get("printed_number") is not None]
+        for a, b in zip(numbered, numbered[1:]):
+            unknown = group[a + 1:b]
+            if not unknown:
+                continue
+            span = group[b]["printed_number"] - group[a]["printed_number"]
+            slots = len(unknown) + 1
+            if span != 0 and span % slots == 0 and 1 <= abs(span // slots) <= 2:
+                step = span // slots
+                for k, p in enumerate(unknown, 1):
+                    p["printed_number"] = group[a]["printed_number"] + k * step
+                    p["number_inferred"] = True
+                    p.pop("number_rejected", None)
+                    inferred += 1
+    if inferred:
+        log(f"  inferred {inferred} page numbers from video capture order")
+    return inferred
 
 
 def infer_missing_numbers(pages: list[dict], log=print) -> int:
@@ -207,8 +298,13 @@ def infer_missing_numbers(pages: list[dict], log=print) -> int:
         # side per pass (204, ?, 208 -> 206); larger steps are too ambiguous
         if span > 0 and span % slots == 0 and 1 <= span // slots <= 2:
             step = span // slots
+            parity = video_parity(pages)
             for k, p in enumerate(unknown, 1):
-                p["printed_number"] = body[a]["printed_number"] + k * step
+                value = body[a]["printed_number"] + k * step
+                vp = parity.get(p.get("video") or "?")
+                if vp is not None and value % 2 != vp:
+                    continue  # this video only holds the other parity
+                p["printed_number"] = value
                 p["number_inferred"] = True
                 inferred += 1
         elif 0 < span <= len(unknown):
@@ -328,15 +424,28 @@ def _run_incremental(ws: Workspace, backend, todo, by_id, log) -> dict[str, dict
 def reconcile(ws: Workspace, pages: list[dict], log=print) -> list[dict]:
     """Post-transcription bookkeeping: reject numbers that break their video's
     capture order, collapse duplicates, order by number, infer unnumbered pages
-    from neighbors, and compute the never-captured page list."""
-    for p in pages:  # inferred numbers re-derive from scratch each pass
-        if p.get("number_inferred"):
+    from neighbors, and compute the never-captured page list.
+
+    Self-healing: every pass starts from the pristine model-read numbers in the
+    transcription cache (manual numbers excepted), so no rejection or inference
+    is ever permanent state — a bad edit or a bug can't poison the manifest."""
+    cache = load_cache(ws)
+    for p in pages:
+        if p.get("number_manual") or p.get("role"):
+            continue
+        rec = cache.get(cache_key(p) or "")
+        if rec is not None and p.get("md"):
+            p["printed_number"] = rec.get("printed_number")
+        elif p.get("number_inferred"):
             p["printed_number"] = None
-            p.pop("number_inferred", None)
+        p.pop("number_inferred", None)
+        p.pop("number_rejected", None)
+        p.pop("number_conflict", None)
     sanitize_numbers_by_video(pages, log)
+    infer_from_video_order(pages, log)  # strongest signal: capture order
     dedupe_by_printed(pages, log)
     pages = reorder_by_printed(pages)
-    infer_missing_numbers(pages, log)
+    infer_missing_numbers(pages, log)   # cross-video leftovers
     pages = reorder_by_printed(pages)
     ws.manifest["pages"] = pages
     ws.manifest["missing_pages"] = compute_missing_pages(pages)

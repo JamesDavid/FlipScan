@@ -365,16 +365,12 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no such page")
         fields = edit.model_fields_set
         if "printed_number" in fields:
+            # the cache keeps the pristine model-read value; manual numbers
+            # live in the manifest only (number_manual survives reconcile)
             page["printed_number"] = edit.printed_number
             page["number_manual"] = True
             page.pop("number_inferred", None)
             page.pop("number_conflict", None)
-            from ..stages.transcribe import cache_key, load_cache, save_cache
-            cache = load_cache(ws)
-            key = cache_key(page)
-            if key in cache:
-                cache[key]["printed_number"] = edit.printed_number
-                save_cache(ws, cache)
         if edit.needs_reshoot is not None:
             page["needs_reshoot"] = edit.needs_reshoot
         if edit.unduplicate:
