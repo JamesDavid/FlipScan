@@ -74,6 +74,7 @@ def next_page_id(ws: Workspace) -> str:
 
 def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
                         position: str = "end", role: str | None = None,
+                        transcribe: bool = True,
                         log: Callable[[str], None] = print) -> dict:
     """Insert a new page from a photo (cover, inside-cover text, missed page).
 
@@ -122,9 +123,11 @@ def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
         # covers are used as an image; no need to burn transcription on them
         page["md"] = None
         ws.save()
-    else:
+    elif transcribe:
         log(f"{page_id}: transcribing")
         transcribe_run(ws, cfg, log=log)
+    else:
+        ws.save()  # transcription deferred to the next pipeline run
     ws.stage_reset("figures")
     return page
 

@@ -585,6 +585,71 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no such page")
         return {"ok": True}
 
+    @app.get("/api/projects/{name}/capture-queue")
+    def capture_queue(name: str):
+        """Everything worth photographing, in page order: pages never captured
+        (from printed-number gaps) and badly-captured pages (reshoot list)."""
+        from ..review import reshoot_list
+        ws = ws_for(name)
+        items = []
+        for n in ws.manifest.get("missing_pages", []):
+            items.append({"kind": "missing", "number": n,
+                          "label": f"page {n}", "reasons": ["never captured"]})
+        for it in reshoot_list(ws):
+            items.append({"kind": "reshoot", "page_id": it["id"],
+                          "number": it.get("printed_number"),
+                          "label": (f"page {it['printed_number']}"
+                                    if it.get("printed_number") else it["id"]),
+                          "reasons": it["reasons"]})
+        items.sort(key=lambda i: (i["number"] is None, i["number"] or 0))
+        return {"items": items}
+
+    @app.post("/api/projects/{name}/capture")
+    async def capture(name: str, photo: UploadFile, kind: str,
+                      number: int | None = None, page_id: str | None = None):
+        """One wizard shot. Transcription is deferred so the user can bang
+        through the queue; the next pipeline run transcribes everything new."""
+        ws = ws_for(name)
+        cfg = load_config(ws.root)
+        uploads = ws.root / "uploads"
+        uploads.mkdir(exist_ok=True)
+        tmp = uploads / f"capture_{Path(photo.filename or 'shot.jpg').name}"
+        tmp.write_bytes(await photo.read())
+
+        from ..project import add_page_from_photo
+        if kind == "missing":
+            page = add_page_from_photo(ws, cfg, tmp, position="end",
+                                       transcribe=False, log=lambda m: None)
+            page.pop("pinned", None)  # order by page number, not by "end"
+            if number is not None:
+                page["printed_number"] = number
+                page["number_manual"] = True
+            _reconcile(ws)
+            result = page["id"]
+        elif kind == "reshoot" and page_id:
+            page = ws.page(page_id)
+            if page is None:
+                raise HTTPException(404, "no such page")
+            patches = ws.root / "patches"
+            patches.mkdir(exist_ok=True)
+            dest = patches / f"{page_id}{tmp.suffix or '.jpg'}"
+            dest.write_bytes(tmp.read_bytes())
+            page["patched_source"] = f"patches/{dest.name}"
+            page["status"] = "patched"
+            page["md"] = None
+            page.pop("needs_reshoot", None)
+            for key in ("confidence", "flags", "transcribe_error"):
+                page.pop(key, None)
+            from ..stages.preprocess import preprocess_page
+            preprocess_page(ws, page, cfg)
+            ws.stage_reset("figures")
+            ws.save()
+            result = page_id
+        else:
+            raise HTTPException(400, "bad capture kind")
+        tmp.unlink(missing_ok=True)
+        return {"ok": True, "page": result}
+
     @app.get("/api/projects/{name}/reshoot")
     def reshoot(name: str):
         from ..review import reshoot_list

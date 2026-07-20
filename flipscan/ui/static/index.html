@@ -343,14 +343,28 @@ function renderTab(tab, p) {
   if (tab === "pipeline") {
     api("/projects/" + name + "/reshoot").then(r => {
       const items = r.items || [];
+      const todo = (r.missing?.length || 0) + items.length;
+      const wizardCard = todo ? `
+        <div class="card" style="background:#f0fdfa;border:2px solid var(--accent)">
+          <div class="row">
+            <div style="flex:1;min-width:14rem">
+              <h2 style="margin-bottom:.2rem">📷 Capture wizard</h2>
+              <div class="meta">walk through all ${todo} missing / weak pages in
+                order and photograph them one after another — transcription runs
+                once at the end</div>
+            </div>
+            <button style="font-size:1.05rem;padding:.7rem 1.4rem"
+                    onclick="startWizard()">Start capturing</button>
+          </div>
+        </div>` : "";
       const missingCard = r.missing && r.missing.length ? `
         <div class="card" style="border:2px solid #f59e0b">
           <h2>Missing pages — never captured</h2>
           <p>Printed pages <b>${esc(r.missing_ranges)}</b> (${r.missing.length} pages)
           appear in no video. Film those parts of the book (any direction) and use
-          <b>+ Add video</b>, or add photos of them below.</p>
+          <b>+ Add video</b>, or photograph them with the capture wizard above.</p>
         </div>` : "";
-      body.innerHTML = missingCard
+      body.innerHTML = wizardCard + missingCard
         + `<div class="card"><h2>Reshoot list — captured badly</h2>` + (items.length
         ? "<ul>" + items.map(i =>
             `<li><a href="javascript:void(0)" onclick="gotoPage('${i.id}')"><b>${i.id}</b>${
@@ -720,6 +734,73 @@ async function buildFmt(fmt) {
     await api(`/projects/${current}/build?format=${fmt}&device=${dev}`, {method:"POST"});
     openProject(current, "output");
   } catch (e) { alert(e.message); }
+}
+
+// ---- capture wizard: walk missing/poor pages in order, camera-first
+let wiz = null;
+async function startWizard() {
+  const q = await api(`/projects/${current}/capture-queue`);
+  if (!q.items.length) { alert("Nothing to capture — the book looks complete!"); return; }
+  wiz = {items: q.items, i: 0, done: 0};
+  renderWizard();
+}
+
+function renderWizard() {
+  const it = wiz.items[wiz.i];
+  if (!it) { return finishWizard(); }
+  $("main").innerHTML = `
+  <div class="card" style="max-width:34rem;margin:0 auto;text-align:center">
+    <div class="meta">capture wizard · ${wiz.i + 1} of ${wiz.items.length}
+      · ${wiz.done} captured</div>
+    <h2 style="font-size:2.2rem;margin:.6rem 0">📖 ${esc(it.label)}</h2>
+    <div class="meta" style="margin-bottom:1rem">${esc(it.reasons.join(", "))}</div>
+    <div class="ptrack" style="margin-bottom:1.2rem"><div class="pfill"
+         style="width:${Math.round(100 * wiz.i / wiz.items.length)}%"></div></div>
+    <input type="file" accept="image/*" capture="environment" id="wiz-file"
+           style="display:none" onchange="wizardShot()">
+    <button style="font-size:1.3rem;padding:1rem 2.2rem;width:100%"
+            onclick="$('wiz-file').click()" id="wiz-btn">📷 Take photo</button>
+    <div class="row" style="margin-top:1rem;justify-content:center">
+      <button class="secondary" onclick="wiz.i++; renderWizard()">Skip</button>
+      <button class="secondary" onclick="finishWizard()">Finish</button>
+    </div>
+    <div class="meta" style="margin-top:1rem">Lay the book flat, fill the frame with
+      the page, keep the printed page number visible. Photos queue up —
+      transcription happens in one go when you finish.</div>
+  </div>`;
+}
+
+async function wizardShot() {
+  const input = $("wiz-file");
+  if (!input.files.length) return;
+  const it = wiz.items[wiz.i];
+  const btn = $("wiz-btn");
+  btn.disabled = true;
+  const fd = new FormData();
+  fd.append("photo", input.files[0]);
+  const params = it.kind === "missing"
+    ? `kind=missing&number=${it.number}`
+    : `kind=reshoot&page_id=${it.page_id}`;
+  try {
+    await uploadXHR(`/api/projects/${current}/capture?${params}`, fd,
+                    pct => btn.textContent = `uploading ${pct}%`);
+    wiz.done++;
+    wiz.i++;
+    renderWizard();
+  } catch (e) {
+    alert("capture failed: " + e.message);
+    btn.disabled = false;
+    btn.textContent = "📷 Take photo";
+  }
+}
+
+async function finishWizard() {
+  const done = wiz?.done || 0;
+  wiz = null;
+  if (done && confirm(`${done} pages captured. Run the pipeline now to transcribe them?`)) {
+    await api(`/projects/${current}/run`, {method:"POST"});
+  }
+  openProject(current);
 }
 
 async function gotoPage(pageId) {
