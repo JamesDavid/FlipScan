@@ -720,10 +720,12 @@ function startProgress(name) {
   progressTimer = setInterval(tick, 4000);
 }
 
+let logStream = null;   // only ever one open log stream
 function attachEvents(name) {
   const log = $("log");
   log.style.display = "block";
-  const es = new EventSource(`/api/projects/${name}/events`);
+  if (logStream) logStream.close();   // re-visiting the tab must not stack streams
+  const es = logStream = new EventSource(`/api/projects/${name}/events`);
   es.onmessage = (e) => {
     log.textContent += JSON.parse(e.data) + "\n";
     log.scrollTop = log.scrollHeight;

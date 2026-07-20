@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import threading
+from collections import deque
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -128,22 +129,38 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)
         if name in runs and runs[name]["thread"].is_alive():
             raise HTTPException(409, "already running")
-        q: queue.Queue = queue.Queue()
         cfg = load_config(ws.root)
         if provider:
             cfg["provider"]["name"] = provider
 
+        # fan-out log: every SSE stream gets its own queue, and ALL of them
+        # receive the final None terminator. A single shared queue meant only
+        # one stream ever saw the end-of-run marker — the others kept a
+        # threadpool thread parked forever (which eventually starved every
+        # sync endpoint in the app: the "server froze at end of run" bug).
+        run = {"subs": [], "history": deque(maxlen=1000),
+               "lock": threading.Lock(), "done": False}
+
+        def put(msg):
+            with run["lock"]:
+                run["history"].append(msg)
+                if msg is None:
+                    run["done"] = True
+                for sub in run["subs"]:
+                    sub.put(msg)
+
         def work():
             try:
-                run_pipeline(ws, cfg, force=force, log=lambda m: q.put(str(m)))
-                q.put("[pipeline] finished")
+                run_pipeline(ws, cfg, force=force, log=lambda m: put(str(m)))
+                put("[pipeline] finished")
             except Exception as e:  # surface errors into the log stream
-                q.put(f"[pipeline] ERROR: {e}")
+                put(f"[pipeline] ERROR: {e}")
             finally:
-                q.put(None)
+                put(None)
 
         t = threading.Thread(target=work, daemon=True)
-        runs[name] = {"queue": q, "thread": t}
+        run["thread"] = t
+        runs[name] = run
         t.start()
         return {"ok": True}
 
@@ -192,22 +209,41 @@ def create_app(root: Path) -> FastAPI:
         }
 
     @app.get("/api/projects/{name}/events")
-    def events(name: str):
+    async def events(name: str):
         if name not in runs:
             raise HTTPException(404, "no active run")
-        q = runs[name]["queue"]
+        run = runs[name]
+        sub: queue.Queue = queue.Queue()
+        with run["lock"]:
+            for msg in run["history"]:  # replay what this stream missed
+                sub.put(msg)
+            if not run["done"]:
+                run["subs"].append(sub)
 
-        def stream():
-            while True:
-                try:
-                    msg = q.get(timeout=120)
-                except queue.Empty:
-                    yield ": keepalive\n\n"
-                    continue
-                if msg is None:
-                    yield "event: done\ndata: done\n\n"
-                    break
-                yield f"data: {json.dumps(msg)}\n\n"
+        async def stream():
+            # non-blocking poll — an SSE reader must never park a threadpool
+            # thread; it may stay open (quietly) for hours
+            idle = 0.0
+            try:
+                while True:
+                    try:
+                        msg = sub.get_nowait()
+                    except queue.Empty:
+                        await asyncio.sleep(0.4)
+                        idle += 0.4
+                        if idle >= 20:
+                            idle = 0.0
+                            yield ": keepalive\n\n"
+                        continue
+                    idle = 0.0
+                    if msg is None:
+                        yield "event: done\ndata: done\n\n"
+                        break
+                    yield f"data: {json.dumps(msg)}\n\n"
+            finally:
+                with run["lock"]:
+                    if sub in run["subs"]:
+                        run["subs"].remove(sub)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
