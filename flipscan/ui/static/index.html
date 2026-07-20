@@ -924,11 +924,28 @@ async function finishWizard() {
 async function gotoPage(pageId) {
   await openProject(current, "pages");
   const el = document.getElementById("cell-" + pageId);
-  if (el) {
-    el.scrollIntoView({behavior: "smooth", block: "start"});
-    el.style.outline = "3px solid var(--accent)";
-    setTimeout(() => el.style.outline = "", 2500);
-  }
+  if (!el) return;
+  el.style.outline = "3px solid var(--accent)";
+  setTimeout(() => el.style.outline = "", 3000);
+  // images above the cell finish loading after we jump and push it away —
+  // keep re-pinning until layout settles or the user takes over scrolling
+  const main = $("main");
+  let userScrolled = false;
+  const takeOver = () => userScrolled = true;
+  main.addEventListener("wheel", takeOver, {passive: true});
+  main.addEventListener("touchmove", takeOver, {passive: true});
+  el.scrollIntoView({block: "start"});
+  const t0 = performance.now();
+  (function pin() {
+    if (userScrolled || performance.now() - t0 > 2500) {
+      main.removeEventListener("wheel", takeOver);
+      main.removeEventListener("touchmove", takeOver);
+      return;
+    }
+    const drift = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
+    if (Math.abs(drift) > 2) el.scrollIntoView({block: "start"});
+    requestAnimationFrame(pin);
+  })();
 }
 
 function toggleCell(pageId) {
