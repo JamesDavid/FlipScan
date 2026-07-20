@@ -223,9 +223,12 @@ def infer_missing_numbers(pages: list[dict], log=print) -> int:
 
 
 def compute_missing_pages(pages: list[dict]) -> list[int]:
-    """Printed numbers absent from the captured range = pages never captured."""
+    """Printed numbers absent from the captured range = pages never captured.
+    Zero/negative numbers are user-assigned front-matter ordering (title page,
+    TOC, foreword before page 1) — not part of the printed range."""
     nums = sorted({p["printed_number"] for p in _body_pages(pages)
-                   if p.get("printed_number") is not None})
+                   if p.get("printed_number") is not None
+                   and p["printed_number"] >= 1})
     if len(nums) < 2:
         return []
     return sorted(set(range(nums[0], nums[-1] + 1)) - set(nums))

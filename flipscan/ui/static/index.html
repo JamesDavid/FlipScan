@@ -397,7 +397,7 @@ function renderTab(tab, p) {
                  style="height:90px;border:1px solid var(--line);border-radius:4px">
             <div style="flex:1;min-width:10rem">
               <a href="javascript:void(0)" onclick="gotoPage('${pg.id}')"><b>${pg.id}</b></a>
-              <span class="badge ${pg.status}">${pg.status}</span>
+              <span class="badge ${pg.status}">${pg.status === "deleted" ? "hidden" : pg.status}</span>
               ${pg.role === "cover" ? '<span class="badge ok">cover</span>' : ""}
               <div class="meta">${pg.printed_number != null
                 ? "printed " + pg.printed_number : "no page number"}</div>
@@ -416,7 +416,7 @@ function renderTab(tab, p) {
       // row 1: identity + page-number reassignment
       const header = `
         <div class="row" style="padding:.15rem 0">
-          <span class="badge ${pg.status}">${pg.status}</span>
+          <span class="badge ${pg.status}">${pg.status === "deleted" ? "hidden" : pg.status}</span>
           <b>${pg.id}</b>
           <span class="meta" style="margin:0">${numLabel}
             ${pg.confidence ? " · " + pg.confidence : ""}
@@ -426,11 +426,12 @@ function renderTab(tab, p) {
               ${pg.status === "duplicate" ? `<button class="secondary"
                  onclick="unduplicate('${pg.id}')">Not a duplicate</button>` : ""}
               ${pg.status === "deleted" ? `<button class="secondary"
-                 onclick="restorePage('${pg.id}')">Restore</button>` : ""}
+                 onclick="restorePage('${pg.id}')">Unhide</button>` : ""}
               <button class="secondary" onclick="toggleCell('${pg.id}')"
                       id="tgl-${pg.id}">expand ▾</button>`
             : `<label style="margin:0">page #</label>
                <input type="number" id="num-${pg.id}" value="${pg.printed_number ?? ""}"
+                      title="0 or negative = front matter (sorts before page 1): title -3, TOC -2, foreword -1"
                       style="width:5.5rem;margin:0" onchange="setPageNumber('${pg.id}')">`}
           </span>
         </div>`;
@@ -440,7 +441,7 @@ function renderTab(tab, p) {
                style="height:90px;border:1px solid var(--line);border-radius:4px">
           <button class="secondary" style="position:absolute;bottom:4px;right:4px;
                   padding:.15rem .5rem;font-size:.7rem"
-                  onclick="openCrop('${pg.id}', ${i})">re-crop</button>
+                  onclick="openCrop('${pg.id}', ${i}, 'pages')">re-crop</button>
         </span>`).join("");
       return `
       <div class="card ${pg.status}" id="cell-${pg.id}">
@@ -470,8 +471,8 @@ function renderTab(tab, p) {
               ? `<button class="secondary" onclick="unduplicate('${pg.id}')">Not a duplicate</button>`
               : `<button class="secondary" onclick="markDuplicate('${pg.id}')">Mark as duplicate</button>`}
             ${pg.status === "deleted"
-              ? `<button class="secondary" onclick="restorePage('${pg.id}')">Restore</button>`
-              : `<button class="danger" onclick="deletePage('${pg.id}')">Delete</button>`}
+              ? `<button class="secondary" onclick="restorePage('${pg.id}')">Unhide</button>`
+              : `<button class="danger" onclick="deletePage('${pg.id}')">Hide</button>`}
           </div>
         </div>
       </div>`;
@@ -764,11 +765,11 @@ function cropModalHtml() {
 }
 
 let cropCtx = null;
-function openCrop(pageId, figIdx) {
+function openCrop(pageId, figIdx, origin = "figures") {
   const pg = window._proj.pages.find(p => p.id === pageId);
   // corners ordered tl,tr,br,bl (normalized); start from the existing region
   const bb = pg.regions?.[figIdx]?.bbox_norm;
-  cropCtx = {pageId, figIdx, mode: null, corner: -1,
+  cropCtx = {pageId, figIdx, origin, mode: null, corner: -1,
              quad: bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]] : null};
   const img = $("crop-img");
   img.src = `/api/projects/${current}/file/${pg.color}?t=${Date.now()}`;
@@ -837,7 +838,8 @@ async function saveCrop() {
       body: JSON.stringify({quad_norm: cropCtx.quad})});
   } catch (e) { alert("crop failed: " + e.message); return; }
   $("crop-modal").style.display = "none";
-  openProject(current, "figures");
+  if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
+  else openProject(current, "figures");
 }
 
 async function delFigure(pageId, figIdx) {
@@ -867,7 +869,6 @@ async function keepBest(items) {
 }
 
 async function deletePage(pageId) {
-  if (!confirm(`Delete ${pageId} from the book? (It stays visible here and can be restored.)`)) return;
   await api(`/projects/${current}/pages/${pageId}`, {method:"DELETE"});
   openProject(current, "pages");
 }

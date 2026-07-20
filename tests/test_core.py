@@ -185,6 +185,15 @@ def test_sanitize_keeps_manual_numbers():
     assert pages[1]["printed_number"] == 99  # user-entered survives
 
 
+def test_front_matter_negative_numbers():
+    from flipscan.stages.transcribe import compute_missing_pages
+    pages = [_cap("toc", 100, -2), _cap("fwd", 200, -1),
+             _cap("a", 300, 1), _cap("b", 400, 2), _cap("c", 500, 5)]
+    out = reorder_by_printed(pages)
+    assert [p["id"] for p in out] == ["toc", "fwd", "a", "b", "c"]
+    assert compute_missing_pages(pages) == [3, 4]  # negatives excluded from range
+
+
 def test_format_ranges():
     assert format_ranges([6, 7, 14, 22, 23, 24]) == "6-7, 14, 22-24"
     assert format_ranges([]) == ""
