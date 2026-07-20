@@ -508,9 +508,11 @@ function renderTab(tab, p) {
     });
     const figRow = (r) => `
       <div class="row" style="border-top:1px solid var(--line);padding:.7rem 0">
-        <a href="/api/projects/${name}/file/${r.f}?t=${Date.now()}" target="_blank">
+        <a href="javascript:void(0)" onclick="openCrop('${r.pg.id}', ${r.i})"
+           title="click to re-crop">
           <img src="/api/projects/${name}/file/${r.f}?t=${Date.now()}"
-               style="height:130px;border:1px solid var(--line);border-radius:4px"></a>
+               style="height:130px;border:1px solid var(--line);border-radius:4px;
+                      cursor:crosshair"></a>
         <div style="flex:1;min-width:12rem">
           <div><a href="javascript:void(0)" onclick="gotoPage('${r.pg.id}')">
             <b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
