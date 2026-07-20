@@ -38,6 +38,12 @@ class MarkdownEdit(BaseModel):
     markdown: str
 
 
+class BookEdit(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    expected_pages: int | None = None
+
+
 class PageEdit(BaseModel):
     printed_number: int | None = None
     needs_reshoot: bool | None = None
@@ -121,6 +127,18 @@ def create_app(root: Path) -> FastAPI:
             "outputs": [f.name for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
         }
+
+    @app.patch("/api/projects/{name}")
+    def edit_project(name: str, edit: BookEdit):
+        """Update book metadata: title, author, expected page count."""
+        ws = ws_for(name)
+        fields = edit.model_dump(exclude_unset=True)
+        for k in ("title", "author", "expected_pages"):
+            if k in fields:
+                v = fields[k]
+                ws.manifest["book"][k] = (v.strip() or None) if isinstance(v, str) else v
+        ws.save()
+        return {"ok": True, "book": ws.manifest["book"]}
 
     # ---------------- pipeline
 
@@ -857,7 +875,8 @@ def create_app(root: Path) -> FastAPI:
         try:
             if format == "epub":
                 from ..build_epub import build_epub
-                build_epub(ws, out, device=device, log=lambda m: None)
+                build_epub(ws, out, author=ws.manifest["book"].get("author"),
+                           device=device, log=lambda m: None)
             elif format == "pdf-facsimile":
                 from ..build_pdf import build_pdf_facsimile
                 build_pdf_facsimile(ws, out, device=device, log=lambda m: None)

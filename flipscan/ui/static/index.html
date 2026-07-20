@@ -310,6 +310,24 @@ async function createProject() {
 function toggleNav() { $("nav-drawer").classList.toggle("open"); }
 function closeNav() { $("nav-drawer").classList.remove("open"); }
 
+function toggleProjSettings() {
+  const el = $("proj-settings");
+  el.style.display = el.style.display === "none" ? "flex" : "none";
+}
+
+async function saveProjSettings() {
+  try {
+    await api("/projects/" + current, {method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        title: $("ps-title").value || null,
+        author: $("ps-author").value || null,
+        expected_pages: $("ps-pages").value ? +$("ps-pages").value : null})});
+  } catch (e) { alert("save failed: " + e.message); return; }
+  refreshProjects();
+  openProject(current);
+}
+
 async function openProject(name, tab) {
   current = name;
   const p = await api("/projects/" + name);
@@ -323,7 +341,24 @@ async function openProject(name, tab) {
     `<span class="stage ${st}" id="stage-${s}">${s}</span>`).join("");
   $("main").innerHTML = `
   <div class="card">
-    <h2>${esc(p.book.title || name)}</h2>
+    <h2 style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+      ${esc(p.book.title || name)}
+      <button class="secondary" style="padding:.15rem .6rem;font-size:.75rem"
+              title="edit title / author / page count"
+              onclick="toggleProjSettings()">✎</button></h2>
+    <div id="proj-settings" class="row" style="display:none;margin-bottom:.8rem">
+      <label style="margin:0">title</label>
+      <input id="ps-title" value="${esc(p.book.title || "")}"
+             style="width:14rem;margin:0">
+      <label style="margin:0">author</label>
+      <input id="ps-author" value="${esc(p.book.author || "")}"
+             style="width:11rem;margin:0">
+      <label style="margin:0" title="the book's last printed page number — helps
+             page-boundary detection and missing-page tracking">expected pages</label>
+      <input id="ps-pages" type="number" value="${p.book.expected_pages ?? ""}"
+             style="width:6rem;margin:0">
+      <button onclick="saveProjSettings()">Save</button>
+    </div>
     <div class="stages">${stages}</div>
     <div class="row">
       <button id="runbtn" onclick="runPipeline()" ${p.running ? "disabled" : ""}>
