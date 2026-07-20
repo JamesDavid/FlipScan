@@ -41,7 +41,8 @@ def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) ->
     md_path = ws.dir("pages") / f"{page['id']}.md"
     md_path.write_text(result["markdown"], encoding="utf-8")
     page["md"] = f"pages/{page['id']}.md"
-    page["printed_number"] = result["page_number_printed"]
+    if not page.get("number_manual"):  # a user-entered number outranks the model
+        page["printed_number"] = result["page_number_printed"]
     page["confidence"] = result["confidence"]
     page["regions"] = result["regions"]
     page["flags"] = result["flags"]
