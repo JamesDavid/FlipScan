@@ -16,31 +16,56 @@ _SENTENCE_END = re.compile(r'[.!?:;"”’)\]]\s*$')
 _HEADING = re.compile(r"^#{1,6}\s")
 
 
-def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.3) -> list[str]:
-    """Remove first/last lines that repeat across many pages (running headers/footers
-    the LLM failed to omit). Pure page numbers are always stripped."""
+def _norm_line(ln: str) -> str:
+    """Normalize for running-header comparison: drop markdown heading markers,
+    case, punctuation, and spacing — '## DIRIGIBLE DREAMS' and 'Dirigible
+    Dreams.' are the same running header."""
+    ln = re.sub(r"^#{1,6}\s*", "", ln.strip())
+    ln = re.sub(r"[^\w\s]", "", ln).lower()
+    return re.sub(r"\s+", " ", ln).strip()
+
+
+def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15) -> list[str]:
+    """Remove running headers/footers the LLM failed to omit: lines whose
+    NORMALIZED form opens or closes many pages (book title on one parity,
+    author on the other — each ~50% of half the pages, so the threshold is
+    low). A real chapter heading appears once and is never touched.
+    Pure page numbers are always stripped."""
     firsts, lasts = Counter(), Counter()
     for t in page_texts:
         lines = [ln for ln in t.splitlines() if ln.strip()]
-        if lines:
-            firsts[lines[0].strip()] += 1
-            lasts[lines[-1].strip()] += 1
+        for ln in lines[:2]:
+            firsts[_norm_line(ln)] += 1
+        for ln in lines[-2:]:
+            lasts[_norm_line(ln)] += 1
     n = max(1, len(page_texts))
-    repeated = {ln for ln, c in (firsts + lasts).items()
-                if c / n > threshold and not _HEADING.match(ln)}
+    repeated = ({ln for ln, c in firsts.items() if ln and c / n > threshold}
+                | {ln for ln, c in lasts.items() if ln and c / n > threshold})
+
+    def is_junk(ln: str) -> bool:
+        s = ln.strip()
+        return (not s or _norm_line(s) in repeated
+                or re.fullmatch(r"\d{1,4}", s) is not None)
 
     out = []
     for t in page_texts:
         lines = t.splitlines()
-        while lines and (not lines[0].strip()
-                         or lines[0].strip() in repeated
-                         or re.fullmatch(r"\d{1,4}", lines[0].strip())):
-            lines.pop(0)
-        while lines and (not lines[-1].strip()
-                         or lines[-1].strip() in repeated
-                         or re.fullmatch(r"\d{1,4}", lines[-1].strip())):
-            lines.pop()
-        out.append("\n".join(lines))
+        # only trim the page edges: up to 3 junk lines from each end
+        for _ in range(3):
+            while lines and not lines[0].strip():
+                lines.pop(0)
+            if lines and is_junk(lines[0]):
+                lines.pop(0)
+            else:
+                break
+        for _ in range(3):
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if lines and is_junk(lines[-1]):
+                lines.pop()
+            else:
+                break
+        out.append("\n".join(lines).strip())
     return out
 
 

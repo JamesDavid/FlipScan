@@ -487,6 +487,9 @@ function renderTab(tab, p) {
           <button class="secondary" style="position:absolute;bottom:4px;right:4px;
                   padding:.15rem .5rem;font-size:.7rem"
                   onclick="openCrop('${pg.id}', ${i}, 'pages')">re-crop</button>
+          <button class="secondary" style="position:absolute;bottom:4px;left:4px;
+                  padding:.15rem .5rem;font-size:.7rem" title="mark for close-up re-shoot"
+                  onclick="figReacq('${pg.id}', ${i})">re-acq</button>
         </span>`).join("")
         // regions whose figure crop never happened: offer to draw one
         + (pg.regions || []).map((r, ri) => {
@@ -581,12 +584,20 @@ function renderTab(tab, p) {
                  style="display:none" onchange="uploadFigure('${r.pg.id}', ${r.i})">
           <button class="secondary"
                   onclick="$('figup-${r.pg.id}-${r.i}').click()">Re-upload</button>
+          <button class="secondary"
+                  onclick="figReacq('${r.pg.id}', ${r.i})">Re-acquire</button>
           <button class="danger" onclick="delFigure('${r.pg.id}', ${r.i})">Delete</button>
         </span>
       </div>`;
     body.innerHTML = `<div class="card"><h2>Figures <span class="meta">
       (book order — re-crop, replace, or delete; duplicate groups can keep the
-      sharpest automatically)</span></h2>` +
+      sharpest automatically)</span></h2>
+      <div class="row" style="margin-bottom:.6rem">
+        <button class="secondary" onclick="autoRefine()">✨ Auto-refine crops
+          (edge detection)</button>
+        <span class="meta">snaps every non-hand-cropped figure to the actual
+          photo boundaries</span>
+      </div>` +
       (groups.map(g => g.rows.length > 1 ? `
         <div style="border:2px solid #f59e0b;border-radius:8px;padding:.2rem .8rem;
              margin:.6rem 0">
@@ -766,8 +777,9 @@ function startUnidentifiedWizard() {
 function renderWizard() {
   const it = wiz.items[wiz.i];
   if (!it) { return finishWizard(); }
-  const img = wiz.mode === "unidentified" && it.color ? `
-    <img src="/api/projects/${current}/file/${it.color}"
+  const preview = wiz.mode === "unidentified" ? it.color : it.preview;
+  const img = preview ? `
+    <img src="/api/projects/${current}/file/${preview}"
          style="max-height:45vh;border:1px solid var(--line);border-radius:6px;
                 margin-bottom:1rem">` : "";
   const title = wiz.mode === "unidentified"
@@ -820,6 +832,8 @@ async function wizardShot() {
   fd.append("photo", input.files[0]);
   const params = it.kind === "missing"
     ? `kind=missing&number=${it.number}`
+    : it.kind === "figure"
+    ? `kind=figure&page_id=${it.page_id}&fig_idx=${it.fig_idx}`
     : `kind=reshoot&page_id=${it.page_id}`;
   try {
     await uploadXHR(`/api/projects/${current}/capture?${params}`, fd,
@@ -915,6 +929,13 @@ function cropModalHtml() {
           ${[0,1,2,3].map(i => `<circle id="crop-h${i}" r="9" fill="#0d9488"
               stroke="#fff" stroke-width="2" style="display:none"/>`).join("")}
         </svg>
+        <div id="crop-loupe" style="display:none;position:absolute;width:140px;
+             height:140px;border:3px solid #0d9488;border-radius:50%;
+             background-repeat:no-repeat;pointer-events:none;z-index:5;
+             box-shadow:0 2px 12px rgba(0,0,0,.4)">
+          <div style="position:absolute;left:50%;top:50%;width:14px;height:14px;
+               margin:-7px 0 0 -7px;border:2px solid #dc2626;border-radius:50%"></div>
+        </div>
       </div>
     </div>
   </div>`;
@@ -964,8 +985,28 @@ function openCrop(pageId, figIdx, origin = "figures", isRegion = false) {
       cropCtx.quad[cropCtx.corner] = [x, y];
     }
     drawCropQuad();
+    showLoupe(x, y);
   };
-  stage.onpointerup = () => { cropCtx.mode = null; cropCtx.corner = -1; };
+  stage.onpointerup = () => {
+    cropCtx.mode = null; cropCtx.corner = -1;
+    $("crop-loupe").style.display = "none";
+  };
+}
+
+function showLoupe(nx, ny) {
+  // 3x magnifier centered on the drag point, offset so the finger doesn't hide it
+  const img = $("crop-img"), loupe = $("crop-loupe");
+  const Z = 3, L = 140;
+  const w = img.clientWidth, h = img.clientHeight;
+  loupe.style.display = "block";
+  loupe.style.backgroundImage = `url("${img.src}")`;
+  loupe.style.backgroundSize = `${w * Z}px ${h * Z}px`;
+  loupe.style.backgroundPosition =
+    `${-(nx * w * Z - L / 2)}px ${-(ny * h * Z - L / 2)}px`;
+  const lx = Math.max(0, Math.min(w - L, nx * w - L / 2));
+  const above = ny * h - L - 24;
+  loupe.style.left = lx + "px";
+  loupe.style.top = (above > 0 ? above : ny * h + 24) + "px";
 }
 
 function drawCropQuad() {
@@ -997,6 +1038,23 @@ async function saveCrop() {
   $("crop-modal").style.display = "none";
   if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
   else openProject(current, "figures");
+}
+
+async function autoRefine() {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = "refining…";
+  try {
+    const r = await api(`/projects/${current}/figures/auto-refine`, {method:"POST"});
+    alert(`${r.refined} figure crops refined by edge detection.`);
+  } catch (e) { alert("auto-refine failed: " + e.message); }
+  openProject(current, "figures");
+}
+
+async function figReacq(pageId, figIdx) {
+  try { await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}/reshoot`,
+                  {method:"POST"});
+  } catch (e) { alert("failed: " + e.message); return; }
+  alert("Marked — it joins the capture wizard queue as a close-up shot.");
 }
 
 async function delFigure(pageId, figIdx) {

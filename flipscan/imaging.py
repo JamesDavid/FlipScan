@@ -222,6 +222,51 @@ def find_flat_page(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
     return box if ok else None
 
 
+def refine_figure_bbox(color: np.ndarray,
+                       prior: list[float]) -> list[float] | None:
+    """Snap an approximate figure bbox to the actual photo on the page.
+
+    Photo pixels are edge-dense OR darker than the paper (the darkness cue
+    matters: smooth sky areas have no edges and would split the photo).
+    Every substantial component lying mostly inside the slightly-expanded
+    prior is union-merged into the refined box. None = not confident;
+    caller keeps the existing crop.
+    """
+    gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    med = float(np.median(gray))
+    edges = cv2.Canny(gray, 0.5 * med, 1.2 * med)
+    dark = (gray < med - 25).astype(np.uint8) * 255
+    mask = cv2.bitwise_or(cv2.dilate(edges, np.ones((3, 3), np.uint8)), dark)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    n, _labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+
+    ex = 0.06
+    px0, py0 = max(0.0, prior[0] - ex) * w, max(0.0, prior[1] - ex) * h
+    px1, py1 = min(1.0, prior[2] + ex) * w, min(1.0, prior[3] + ex) * h
+    ux0 = uy0 = float("inf")
+    ux1 = uy1 = -1.0
+    for i in range(1, n):
+        x, y, bw, bh, area = stats[i]
+        if area < 0.004 * h * w:
+            continue
+        ox = max(0, min(px1, x + bw) - max(px0, x))
+        oy = max(0, min(py1, y + bh) - max(py0, y))
+        if ox * oy < 0.5 * bw * bh:
+            continue
+        ux0, uy0 = min(ux0, x), min(uy0, y)
+        ux1, uy1 = max(ux1, x + bw), max(uy1, y + bh)
+    if ux1 < 0:
+        return None
+    m = 4
+    box = [max(0, ux0 - m) / w, max(0, uy0 - m) / h,
+           min(w, ux1 + m) / w, min(h, uy1 + m) / h]
+    prior_area = max(1e-6, (prior[2] - prior[0]) * (prior[3] - prior[1]))
+    if (box[2] - box[0]) * (box[3] - box[1]) < 0.15 * prior_area:
+        return None
+    return box
+
+
 def mask_outside(bgr: np.ndarray, mask: np.ndarray,
                  fill: tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
     """Paint everything outside the mask a flat color (hide desk clutter)."""

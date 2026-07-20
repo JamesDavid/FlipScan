@@ -524,6 +524,61 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/reshoot")
+    def figure_reshoot(name: str, page_id: str, fig_idx: int, flag: bool = True):
+        """Mark a figure for re-acquisition: the page text is fine, but the
+        figure deserves a dedicated higher-res photo."""
+        ws = ws_for(name)
+        _page, _rel, region = _figure(ws, page_id, fig_idx)
+        if region is None:
+            raise HTTPException(404, "figure has no region")
+        if flag:
+            region["needs_reshoot"] = True
+        else:
+            region.pop("needs_reshoot", None)
+        ws.save()
+        return {"ok": True}
+
+    @app.post("/api/projects/{name}/figures/auto-refine")
+    def auto_refine_figures(name: str):
+        """Edge-detection pass over every figure the user hasn't hand-cropped:
+        snap the model's approximate bbox to the actual photo and re-crop."""
+        import cv2
+
+        from ..imaging import refine_figure_bbox
+
+        ws = ws_for(name)
+        refined = 0
+        for page in ws.manifest["pages"]:
+            if page.get("status") in ("duplicate", "deleted") or not page.get("color"):
+                continue
+            regions = page.get("regions") or []
+            color = None
+            for ri, region in enumerate(regions):
+                if region.get("user_crop") or region.get("deleted"):
+                    continue
+                if color is None:
+                    color = cv2.imread(str(ws.root / page["color"]))
+                    if color is None:
+                        break
+                box = refine_figure_bbox(color, region["bbox_norm"])
+                if box is None:
+                    continue
+                h, w = color.shape[:2]
+                px = (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
+                if px[2] - px[0] < 20 or px[3] - px[1] < 20:
+                    continue
+                rel = f"figures/{page['id']}_{chr(97 + ri % 26)}.png"
+                cv2.imwrite(str(ws.root / rel), color[px[1]:px[3], px[0]:px[2]])
+                region["bbox_norm"] = box
+                region["auto_refined"] = True
+                if rel not in (page.get("figures") or []):
+                    page.setdefault("figures", []).append(rel)
+                refined += 1
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True, "refined": refined}
+
     @app.post("/api/projects/{name}/figures/keep-best")
     def keep_best_figure(name: str, spec: KeepBest):
         """Given duplicate captures of the same figure, keep the sharpest and
@@ -605,12 +660,29 @@ def create_app(root: Path) -> FastAPI:
                           "number": it["printed_number"],
                           "label": f"page {it['printed_number']}",
                           "reasons": it["reasons"]})
+        # figures flagged for a dedicated close-up shot
+        for p in ws.manifest["pages"]:
+            if p.get("status") in ("duplicate", "deleted") or p.get("role"):
+                continue
+            for ri, r in enumerate(p.get("regions") or []):
+                if r.get("needs_reshoot") and p.get("printed_number"):
+                    figs = p.get("figures") or []
+                    expected = f"figures/{p['id']}_{chr(97 + ri % 26)}.png"
+                    items.append({
+                        "kind": "figure", "page_id": p["id"], "fig_idx": ri,
+                        "number": p["printed_number"],
+                        "label": f"figure on page {p['printed_number']}",
+                        "reasons": [f"close-up of the "
+                                    f"{r.get('caption') or 'figure'}"],
+                        "preview": expected if expected in figs else None,
+                    })
         items.sort(key=lambda i: i["number"])
         return {"items": items}
 
     @app.post("/api/projects/{name}/capture")
     async def capture(name: str, photo: UploadFile, kind: str,
-                      number: int | None = None, page_id: str | None = None):
+                      number: int | None = None, page_id: str | None = None,
+                      fig_idx: int | None = None):
         """One wizard shot. Transcription is deferred so the user can bang
         through the queue; the next pipeline run transcribes everything new."""
         ws = ws_for(name)
@@ -630,6 +702,28 @@ def create_app(root: Path) -> FastAPI:
                 page["number_manual"] = True
             _reconcile(ws)
             result = page["id"]
+        elif kind == "figure" and page_id is not None and fig_idx is not None:
+            # fig_idx is the REGION index here (queue items address regions)
+            import cv2
+            import numpy as np
+            page = ws.page(page_id)
+            if page is None:
+                raise HTTPException(404, "no such page")
+            img = cv2.imdecode(np.frombuffer(tmp.read_bytes(), np.uint8),
+                               cv2.IMREAD_COLOR)
+            if img is None:
+                raise HTTPException(400, "not a readable image")
+            rel = f"figures/{page_id}_{chr(97 + fig_idx % 26)}.png"
+            cv2.imwrite(str(ws.root / rel), img)
+            if rel not in (page.get("figures") or []):
+                page.setdefault("figures", []).append(rel)
+            regions = page.get("regions") or []
+            if fig_idx < len(regions):
+                regions[fig_idx]["user_crop"] = True
+                regions[fig_idx].pop("needs_reshoot", None)
+            ws.stage_reset("assemble")
+            ws.save()
+            result = rel
         elif kind == "reshoot" and page_id:
             page = ws.page(page_id)
             if page is None:
