@@ -26,7 +26,18 @@ def split_chapters(book_md: str) -> list[tuple[str, str]]:
             buf.append(line)
     if buf:
         chapters.append((title or "Front Matter", "\n".join(buf)))
-    return chapters or [("Book", book_md)]
+
+    # merge consecutive same-title chapters (a heading repeated across pages
+    # is a section header, not a new chapter) and drop heading-only shells
+    merged: list[tuple[str, str]] = []
+    for t, body in chapters:
+        lines = body.splitlines()
+        rest = "\n".join(lines[1:]) if lines and lines[0].startswith("# ") else body
+        if merged and merged[-1][0] == t:
+            merged[-1] = (t, merged[-1][1] + "\n" + rest)
+        elif rest.strip():
+            merged.append((t, body))
+    return merged or [("Book", book_md)]
 
 
 def build_epub(ws: Workspace, out_path: Path, title: str | None = None,

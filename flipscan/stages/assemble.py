@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 
 from ..workspace import Workspace
 
 _SENTENCE_END = re.compile(r'[.!?:;"”’)\]]\s*$')
 _HEADING = re.compile(r"^#{1,6}\s")
+_TOC_ENTRY = re.compile(r"^(.{2,60}?)[\s.·]+(\d{1,4})\s*$")
 
 
 def _norm_line(ln: str) -> str:
@@ -25,7 +27,8 @@ def _norm_line(ln: str) -> str:
     return re.sub(r"\s+", " ", ln).strip()
 
 
-def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15) -> list[str]:
+def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15,
+                          extra_refs: set[str] | None = None) -> list[str]:
     """Remove running headers/footers the LLM failed to omit: lines whose
     NORMALIZED form opens or closes many pages (book title on one parity,
     author on the other — each ~50% of half the pages, so the threshold is
@@ -41,11 +44,25 @@ def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15) -> lis
     n = max(1, len(page_texts))
     repeated = ({ln for ln, c in firsts.items() if ln and c / n > threshold}
                 | {ln for ln, c in lasts.items() if ln and c / n > threshold})
+    # bad crops truncate the running header differently on every page
+    # ('BLE DREAMS', 'GIB DREAMS'), so exact counting misses them — an edge
+    # line is also junk when it fuzzy-matches a known header / title / author
+    refs = {r for r in repeated | (extra_refs or set()) if len(r) >= 6}
+
+    def fuzzy_header(s: str) -> bool:
+        if not (3 <= len(s) <= 40):
+            return False
+        return any(s in r or SequenceMatcher(None, s, r).ratio() >= 0.65
+                   for r in refs)
 
     def is_junk(ln: str) -> bool:
         s = ln.strip()
-        return (not s or _norm_line(s) in repeated
-                or re.fullmatch(r"\d{1,4}", s) is not None)
+        if s.startswith("!["):   # figure images are never running headers
+            return False
+        if not s or re.fullmatch(r"\d{1,4}", s):
+            return True
+        norm = _norm_line(s)
+        return norm in repeated or fuzzy_header(norm)
 
     out = []
     for t in page_texts:
@@ -67,6 +84,83 @@ def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15) -> lis
                 break
         out.append("\n".join(lines).strip())
     return out
+
+
+def parse_printed_toc(page_texts: list[str]) -> list[tuple[str, int]]:
+    """Find the book's own contents page and read the chapter list from it:
+    lines like 'Chapter 3 74' or 'Bibliography 247' under a CONTENTS heading.
+    This is ground truth for the book's structure."""
+    for t in page_texts:
+        if not re.search(r"^#{0,6}\s*contents\s*$", t, re.M | re.I):
+            continue
+        entries = []
+        for ln in t.splitlines():
+            mt = _TOC_ENTRY.match(ln.strip())
+            if not mt:
+                continue
+            title = re.sub(r"[.·\s]+$", "", mt.group(1)).strip()
+            if title and not title.startswith(("#", "!", "|")):
+                entries.append((title, int(mt.group(2))))
+        # a real TOC lists several ascending page numbers
+        nums = [n for _, n in entries]
+        if len(entries) >= 3 and nums == sorted(nums):
+            return entries
+    return []
+
+
+def _dedupe_headings(page_texts: list[str]) -> list[str]:
+    """A level-1 heading repeated on later pages ('INDEX' atop every index
+    page, a chapter name re-shown mid-chapter) is a section running header —
+    keep the first occurrence, drop the rest."""
+    seen: set[str] = set()
+    out = []
+    for t in page_texts:
+        lines = []
+        for ln in t.splitlines():
+            if ln.startswith("# "):
+                key = _norm_line(ln)
+                if key in seen:
+                    continue
+                seen.add(key)
+            lines.append(ln)
+        out.append("\n".join(lines))
+    return out
+
+
+def _insert_chapter_breaks(pages: list[dict], texts: list[str],
+                           toc: list[tuple[str, int]], log=print) -> list[str]:
+    """The printed TOC says chapter N starts on printed page P. If that page
+    exists but lost its opening heading (bad crop, missed transcription),
+    prepend one so the built book keeps the chapter structure."""
+    by_num = {}
+    for i, p in enumerate(pages):
+        n = p.get("printed_number")
+        if isinstance(n, int) and n not in by_num:
+            by_num[n] = i
+    added = 0
+    for title, start in toc:
+        i = by_num.get(start)
+        if i is None or not texts[i].strip():
+            continue
+        lines = texts[i].splitlines()
+        first = next((j for j, ln in enumerate(lines) if ln.strip()), None)
+        if first is not None and _HEADING.match(lines[first]):
+            # the page opens with its own heading ('## ONE') — promote it to
+            # level 1 so it splits a chapter, keeping the book's own title
+            promoted = re.sub(r"^#{1,6}\s*", "# ", lines[first])
+            if promoted != lines[first]:
+                lines[first] = promoted
+                texts[i] = "\n".join(lines)
+                added += 1
+            continue
+        head = [ln for ln in lines if ln.strip()][:2]
+        if any(_HEADING.match(ln) for ln in head):
+            continue  # a heading close to the top — leave the page alone
+        texts[i] = f"# {title}\n\n{texts[i]}"
+        added += 1
+    if added:
+        log(f"  adjusted {added} chapter openings from the printed contents page")
+    return texts
 
 
 def _join_pages(pages: list[str]) -> str:
@@ -94,10 +188,11 @@ def _join_pages(pages: list[str]) -> str:
 
 
 def run(ws: Workspace, cfg: dict, log=print) -> None:
-    texts, missing = [], []
+    texts, kept, missing = [], [], []
     for page in ws.manifest["pages"]:
         if page.get("role") == "cover" or page.get("status") in ("duplicate", "deleted"):
             continue  # covers are images; duplicates merged; deleted excluded
+        kept.append(page)
         if page.get("md"):
             texts.append((ws.root / page["md"]).read_text(encoding="utf-8"))
         else:
@@ -106,7 +201,15 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     if missing:
         log(f"  WARNING: {len(missing)} pages have no transcription: {', '.join(missing)}")
 
-    texts = _strip_repeated_lines(texts)
+    book_meta = ws.manifest["book"]
+    extra_refs = {_norm_line(s) for s in (book_meta.get("title"),
+                                          book_meta.get("author")) if s}
+    toc = parse_printed_toc(texts)
+    if toc:
+        log(f"  printed contents page found: {len(toc)} entries")
+    texts = _strip_repeated_lines(texts, extra_refs=extra_refs)
+    texts = _dedupe_headings(texts)
+    texts = _insert_chapter_breaks(kept, texts, toc, log)
     # unresolved figure placeholders (region never cropped) must not reach
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]

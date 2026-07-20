@@ -280,3 +280,53 @@ def test_dewarp_straightens_bowed_lines():
         return float(np.ptp(tops))
 
     assert top_envelope_ptp(out) < top_envelope_ptp(img) * 0.5
+
+
+# ---------------- printed TOC + header cleanup
+
+def test_parse_printed_toc():
+    from flipscan.stages.assemble import parse_printed_toc
+    toc_page = ("# CONTENTS\n\nIntroduction 1\nChapter 1 9\nChapter 2 45\n"
+                "Notes 239\nIndex 253\n")
+    assert parse_printed_toc(["body text", toc_page]) == [
+        ("Introduction", 1), ("Chapter 1", 9), ("Chapter 2", 45),
+        ("Notes", 239), ("Index", 253)]
+    # a page that merely mentions the word is not a TOC
+    assert parse_printed_toc(["contents of the gasbag spilled 12"]) == []
+
+
+def test_strip_fuzzy_header_fragments():
+    from flipscan.stages.assemble import _strip_repeated_lines
+    pages = [f"## DIRIGIBLE DREAMS\nunique page text number {i}"
+             for i in range(5)] + [
+        "## BLE DREAMS\nthe expedition sailed north",   # cropped title fragment
+        "## GIB DREAMS\nthe crew mutinied at dawn",     # OCR-mangled fragment
+        "# ONE\nchapter opener stays",
+    ]
+    out = _strip_repeated_lines(pages, extra_refs={"dirigible dreams"})
+    assert out[5] == "the expedition sailed north"
+    assert out[6] == "the crew mutinied at dawn"
+    assert out[7].startswith("# ONE")
+
+
+def test_dedupe_headings_and_chapter_promotion():
+    from flipscan.stages.assemble import (_dedupe_headings,
+                                          _insert_chapter_breaks)
+    texts = ["# INDEX\nAlpha", "# INDEX\nBeta", "## ONE\nchapter text",
+             "plain start page"]
+    texts = _dedupe_headings(texts)
+    assert texts[1] == "Beta"                     # repeated heading dropped
+    pages = [{"printed_number": n} for n in (250, 251, 9, 45)]
+    texts = _insert_chapter_breaks(pages, texts,
+                                   [("Chapter 1", 9), ("Chapter 2", 45)],
+                                   log=lambda m: None)
+    assert texts[2].splitlines()[0] == "# ONE"    # promoted to level 1
+    assert texts[3].startswith("# Chapter 2\n")   # heading lost -> inserted
+
+
+def test_split_chapters_merges_consecutive_duplicates():
+    from flipscan.build_epub import split_chapters
+    md = "# INDEX\nAlpha\n# INDEX\nBeta\n# NOTES\nGamma"
+    got = split_chapters(md)
+    assert [t for t, _ in got] == ["INDEX", "NOTES"]
+    assert "Beta" in got[0][1]
