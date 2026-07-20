@@ -25,7 +25,8 @@ def page_reasons(p: dict) -> list[str]:
     if p.get("figure_quality"):
         reasons.append("figure source frame is low quality")
     if p.get("needs_reshoot"):
-        reasons.append("marked for re-acquisition by you")
+        note = f" — “{p['flag_note']}”" if p.get("flag_note") else ""
+        reasons.append(f"marked for re-acquisition by you{note}")
     if any(r.get("needs_reshoot") for r in p.get("regions") or []):
         reasons.append("figure marked for re-acquisition (shoot it close-up)")
     if p.get("number_rejected"):

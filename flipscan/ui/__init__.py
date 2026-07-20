@@ -53,6 +53,11 @@ class PageEdit(BaseModel):
     section: str | None = None   # "" clears; this page then opens a chapter
 
 
+class ReaderFlag(BaseModel):
+    snippet: str
+    note: str | None = None
+
+
 class CropEdit(BaseModel):
     bbox_norm: list[float] | None = None
     quad_norm: list[list[float]] | None = None  # 4 corners; skewed quads get
@@ -507,6 +512,10 @@ def create_app(root: Path) -> FastAPI:
             page["status"] = "duplicate"
             page["manual_duplicate"] = True  # auto-dedupe keeps hands off
         if edit.ignore_suspect:
+            from ..review import page_reasons
+            # remember what the complaint was — the page shows "acceptable"
+            # with the original issue noted, not a clean bill of health
+            page["ignored_reasons"] = page_reasons(page)
             page["suspect_ignored"] = True   # the user vouches for this page
         if "section" in fields:
             s = (edit.section or "").strip()
@@ -923,6 +932,35 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "bad capture kind")
         tmp.unlink(missing_ok=True)
         return {"ok": True, "page": result}
+
+    @app.post("/api/projects/{name}/reader-flag")
+    def reader_flag(name: str, flag: ReaderFlag):
+        """Flag an issue from inside the EPUB reader: match the passage the
+        reader is showing back to its source page and mark that page for
+        re-acquisition."""
+        import re as _re
+        ws = ws_for(name)
+
+        def squash(s: str) -> str:  # hyphenation/whitespace differ between
+            return _re.sub(r"[^a-z0-9]", "", s.lower())  # book.md and page md
+
+        target = squash(flag.snippet)[:160]
+        if len(target) < 12:
+            raise HTTPException(400, "snippet too short to locate the page")
+        for p in ws.manifest["pages"]:
+            if (p.get("status") in ("duplicate", "deleted") or p.get("role")
+                    or not p.get("md")):
+                continue
+            f = ws.root / p["md"]
+            if f.exists() and target in squash(f.read_text(encoding="utf-8")):
+                p["needs_reshoot"] = True
+                if flag.note:
+                    p["flag_note"] = flag.note.strip()
+                ws.save()
+                return {"ok": True, "page": p["id"],
+                        "printed_number": p.get("printed_number")}
+        raise HTTPException(404, "couldn't match this passage to a page — "
+                                 "flag it from the Pages tab instead")
 
     @app.get("/api/projects/{name}/reshoot")
     def reshoot(name: str):

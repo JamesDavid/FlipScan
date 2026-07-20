@@ -107,6 +107,8 @@
   .badge { font-size:.7rem; padding:.1rem .45rem; border-radius:999px; }
   .badge.suspect { background:#fee2e2; color:var(--bad); }
   .badge.ok { background:#dcfce7; color:#166534; }
+  .badge.acceptable { background:#ffedd5; color:#c2410c; }
+  .card.accepted { border-left:4px solid #fb923c; }
   .badge.patched { background:#dbeafe; color:#1d4ed8; }
   .badge.duplicate { background:#fef9c3; color:#854d0e; }
   .pagerow.duplicate { opacity:.55; }
@@ -591,10 +593,17 @@ function renderTab(tab, p) {
         ? "printed " + pg.printed_number + (pg.number_inferred ? " (inferred)" : "")
           + (pg.number_manual ? " (manual)" : "")
         : "no page number";
+      // an ignored suspect is "acceptable" (orange), never a clean green ok —
+      // and it keeps a note of what the complaint was
+      const accepted = pg.suspect_ignored && pg.status === "ok";
+      const badge = accepted
+        ? `<span class="badge acceptable"
+             title="was flagged suspect — you reviewed and accepted it">acceptable</span>`
+        : `<span class="badge ${pg.status}">${pg.status === "deleted" ? "hidden" : pg.status}</span>`;
       // row 1: identity + page-number reassignment
       const header = `
         <div class="row" style="padding:.15rem 0">
-          <span class="badge ${pg.status}">${pg.status === "deleted" ? "hidden" : pg.status}</span>
+          ${badge}
           <b>${pg.id}</b>
           ${pg.section ? `<span class="badge ok" style="cursor:pointer"
              title="this page starts a chapter (click to edit)"
@@ -611,7 +620,10 @@ function renderTab(tab, p) {
                 + (pg.status === "suspect"
                   ? ` <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
                        title="page is actually fine — clear the suspect flag"
-                       onclick="ignoreSuspect('${pg.id}')">ignore</button>` : "") : ""}</span>
+                       onclick="ignoreSuspect('${pg.id}')">ignore</button>` : "") : ""}
+            ${accepted ? ` · <span style="color:#c2410c" title="the original complaint">
+              was: ${esc((pg.ignored_reasons || ["flagged suspect"]).join("; "))}
+              — ignored by you</span>` : ""}</span>
           <span class="row" style="margin-left:auto">
             ${collapsed ? `
               ${pg.status === "duplicate" ? `<button class="secondary"
@@ -652,7 +664,7 @@ function renderTab(tab, p) {
               </button>` : "";
           }).join("");
       return `
-      <div class="card ${pg.status}" id="cell-${pg.id}">
+      <div class="card ${pg.status}${accepted ? " accepted" : ""}" id="cell-${pg.id}">
         ${header}
         <div class="pagerow-body" style="${collapsed ? "display:none" : ""}">
           <div class="pagegrid">
@@ -693,6 +705,13 @@ function renderTab(tab, p) {
         if (r.ok && $("md-" + pg.id)) $("md-" + pg.id).value = await r.text();
       }
     });
+    try {   // hand-off from the EPUB reader's per-figure ✂ re-crop button
+      const pend = JSON.parse(localStorage.getItem("flipscan-open-crop") || "null");
+      if (pend && pend.project === name) {
+        localStorage.removeItem("flipscan-open-crop");
+        openCrop(pend.pageId, pend.figIdx, "pages");
+      }
+    } catch {}
   } else if (tab === "frames") {
     body.innerHTML = `<div class="card"><h2>Canonical frames (contact sheet)</h2>
       ${p.contact_sheet

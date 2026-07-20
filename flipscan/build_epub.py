@@ -81,6 +81,10 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
         for rel, epub_name in added_images.items():
             ch_md = ch_md.replace(f"({rel})", f"({epub_name})")
         html = md_lib.markdown(ch_md, extensions=["tables"])
+        # figure identity survives the reader's blob-URL rewriting via a data
+        # attribute — the in-browser reader maps it back to page + crop slot
+        html = re.sub(r'<img([^>]*?)src="images/(p\d+_[a-z])',
+                      r'<img data-fig="\2"\1src="images/\2', html)
         ch = epub.EpubHtml(title=ch_title, file_name=f"ch{i:03d}.xhtml", lang="en")
         ch.content = f"<html><body>{html}</body></html>"
         book.add_item(ch)
