@@ -700,8 +700,12 @@ function renderTab(tab, p) {
               ${figs ? `<div class="row" style="margin-top:.4rem">${figs}</div>` : ""}
             </div>
             <div>
-              <textarea id="md-${pg.id}" data-page="${pg.id}"></textarea>
-              <button style="margin-top:.4rem" onclick="saveMd('${pg.id}')">Save markdown</button>
+              <textarea id="md-${pg.id}" data-page="${pg.id}"
+                oninput="this.dataset.dirty=1;
+                         const b=$('mdsave-${pg.id}');
+                         b.textContent='Save markdown *';b.disabled=false"></textarea>
+              <button style="margin-top:.4rem" id="mdsave-${pg.id}"
+                onclick="saveMd('${pg.id}')">Save markdown</button>
             </div>
           </div>
           <div class="row" style="border-top:1px solid var(--line);margin-top:.8rem;
@@ -733,8 +737,14 @@ function renderTab(tab, p) {
           if (!el) continue;
           try {
             const r = await fetch(`/api/projects/${name}/file/${pg.md}`);
-            if (r.ok) { const t = await r.text(); const e = $("md-" + pg.id);
-                        if (e) e.value = t; }
+            if (r.ok) {
+              const t = await r.text();
+              const e = $("md-" + pg.id);
+              // NEVER overwrite an editor the user has touched or is in —
+              // this race used to eat in-progress edits
+              if (e && !e.dataset.dirty && document.activeElement !== e)
+                e.value = t;
+            }
           } catch {}
         }
       };
@@ -1023,9 +1033,16 @@ function attachEvents(name) {
 }
 
 async function saveMd(pageId) {
+  const btn = $("mdsave-" + pageId);
   try { await api(`/projects/${current}/pages/${pageId}/md`, {
     method:"PUT", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({markdown: $("md-" + pageId).value})}); } catch (e) { alert('save failed: ' + e.message); return; }
+  delete $("md-" + pageId).dataset.dirty;
+  if (btn) {
+    btn.textContent = "✓ saved";
+    btn.disabled = true;
+    setTimeout(() => { btn.textContent = "Save markdown"; btn.disabled = false; }, 1800);
+  }
 }
 
 async function patchPage(pageId) {
