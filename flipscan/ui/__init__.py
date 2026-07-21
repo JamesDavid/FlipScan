@@ -62,6 +62,13 @@ class FindingEdit(BaseModel):
     replacement: str | None = None   # user-authored fix ("" deletes the quote)
 
 
+class Cleanup(BaseModel):
+    # NOTE: request-body models MUST live at module scope — defined inside
+    # create_app, future-annotations make FastAPI treat them as query params
+    categories: list[str] = []
+    videos: list[str] = []           # video ids whose SOURCE file to delete
+
+
 class CropEdit(BaseModel):
     bbox_norm: list[float] | None = None
     quad_norm: list[list[float]] | None = None  # 4 corners; skewed quads get
@@ -1071,10 +1078,6 @@ def create_app(root: Path) -> FastAPI:
         for c in r["categories"].values():
             c.pop("_files", None)
         return r
-
-    class Cleanup(BaseModel):
-        categories: list[str] = []
-        videos: list[str] = []      # video ids whose SOURCE file to delete
 
     @app.post("/api/projects/{name}/cleanup")
     def cleanup(name: str, req: Cleanup):
