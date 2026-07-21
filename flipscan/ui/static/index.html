@@ -802,8 +802,9 @@ function renderTab(tab, p) {
        || "<div class='meta'>no figures yet</div>") + `</div>` + cropModalHtml();
   } else if (tab === "proof") {
     const sevColor = {high: "#dc2626", medium: "#d97706", low: "#78716c"};
-    const findingHtml = (f) => `
-      <div style="border-top:1px solid var(--line);padding:.45rem 0;font-size:.85rem">
+    const findingHtml = (f, ci, fi) => `
+      <div style="border-top:1px solid var(--line);padding:.45rem 0;font-size:.85rem${
+          f.rejected ? ";opacity:.55" : ""}">
         <span style="color:${sevColor[f.severity] || "#78716c"}">●</span>
         <b>${esc(f.type)}</b>
         ${f.page ? ` · <a href="javascript:void(0)"
@@ -811,10 +812,19 @@ function renderTab(tab, p) {
               ? "page " + f.printed_number : f.page}</a>` : ""}
         ${f.source === "lint" ? ' · <span class="meta">auto-check</span>' : ""}
         <div style="font-family:ui-monospace,monospace;font-size:.78rem;margin:.15rem 0">
-          “${esc(f.quote)}”${f.replacement != null ? ` → “${esc(f.replacement)}”` : ""}
-          ${f.applied ? ' <span style="color:#166534">✓ applied</span>'
+          “${esc(f.quote)}”${f.replacement != null
+            ? ` → <span style="${f.rejected ? "text-decoration:line-through" : ""}">“${esc(f.replacement)}”</span>` : ""}
+          ${f.rejected
+            ? ` <span style="color:#78716c">rejected</span>
+                <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
+                  onclick="toggleFinding(${ci}, ${fi}, true)">re-apply</button>`
+            : f.applied
+            ? ` <span style="color:#166534">✓ applied</span>
+                <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
+                  title="undo just this one fix"
+                  onclick="toggleFinding(${ci}, ${fi}, false)">reject</button>`
             : f.replacement != null
-            ? ' <span style="color:#b45309">suggested only</span>' : ""}
+            ? ' <span style="color:#b45309">suggested only — quote not unique in the chapter</span>' : ""}
         </div>
         ${f.note ? `<div class="meta" style="margin:0">${esc(f.note)}</div>` : ""}
       </div>`;
@@ -840,8 +850,13 @@ function renderTab(tab, p) {
         </div>
         ${c.status === "stale" ? `<div class="meta" style="color:#b45309;margin:.3rem 0 0">
            chapter text changed since this proof — re-run before accepting</div>` : ""}
+        ${c.status === "accepted" ? `<div class="meta" style="color:#166534;margin:.3rem 0 0">
+           accepted — the next EPUB/PDF build uses this proofed text</div>`
+         : c.status === "review" ? `<div class="meta" style="margin:.3rem 0 0">
+           in review — builds keep using the unproofed text until you accept</div>` : ""}
         ${d && d.findings?.length
-          ? `<div style="margin-top:.5rem">${d.findings.map(findingHtml).join("")}</div>`
+          ? `<div style="margin-top:.5rem">${d.findings.map((f, fi) =>
+              findingHtml(f, c.idx, fi)).join("")}</div>`
           : d ? `<div class="meta" style="margin-top:.4rem">clean — no findings</div>` : ""}
       </div>`;
     };
@@ -1198,6 +1213,13 @@ async function runProof(idx, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "proofreading…"; }
   try { await api(`/projects/${current}/proof/${idx}/run`, {method: "POST"}); }
   catch (e) { alert(e.message); }
+  renderTab("proof", window._proj);
+}
+
+async function toggleFinding(ci, fi, enabled) {
+  try { await api(`/projects/${current}/proof/${ci}/finding/${fi}?enabled=${enabled}`,
+                  {method: "POST"}); }
+  catch (e) { alert(e.message); return; }
   renderTab("proof", window._proj);
 }
 

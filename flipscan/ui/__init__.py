@@ -1013,6 +1013,18 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(502, f"proofread failed: {e}")
         return d
 
+    @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}")
+    def proof_finding(name: str, idx: int, fi: int, enabled: bool):
+        """Per-finding accept/reject: rebuilds the proofed chapter copy."""
+        from ..proofread import toggle_finding
+        ws = ws_for(name)
+        try:
+            return toggle_finding(ws, idx, fi, enabled)
+        except (FileNotFoundError, IndexError) as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
     @app.post("/api/projects/{name}/proof/{idx}/review")
     def proof_review(name: str, idx: int, accept: bool):
         from ..proofread import load_proof, save_proof

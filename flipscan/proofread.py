@@ -239,6 +239,32 @@ def proofread_chapter(ws: Workspace, cfg: dict, idx: int) -> dict:
     return data
 
 
+def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool) -> dict:
+    """Reject or re-enable one finding's fix; the proofed copy is rebuilt
+    from the base chapter + all still-enabled edits."""
+    d = load_proof(ws, idx)
+    if d is None:
+        raise FileNotFoundError("chapter not proofread yet")
+    chs = chapters(ws)
+    if not 0 <= idx < len(chs):
+        raise IndexError(f"no chapter {idx}")
+    _title, md = chs[idx]
+    if chapter_hash(md) != d.get("base_hash"):
+        raise ValueError("chapter text changed since this proof — re-run it")
+    if not 0 <= fi < len(d["findings"]):
+        raise IndexError(f"no finding {fi}")
+    d["findings"][fi]["rejected"] = not enabled
+    for f in d["findings"]:
+        f["applied"] = False
+    proofed, applied = apply_edits(
+        md, [f for f in d["findings"] if not f.get("rejected")])
+    d["proofed_md"] = proofed
+    d["applied"] = applied
+    d["heavy"] = abs(len(proofed) - len(md)) > max(200, len(md) * 0.05)
+    save_proof(ws, idx, d)
+    return d
+
+
 def proof_status(ws: Workspace) -> list[dict]:
     """One row per chapter for the UI: proof state vs the current text."""
     rows = []
