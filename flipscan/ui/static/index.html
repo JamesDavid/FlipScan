@@ -456,7 +456,13 @@ function renderTab(tab, p) {
           <b>+ Add video</b>, or photograph them with the capture wizard above.</p>
         </div>` : "";
       body.innerHTML = wizardCard + missingCard
-        + `<div class="card"><h2>Reshoot list — captured badly</h2>` + (items.length
+        + `<div class="card"><div class="row" style="margin-bottom:.4rem">
+            <h2 style="margin:0">Reshoot list — captured badly</h2>
+            ${items.length ? `<button style="margin-left:auto"
+               onclick="startReshootReview()">🔍 Review these (${items.length})…</button>` : ""}
+           </div>
+           <div class="meta">flip through each flagged page and agree or dismiss
+             before running the capture wizard</div>` + (items.length
         ? "<ul>" + items.map(i =>
             `<li><a href="javascript:void(0)" onclick="gotoPage('${i.id}')"><b>${i.id}</b>${
               i.printed_number ? ` (printed ${i.printed_number})` : ""}</a>
@@ -1214,6 +1220,85 @@ async function proofAll() {
     }
   }
   renderTab("proof", window._proj);
+}
+
+// ---- reshoot review: triage the flagged pages one by one before capturing
+let review = null;
+
+async function startReshootReview() {
+  const r = await api(`/projects/${current}/reshoot`);
+  if (!r.items?.length) { alert("Reshoot list is empty."); return; }
+  review = {items: r.items, i: 0, kept: 0, dismissed: 0};
+  renderReview();
+}
+
+function renderReview() {
+  const body = $("tabbody"), rv = review;
+  $("main").scrollTop = 0;
+  if (rv.i >= rv.items.length) {
+    body.innerHTML = `<div class="card" style="text-align:center">
+      <h2>Reshoot review done</h2>
+      <p>${rv.kept} agreed for reshoot · ${rv.dismissed} dismissed</p>
+      <div class="row" style="justify-content:center">
+        <button style="font-size:1.05rem;padding:.7rem 1.4rem"
+          onclick="startWizard()">📷 Start capture wizard</button>
+        <button class="secondary" onclick="openProject(current,'pipeline')">Back to pipeline</button>
+      </div></div>`;
+    return;
+  }
+  const it = rv.items[rv.i];
+  const pg = (window._proj?.pages || []).find(x => x.id === it.id) || {};
+  body.innerHTML = `<div class="card">
+    <div class="row">
+      <b>${rv.i + 1} / ${rv.items.length}</b>
+      <b>${it.printed_number != null ? "page " + it.printed_number : "unnumbered"}</b>
+      <span class="meta" style="margin:0">· ${it.id}</span>
+      <a href="javascript:void(0)" onclick="gotoPage('${it.id}')"
+         style="margin-left:.6rem">open in pages tab</a>
+      <button class="secondary" style="margin-left:auto"
+        onclick="openProject(current,'pipeline')">✕ exit</button>
+    </div>
+    <div style="color:#b45309;margin:.4rem 0">⚠ ${esc(it.reasons.join("; "))}</div>
+    ${pg.color ? `<img src="/api/projects/${current}/file/${pg.color}?t=${Date.now()}"
+       style="max-height:56vh;max-width:100%;border:1px solid var(--line);
+              border-radius:6px;display:block;margin:0 auto">`
+      : "<div class='meta'>no processed image for this page yet</div>"}
+    <div class="row" style="margin-top:.8rem">
+      <button style="font-size:1rem;padding:.65rem 1.3rem"
+        onclick="reviewKeep()">✔ Agree — reshoot it</button>
+      <button class="secondary" style="font-size:1rem;padding:.65rem 1.3rem"
+        onclick="reviewDismiss('${it.id}')">Looks fine — dismiss</button>
+      <button class="danger" style="margin-left:auto"
+        title="junk capture — hide the page entirely"
+        onclick="reviewHide('${it.id}')">Hide page</button>
+    </div></div>`;
+}
+
+function reviewKeep() { review.kept++; review.i++; renderReview(); }
+
+async function reviewDismiss(pageId) {
+  const pg = (window._proj?.pages || []).find(x => x.id === pageId) || {};
+  const body = {ignore_suspect: true};
+  if (pg.needs_reshoot) body.needs_reshoot = false;
+  try {
+    await api(`/projects/${current}/pages/${pageId}`, {method: "PATCH",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  } catch (e) { alert("failed: " + e.message); return; }
+  // figure close-up marks are separate flags — clear them too, best effort
+  for (let ri = 0; ri < (pg.regions || []).length; ri++)
+    if (pg.regions[ri].needs_reshoot)
+      await api(`/projects/${current}/pages/${pageId}/figures/${ri}/reshoot?flag=false`,
+                {method: "POST"}).catch(() => {});
+  pg.suspect_ignored = true;
+  pg.needs_reshoot = false;
+  (pg.regions || []).forEach(r => r.needs_reshoot = false);
+  review.dismissed++; review.i++; renderReview();
+}
+
+async function reviewHide(pageId) {
+  try { await api(`/projects/${current}/pages/${pageId}`, {method: "DELETE"}); }
+  catch (e) { alert("failed: " + e.message); return; }
+  review.dismissed++; review.i++; renderReview();
 }
 
 function nextSection(ch) {
