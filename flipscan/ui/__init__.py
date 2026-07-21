@@ -1057,6 +1057,7 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "not a readable image")
         if region is not None:
             region["user_crop"] = True  # never let the figures stage overwrite it
+            region.pop("needs_reshoot", None)   # re-acquisition fulfilled
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True}

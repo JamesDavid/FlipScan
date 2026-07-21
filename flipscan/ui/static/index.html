@@ -697,7 +697,7 @@ function renderTab(tab, p) {
                     onclick="openCrop('${pg.id}', ${i}, 'pages')">re-crop</button>
             <button class="secondary" style="padding:.15rem .5rem;font-size:.7rem"
                     title="mark for close-up re-shoot"
-                    onclick="figReacq('${pg.id}', ${i})">re-acq</button>
+                    onclick="figReacq('${pg.id}', ${i}, true, 'pages')">re-acq</button>
           </span>
         </span>`).join("")
         // regions whose figure crop never happened: offer to draw one
@@ -796,7 +796,8 @@ function renderTab(tab, p) {
       (pg.figures || []).forEach((f, i) => {
         const letter = f.split("_").pop().split(".")[0];
         const ridx = letter.charCodeAt(0) - 97;
-        rows.push({pg, f, i, caption: (pg.regions?.[ridx]?.caption) || ""});
+        rows.push({pg, f, i, caption: (pg.regions?.[ridx]?.caption) || "",
+                   reacq: !!(pg.regions?.[ridx]?.needs_reshoot)});
       });
     });
     const groups = [];
@@ -817,7 +818,10 @@ function renderTab(tab, p) {
         <div style="flex:1;min-width:12rem">
           <div><a href="javascript:void(0)" onclick="gotoPage('${r.pg.id}')">
             <b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
-                : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></a></div>
+                : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></a>
+            ${r.reacq ? `<span class="badge acceptable"
+               title="queued in the capture wizard as a close-up shot — clears
+when you photograph or re-upload it">📷 re-acquire queued</span>` : ""}</div>
           ${r.caption ? `<div class="meta">${esc(r.caption)}</div>` : ""}
         </div>
         <span class="row">
@@ -827,7 +831,8 @@ function renderTab(tab, p) {
           <button class="secondary"
                   onclick="$('figup-${r.pg.id}-${r.i}').click()">Re-upload</button>
           <button class="secondary"
-                  onclick="figReacq('${r.pg.id}', ${r.i})">Re-acquire</button>
+                  onclick="figReacq('${r.pg.id}', ${r.i}, ${!r.reacq})">
+            ${r.reacq ? "Unmark re-acquire" : "Re-acquire"}</button>
           <button class="danger" onclick="delFigure('${r.pg.id}', ${r.i})">Delete</button>
         </span>
       </div>`;
@@ -1805,11 +1810,12 @@ async function autoRefine() {
   openProject(current, "figures");
 }
 
-async function figReacq(pageId, figIdx) {
-  try { await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}/reshoot`,
-                  {method:"POST"});
+async function figReacq(pageId, figIdx, flag = true, origin) {
+  try { await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}` +
+                  `/reshoot?flag=${flag}`, {method:"POST"});
   } catch (e) { alert("failed: " + e.message); return; }
-  alert("Marked — it joins the capture wizard queue as a close-up shot.");
+  if (origin === "pages") gotoPage(pageId);
+  else openProject(current, "figures");
 }
 
 async function delFigure(pageId, figIdx) {
