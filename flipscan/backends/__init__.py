@@ -137,12 +137,21 @@ def needs_escalation(result: dict, escalate_on: list[str]) -> bool:
     return False
 
 
+def anthropic_enabled(cfg: dict) -> bool:
+    """The master switch: the key can stay saved while all Anthropic API
+    calls are turned off in settings."""
+    return bool(cfg["provider"].get("anthropic_enabled", True))
+
+
 def get_backend(cfg: dict) -> TranscriptionBackend:
     name = cfg["provider"]["name"]
     if name == "ollama":
         from .ollama import OllamaBackend
         return OllamaBackend(cfg)
     if name == "anthropic":
+        if not anthropic_enabled(cfg):
+            raise RuntimeError("Anthropic API is disabled in settings — "
+                               "enable it or switch the provider to ollama")
         from .anthropic_backend import AnthropicBackend
         return AnthropicBackend(cfg)
     if name == "mock":

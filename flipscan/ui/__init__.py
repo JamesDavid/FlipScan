@@ -85,6 +85,7 @@ class Settings(BaseModel):
     ollama_model: str = ""
     anthropic_model: str = ""
     anthropic_api_key: str = ""
+    anthropic_enabled: bool = True
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -352,6 +353,7 @@ def create_app(root: Path) -> FastAPI:
             "provider": p["name"], "ollama_url": p["ollama_url"],
             "ollama_model": p["ollama_model"],
             "anthropic_model": p["anthropic_model"],
+            "anthropic_enabled": bool(p.get("anthropic_enabled", True)),
             "anthropic_api_key_set": bool(p.get("anthropic_api_key")
                                           or os.environ.get("ANTHROPIC_API_KEY")
                                           or os.environ.get("FLIPSCAN_ANTHROPIC_API_KEY")),
@@ -365,6 +367,7 @@ def create_app(root: Path) -> FastAPI:
             "ollama_url": s.ollama_url,
             "ollama_model": s.ollama_model,
             "anthropic_model": s.anthropic_model,
+            "anthropic_enabled": s.anthropic_enabled,
             # keep the stored key unless a new one was typed
             "anthropic_api_key": s.anthropic_api_key or current.get("anthropic_api_key", ""),
         }})
@@ -809,6 +812,10 @@ def create_app(root: Path) -> FastAPI:
         cfg = load_config(ws.root)
         if not cfg["provider"].get("anthropic_api_key"):
             raise HTTPException(400, "add an Anthropic API key in settings first")
+        from ..backends import anthropic_enabled
+        if not anthropic_enabled(cfg):
+            raise HTTPException(400, "the Anthropic API is disabled in settings "
+                                     "— enable it to run AI refine")
         from ..backends.anthropic_backend import claude_figure_boxes
 
         def iou(a, b):
@@ -832,11 +839,11 @@ def create_app(root: Path) -> FastAPI:
                     if region.get("deleted"):
                         continue
                     if region.get("user_crop"):
-                        if cur_ref is None:
-                            cur_ref = file_ref(ws.root / page["color"])
-                        if region.get("color_ref") == cur_ref:
-                            skipped_manual += 1
-                            continue   # current human input wins
+                        # a manual crop is NEVER touched by AI — even one that
+                        # looks stale. (Older manual crops predate color_ref;
+                        # assuming those were orphaned destroyed real work.)
+                        skipped_manual += 1
+                        continue
                     todo.append((ri, region))
                 if not todo:
                     continue

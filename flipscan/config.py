@@ -15,6 +15,8 @@ DEFAULTS: dict[str, Any] = {
         "ollama_num_predict": 4096,
         "ollama_think": False,  # thinking wastes minutes/page on transcription
         "anthropic_model": "claude-sonnet-4-6",
+        # master switch: False = never call the Anthropic API, key stays saved
+        "anthropic_enabled": True,
         # >1 only helps when the Ollama server sets OLLAMA_NUM_PARALLEL >= N
         "ollama_concurrency": 1,
         # hybrid: escalate to anthropic when local result matches any of these

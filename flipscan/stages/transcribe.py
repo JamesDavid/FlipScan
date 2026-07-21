@@ -545,6 +545,11 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             escalate_on = cfg["provider"]["escalate_on"]
             escalate = [pid for pid, r in results.items()
                         if needs_escalation(r, escalate_on)]
+            from ..backends import anthropic_enabled
+            if escalate and not anthropic_enabled(cfg):
+                log(f"  hybrid: {len(escalate)} pages would escalate, but the "
+                    f"Anthropic API is disabled in settings — keeping local results")
+                escalate = []
             if escalate:
                 log(f"  hybrid: escalating {len(escalate)} pages to anthropic")
                 remote = get_backend(

@@ -219,6 +219,13 @@ async function showSettings() {
       ? '<span class="badge ok">configured</span>' : "(needed for anthropic / hybrid)"}</label>
     <input id="set-akey" type="password"
            placeholder="${s.anthropic_api_key_set ? "leave blank to keep current key" : "sk-ant-…"}">
+    <label style="display:flex;align-items:center;gap:.4rem;margin:.2rem 0 .6rem">
+      <input type="checkbox" id="set-aenabled" style="width:auto;margin:0"
+             ${s.anthropic_enabled ? "checked" : ""}>
+      allow Anthropic API calls
+      <span class="meta" style="margin:0">— unchecked: nothing is ever sent or
+        billed (hybrid escalation, AI refine, page re-read all stay local);
+        the key stays saved</span></label>
     <div class="meta" style="margin-bottom:.6rem">Stored in the projects folder's
       config.toml on this machine. Hybrid mode transcribes locally first and only
       sends low-confidence pages to Anthropic.</div>
@@ -519,7 +526,7 @@ function renderTab(tab, p) {
         ${photoPages.map(pg => `
           <div class="row" style="border-top:1px solid var(--line);padding:.6rem 0">
             <img loading="lazy" decoding="async"
-                 src="/api/projects/${name}/thumb/${pg.patched_source}?w=260"
+                 src="/api/projects/${name}/thumb/${pg.patched_source}?w=260${fv(pg.patched_source)}"
                  style="height:90px;border:1px solid var(--line);border-radius:4px">
             <div style="flex:1;min-width:10rem">
               <a href="javascript:void(0)" onclick="gotoPage('${pg.id}')"><b>${pg.id}</b></a>
@@ -681,7 +688,7 @@ function renderTab(tab, p) {
         <span style="display:inline-flex;flex-direction:column;align-items:center;
                      gap:2px;vertical-align:top">
           <img loading="lazy" decoding="async"
-               src="/api/projects/${name}/thumb/${f}?w=260"
+               src="/api/projects/${name}/thumb/${f}?w=260${fv(f)}"
                style="height:90px;border:1px solid var(--line);border-radius:4px;
                       cursor:crosshair"
                title="click to re-crop" onclick="openCrop('${pg.id}', ${i}, 'pages')">
@@ -804,7 +811,7 @@ function renderTab(tab, p) {
         <a href="javascript:void(0)" onclick="openCrop('${r.pg.id}', ${r.i})"
            title="click to re-crop">
           <img loading="lazy" decoding="async"
-               src="/api/projects/${name}/thumb/${r.f}?w=380"
+               src="/api/projects/${name}/thumb/${r.f}?w=380${fv(r.f)}"
                style="height:130px;border:1px solid var(--line);border-radius:4px;
                       cursor:crosshair"></a>
         <div style="flex:1;min-width:12rem">
@@ -1308,6 +1315,9 @@ function toggleCell(pageId) {
 }
 
 let pageFilters = {chapter: "", unnumbered: false};
+let figV = {};   // rel-path -> version bump after re-crop/upload
+const fv = (k) => figV[k] ? "&v=" + figV[k] : "";
+function bumpFig(k) { figV[k] = (figV[k] || 0) + 1; }
 
 // thumbnail width matched to the actual layout: full-width cells on phones,
 // the ~340px image column on desktop — halves phone decode memory
@@ -1661,10 +1671,14 @@ function cropModalHtml() {
 let cropCtx = null;
 function openCrop(pageId, figIdx, origin = "figures", isRegion = false) {
   const pg = window._proj.pages.find(p => p.id === pageId);
-  // corners ordered tl,tr,br,bl (normalized); start from the existing region
-  const bb = pg.regions?.[figIdx]?.bbox_norm;
+  // corners ordered tl,tr,br,bl (normalized); start from the SAVED corners —
+  // a skewed quad must come back as drawn, not as its bounding rectangle
+  const reg = pg.regions?.[figIdx];
+  const bb = reg?.bbox_norm;
   cropCtx = {pageId, figIdx, origin, isRegion, mode: null, corner: -1,
-             quad: bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]] : null};
+             quad: (reg?.quad_norm && reg.quad_norm.length === 4)
+               ? reg.quad_norm.map(p => [...p])
+               : bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]] : null};
   const img = $("crop-img");
   img.src = `/api/projects/${current}/file/${pg.color}?t=${Date.now()}`;
   $("crop-modal").style.display = "flex";
@@ -1771,6 +1785,7 @@ async function saveCrop() {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({quad_norm: cropCtx.quad})});
   } catch (e) { alert("crop failed: " + e.message); return; }
+  bumpFig(`figures/${cropCtx.pageId}_${String.fromCharCode(97 + cropCtx.figIdx % 26)}.png`);
   $("crop-modal").style.display = "none";
   if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
   else openProject(current, "figures");
@@ -1808,6 +1823,7 @@ async function uploadFigure(pageId, figIdx) {
     `/api/projects/${current}/pages/${pageId}/figures/${figIdx}/upload`,
     {method:"POST", body: fd});
   if (!r.ok) alert("upload failed");
+  bumpFig(`figures/${pageId}_${String.fromCharCode(97 + figIdx % 26)}.png`);
   openProject(current, "figures");
 }
 

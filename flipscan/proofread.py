@@ -127,10 +127,11 @@ def lint_chapter(md: str) -> list[dict]:
 # ---------------- LLM pass
 
 def llm_findings(cfg: dict, chapter_md: str) -> list[dict]:
+    from .backends import anthropic_enabled
     provider = cfg["provider"]["name"]
     if provider == "mock":
         return []
-    if provider == "anthropic":
+    if provider == "anthropic" and anthropic_enabled(cfg):
         return _parse_findings(_anthropic_review(cfg, chapter_md))
     # ollama / hybrid — local is plenty for an edit list, but greedy decoding
     # can loop until the budget truncates the JSON: salvage what parsed, and
@@ -452,10 +453,13 @@ def reread_from_image(cfg: dict, image_path: Path, quote: str) -> str | None:
     """Ask a vision model to re-read one garbled passage straight from the
     page image. Anthropic when configured, else the local Ollama model."""
     import base64
+    from .backends import anthropic_enabled
     p = cfg["provider"]
     prompt = REREAD_PROMPT.format(quote=quote[:300])
-    use_anthropic = (p["name"] == "anthropic"
-                     or (p.get("anthropic_api_key") and p["name"] == "hybrid"))
+    use_anthropic = (anthropic_enabled(cfg)
+                     and (p["name"] == "anthropic"
+                          or (p.get("anthropic_api_key")
+                              and p["name"] == "hybrid")))
     if use_anthropic:
         import anthropic
         client = anthropic.Anthropic(api_key=p.get("anthropic_api_key") or None)
