@@ -4,6 +4,7 @@ printed-page-number monotonicity checking (the most reliable gap detector)."""
 from __future__ import annotations
 
 import json
+import re
 
 from ..backends import get_backend, needs_escalation
 from ..workspace import Workspace
@@ -113,18 +114,34 @@ def reorder_by_printed(pages: list[dict]) -> list[dict]:
     return start + [middle[i] for i in order] + end
 
 
-def dedupe_by_printed(pages: list[dict], log=print) -> int:
+def capture_rank(p: dict, mtime_of=None) -> tuple:
+    """How good a capture is, for picking dedupe winners: a deliberate photo
+    (patched) beats any video frame; among photos, the most recent retake
+    wins; then transcription confidence, then frame score."""
+    conf_rank = {"high": 2, "medium": 1, "low": 0}
+    patched = 1 if p.get("patched_source") else 0
+    mt = mtime_of(p) if (patched and mtime_of) else 0.0
+    return (patched, mt, conf_rank.get(p.get("confidence"), 0),
+            (p.get("scores") or {}).get("composite", 0.0))
+
+
+def _reset_dup(p: dict) -> None:
+    if p["status"] == "duplicate":
+        p["status"] = "patched" if p.get("patched_source") else "ok"
+
+
+def dedupe_by_printed(pages: list[dict], log=print, mtime_of=None) -> int:
     """Pages sharing a printed page number are the same page captured more
-    than once (multiple videos, or a re-detected rest). Keep the best capture,
-    mark the rest status="duplicate" (excluded from the book, shown in review)."""
+    than once (multiple videos, a re-detected rest, or a wizard retake next
+    to the old capture). Keep the best capture, mark the rest
+    status="duplicate" (excluded from the book, shown in review)."""
     groups: dict[tuple, list[dict]] = {}
     for p in pages:
         n = p.get("printed_number")
-        if n is None or p.get("role") or p.get("status") in ("patched", "deleted"):
+        if n is None or p.get("role") or p.get("status") == "deleted":
             continue
         groups.setdefault((n,), []).append(p)
 
-    conf_rank = {"high": 2, "medium": 1, "low": 0}
     deduped = 0
     for group in groups.values():
         # a previous run may have marked duplicates; re-decide from scratch —
@@ -133,19 +150,49 @@ def dedupe_by_printed(pages: list[dict], log=print) -> int:
         group = [p for p in group
                  if not p.get("dedupe_exempt") and not p.get("manual_duplicate")]
         for p in group:
-            if p["status"] == "duplicate":
-                p["status"] = "ok"
+            _reset_dup(p)
         if len(group) < 2:
             continue
-        group.sort(key=lambda p: (conf_rank.get(p.get("confidence"), 0),
-                                  (p.get("scores") or {}).get("composite", 0.0)),
-                   reverse=True)
+        group.sort(key=lambda p: capture_rank(p, mtime_of), reverse=True)
         for p in group[1:]:
             p["status"] = "duplicate"
             deduped += 1
     if deduped:
         log(f"  merged {deduped} duplicate captures (same printed page number; "
             f"best capture kept)")
+    return deduped
+
+
+def dedupe_by_content(pages: list[dict], get_text, log=print,
+                      mtime_of=None) -> int:
+    """Adjacent pages with near-identical transcriptions are the same physical
+    page captured twice where one copy lost its number — the printed-number
+    dedupe can't see those. Keep the best capture, hide the twin."""
+    from difflib import SequenceMatcher
+
+    def squash(pid_page):
+        t = get_text(pid_page) or ""
+        return re.sub(r"[^a-z0-9]", "", t.lower())[:2500]
+
+    body = _body_pages(pages)
+    deduped = 0
+    for a, b in zip(body, body[1:]):
+        if (a["status"] == "duplicate" or b["status"] == "duplicate"
+                or a.get("dedupe_exempt") or b.get("dedupe_exempt")
+                or a.get("manual_duplicate") or b.get("manual_duplicate")):
+            continue
+        sa, sb = squash(a), squash(b)
+        if len(sa) < 300 or len(sb) < 300:
+            continue
+        if SequenceMatcher(None, sa, sb).ratio() < 0.92:
+            continue
+        loser = min(a, b, key=lambda p: capture_rank(p, mtime_of))
+        loser["status"] = "duplicate"
+        loser["content_duplicate"] = True
+        deduped += 1
+    if deduped:
+        log(f"  merged {deduped} near-identical page pairs (same content, "
+            f"one copy unnumbered)")
     return deduped
 
 
@@ -453,10 +500,27 @@ def reconcile(ws: Workspace, pages: list[dict], log=print) -> list[dict]:
         p.pop("number_inferred", None)
         p.pop("number_rejected", None)
         p.pop("number_conflict", None)
+    def mtime_of(p: dict) -> float:
+        src = ws.root / (p.get("patched_source") or "")
+        try:
+            return src.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    _md_cache: dict[str, str] = {}
+
+    def get_text(p: dict) -> str:
+        if p["id"] not in _md_cache:
+            f = ws.root / (p.get("md") or "")
+            _md_cache[p["id"]] = (f.read_text(encoding="utf-8")
+                                  if p.get("md") and f.exists() else "")
+        return _md_cache[p["id"]]
+
     sanitize_numbers_by_video(pages, log)
     infer_from_video_order(pages, log)  # strongest signal: capture order
-    dedupe_by_printed(pages, log)
+    dedupe_by_printed(pages, log, mtime_of=mtime_of)
     pages = reorder_by_printed(pages)
+    dedupe_by_content(pages, get_text, log, mtime_of=mtime_of)
     infer_missing_numbers(pages, log)   # cross-video leftovers
     pages = reorder_by_printed(pages)
     ws.manifest["pages"] = pages

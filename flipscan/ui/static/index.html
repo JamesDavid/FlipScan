@@ -53,6 +53,9 @@
   .pagegrid > div:last-child { display:flex; flex-direction:column; }
   .pagegrid textarea { flex:1 1 auto; min-height:200px; }  /* fill the cell */
   .card.suspect { border-left:4px solid var(--bad); }
+  /* page cells: don't render (or hold decoded images for) offscreen cells —
+     hundreds of cells otherwise exhaust phone memory while scrolling */
+  [id^="cell-"] { content-visibility: auto; contain-intrinsic-size: auto 520px; }
   .card.duplicate { opacity:.75; }
   .card.deleted { opacity:.55; }
   .meta { font-size:.75rem; color:var(--dim); margin-bottom:.4rem; }
@@ -688,7 +691,7 @@ function renderTab(tab, p) {
             <div>
               ${pg.color ? `<img loading="lazy" decoding="async" style="width:100%;
                  border:1px solid var(--line);border-radius:4px"
-                 src="/api/projects/${name}/thumb/${pg.color}?w=760">` : ""}
+                 src="/api/projects/${name}/thumb/${pg.color}?w=${thumbW()}">` : ""}
               ${figs ? `<div class="row" style="margin-top:.4rem">${figs}</div>` : ""}
             </div>
             <div>
@@ -716,12 +719,22 @@ function renderTab(tab, p) {
         </div>
       </div>`;
     }
-    shown.forEach(async pg => {
-      if (pg.md) {
-        const r = await fetch(`/api/projects/${name}/file/${pg.md}`);
-        if (r.ok && $("md-" + pg.id)) $("md-" + pg.id).value = await r.text();
-      }
-    });
+    (async () => {   // fill the markdown editors a few at a time — hundreds
+      const queue = shown.filter(pg => pg.md);   // of parallel fetches choke
+      const worker = async () => {               // phone browsers
+        while (queue.length) {
+          const pg = queue.shift();
+          const el = $("md-" + pg.id);
+          if (!el) continue;
+          try {
+            const r = await fetch(`/api/projects/${name}/file/${pg.md}`);
+            if (r.ok) { const t = await r.text(); const e = $("md-" + pg.id);
+                        if (e) e.value = t; }
+          } catch {}
+        }
+      };
+      await Promise.all(Array.from({length: 4}, worker));
+    })();
     try {   // hand-off from the EPUB reader's per-figure ✂ re-crop button
       const pend = JSON.parse(localStorage.getItem("flipscan-open-crop") || "null");
       if (pend && pend.project === name) {
@@ -1237,6 +1250,14 @@ function toggleCell(pageId) {
 }
 
 let pageFilters = {chapter: "", unnumbered: false};
+
+// thumbnail width matched to the actual layout: full-width cells on phones,
+// the ~340px image column on desktop — halves phone decode memory
+function thumbW() {
+  const col = innerWidth <= 820 ? innerWidth : 340;   // CSS width of the image
+  const px = col * Math.min(1.5, devicePixelRatio || 1);
+  return Math.min(760, Math.max(320, Math.ceil(px / 20) * 20));
+}
 
 async function runProof(idx, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "proofreading…"; }

@@ -401,3 +401,48 @@ def test_apply_edits_empty_replacement_deletes():
     finds = [{"quote": "5 4 3 2 1 artifact ", "replacement": "", "note": ""}]
     out, applied = apply_edits(md, finds)
     assert applied == 1 and out == "keep this gone"
+
+
+def test_dedupe_patched_retake_beats_video_capture():
+    from flipscan.stages.transcribe import dedupe_by_printed
+    pages = [_pg("vid", 24, "high", 0.9),
+             _pg("shot", 24, "high", 0.0, patched_source="patches/shot.jpg",
+                 status="patched")]
+    n = dedupe_by_printed(pages, log=lambda m: None,
+                          mtime_of=lambda p: 1000.0)
+    assert n == 1
+    assert pages[0]["status"] == "duplicate"      # old video frame hidden
+    assert pages[1]["status"] == "patched"        # deliberate photo kept
+
+
+def test_dedupe_newest_patch_wins():
+    from flipscan.stages.transcribe import dedupe_by_printed
+    times = {"old": 100.0, "new": 200.0}
+    pages = [_pg("old", 7, "high", 0.5, patched_source="patches/old.jpg",
+                 status="patched"),
+             _pg("new", 7, "low", 0.1, patched_source="patches/new.jpg",
+                 status="patched")]
+    dedupe_by_printed(pages, log=lambda m: None,
+                      mtime_of=lambda p: times[p["id"]])
+    assert pages[0]["status"] == "duplicate"
+    assert pages[1]["status"] == "patched"        # most recent retake wins
+
+
+def test_dedupe_by_content_catches_unnumbered_twin():
+    from flipscan.stages.transcribe import dedupe_by_content
+    text = ("As enthusiastic supporters of the aeronaut's experiments, "
+            "Parisians welcomed his newest creation Santos Dumont Number 5 "
+            "and early one quiet Saturday morning July 13 1901 it started "
+            "off from the Parc toward the Eiffel Tower at the controls stood "
+            "the designer and sole occupant while the commission watched. " * 3)
+    pages = [_pg("a", 9, "high", 0.2),
+             _pg("b", None, "high", 0.0, patched_source="patches/b.jpg",
+                 status="patched"),
+             _pg("c", 11, "high", 0.5)]
+    texts = {"a": text, "b": text + " tiny tail difference", "c": "totally other content " * 30}
+    n = dedupe_by_content(pages, lambda p: texts[p["id"]],
+                          log=lambda m: None, mtime_of=lambda p: 50.0)
+    assert n == 1
+    assert pages[0]["status"] == "duplicate"      # video copy loses
+    assert pages[1]["status"] == "patched" and pages[1].get("content_duplicate") is None
+    assert pages[2]["status"] == "ok"
