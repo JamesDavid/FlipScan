@@ -34,18 +34,23 @@ def find_page_by_text(ws: Workspace, snippet: str) -> dict | None:
 
 def page_reasons(p: dict) -> list[str]:
     """Why this page needs attention — shared by the reshoot list, the page
-    cells, and the capture wizards."""
-    if p.get("suspect_ignored"):
-        return []  # the user reviewed it and vouched for it
+    cells, and the capture wizards.
+
+    'Ignore suspect' only waives the MODEL's quality complaints. Explicit
+    user actions (re-acquisition marks) and structural problems (number
+    conflicts, missing crops, failures) always count — otherwise marking an
+    accepted page for re-acquisition would silently do nothing."""
+    ignored = bool(p.get("suspect_ignored"))
     reasons = []
     if p.get("transcribe_error"):
         reasons.append(f"transcription failed ({p['transcribe_error'][:80]})")
-    if p.get("confidence") == "low":
-        reasons.append("low transcription confidence")
-    for f in p.get("flags") or []:
-        reasons.append(f"flagged: {f}")
-    if p.get("figure_quality"):
-        reasons.append("figure source frame is low quality")
+    if not ignored:
+        if p.get("confidence") == "low":
+            reasons.append("low transcription confidence")
+        for f in p.get("flags") or []:
+            reasons.append(f"flagged: {f}")
+        if p.get("figure_quality"):
+            reasons.append("figure source frame is low quality")
     if p.get("needs_reshoot"):
         note = f" — “{p['flag_note']}”" if p.get("flag_note") else ""
         reasons.append(f"marked for re-acquisition by you{note}")
@@ -61,7 +66,7 @@ def page_reasons(p: dict) -> list[str]:
         if not r.get("deleted") and expected not in figs:
             reasons.append(f"figure region {ri} has no crop")
             break
-    if p["status"] == "suspect" and not reasons:
+    if p["status"] == "suspect" and not reasons and not ignored:
         reasons.append("weak capture (short cluster or low frame score)")
     if p["status"] == "missing":
         reasons.append("no usable frame captured")
@@ -73,7 +78,7 @@ def reshoot_list(ws: Workspace) -> list[dict]:
     items = []
     for p in ws.manifest["pages"]:
         reasons = page_reasons(p)
-        if reasons and p["status"] not in ("patched", "duplicate", "deleted"):
+        if reasons and p["status"] not in ("duplicate", "deleted"):
             items.append({"id": p["id"], "printed_number": p.get("printed_number"),
                           "reasons": reasons})
     return items
