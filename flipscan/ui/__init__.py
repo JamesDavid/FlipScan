@@ -10,7 +10,7 @@ import threading
 from collections import deque
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -1061,6 +1061,41 @@ def create_app(root: Path) -> FastAPI:
         except (RuntimeError, FileNotFoundError) as e:
             raise HTTPException(400, str(e))
         return {"ok": True, "file": out.name}
+
+    @app.get("/api/projects/{name}/thumb/{path:path}")
+    def get_thumb(name: str, path: str, w: int = 760, request: Request = None):
+        """Downscaled JPEG of a workspace image. The page list was serving
+        full-resolution multi-MB PNGs — hundreds of those OOM-crash phone
+        browsers. Thumbs are cached by source mtime and revalidated cheaply."""
+        import cv2
+
+        ws = ws_for(name)
+        src = (ws.root / path).resolve()
+        if not str(src).startswith(str(ws.root.resolve())) or not src.is_file():
+            raise HTTPException(404, "not found")
+        if path.split("/")[0] not in SERVABLE:
+            raise HTTPException(403, "not servable")
+        w = max(64, min(2000, w))
+        st = src.stat()
+        etag = f'"{st.st_mtime_ns}-{st.st_size}-{w}"'
+        if request is not None and request.headers.get("if-none-match") == etag:
+            return Response(status_code=304)
+        tdir = ws.work_file("thumbs")
+        tdir.mkdir(exist_ok=True)
+        import hashlib
+        key = hashlib.sha1(f"{path}|{w}|{st.st_mtime_ns}".encode()).hexdigest()[:20]
+        out = tdir / f"{key}.jpg"
+        if not out.exists():
+            img = cv2.imread(str(src))
+            if img is None:
+                raise HTTPException(500, "image unreadable")
+            h0, w0 = img.shape[:2]
+            if w0 > w:
+                img = cv2.resize(img, (w, int(h0 * w / w0)),
+                                 interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(out), img, [cv2.IMWRITE_JPEG_QUALITY, 78])
+        return FileResponse(out, media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache", "ETag": etag})
 
     @app.get("/api/projects/{name}/file/{path:path}")
     def get_file(name: str, path: str):

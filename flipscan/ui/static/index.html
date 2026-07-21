@@ -511,7 +511,8 @@ function renderTab(tab, p) {
         <h2>Page photos (${photoPages.length})</h2>
         ${photoPages.map(pg => `
           <div class="row" style="border-top:1px solid var(--line);padding:.6rem 0">
-            <img src="/api/projects/${name}/file/${pg.patched_source}?t=${Date.now()}"
+            <img loading="lazy" decoding="async"
+                 src="/api/projects/${name}/thumb/${pg.patched_source}?w=260"
                  style="height:90px;border:1px solid var(--line);border-radius:4px">
             <div style="flex:1;min-width:10rem">
               <a href="javascript:void(0)" onclick="gotoPage('${pg.id}')"><b>${pg.id}</b></a>
@@ -656,7 +657,8 @@ function renderTab(tab, p) {
       const figs = (pg.figures || []).map((f, i) => `
         <span style="display:inline-flex;flex-direction:column;align-items:center;
                      gap:2px;vertical-align:top">
-          <img src="/api/projects/${name}/file/${f}?t=${Date.now()}"
+          <img loading="lazy" decoding="async"
+               src="/api/projects/${name}/thumb/${f}?w=260"
                style="height:90px;border:1px solid var(--line);border-radius:4px;
                       cursor:crosshair"
                title="click to re-crop" onclick="openCrop('${pg.id}', ${i}, 'pages')">
@@ -684,9 +686,9 @@ function renderTab(tab, p) {
         <div class="pagerow-body" style="${collapsed ? "display:none" : ""}">
           <div class="pagegrid">
             <div>
-              ${pg.color ? `<img loading="lazy" style="width:100%;border:1px solid
-                 var(--line);border-radius:4px"
-                 src="/api/projects/${name}/file/${pg.color}?t=${Date.now()}">` : ""}
+              ${pg.color ? `<img loading="lazy" decoding="async" style="width:100%;
+                 border:1px solid var(--line);border-radius:4px"
+                 src="/api/projects/${name}/thumb/${pg.color}?w=760">` : ""}
               ${figs ? `<div class="row" style="margin-top:.4rem">${figs}</div>` : ""}
             </div>
             <div>
@@ -755,7 +757,8 @@ function renderTab(tab, p) {
       <div class="row" style="border-top:1px solid var(--line);padding:.7rem 0">
         <a href="javascript:void(0)" onclick="openCrop('${r.pg.id}', ${r.i})"
            title="click to re-crop">
-          <img src="/api/projects/${name}/file/${r.f}?t=${Date.now()}"
+          <img loading="lazy" decoding="async"
+               src="/api/projects/${name}/thumb/${r.f}?w=380"
                style="height:130px;border:1px solid var(--line);border-radius:4px;
                       cursor:crosshair"></a>
         <div style="flex:1;min-width:12rem">
@@ -1067,7 +1070,7 @@ function renderWizard() {
   if (!it) { return finishWizard(); }
   const preview = wiz.mode === "unidentified" ? it.color : it.preview;
   const img = preview ? `
-    <img src="/api/projects/${current}/file/${preview}?t=${Date.now()}"
+    <img decoding="async" src="/api/projects/${current}/thumb/${preview}?w=900"
          style="max-height:45vh;border:1px solid var(--line);border-radius:6px;
                 margin-bottom:1rem">` : "";
   const title = wiz.mode === "unidentified"
@@ -1259,7 +1262,8 @@ function renderReview() {
         onclick="openProject(current,'pipeline')">✕ exit</button>
     </div>
     <div style="color:#b45309;margin:.4rem 0">⚠ ${esc(it.reasons.join("; "))}</div>
-    ${pg.color ? `<img src="/api/projects/${current}/file/${pg.color}?t=${Date.now()}"
+    ${pg.color ? `<img decoding="async"
+       src="/api/projects/${current}/thumb/${pg.color}?w=900"
        style="max-height:56vh;max-width:100%;border:1px solid var(--line);
               border-radius:6px;display:block;margin:0 auto">`
       : "<div class='meta'>no processed image for this page yet</div>"}
