@@ -743,6 +743,9 @@ function renderTab(tab, p) {
               ${pg.needs_reshoot ? "Unmark re-acquire" : "Mark for re-acquisition"}</button>
             <button class="secondary" title="make this page open a chapter/section"
               onclick="setSection('${pg.id}')">${pg.section ? "Edit section" : "§ Section heading"}</button>
+            <button class="secondary" title="draw a crop for artwork the model
+missed on this page" onclick="openCrop('${pg.id}',
+              ${(pg.regions || []).length}, 'pages', true)">＋ Add figure</button>
             ${pg.status === "duplicate"
               ? `<button class="secondary" onclick="unduplicate('${pg.id}')">Not a duplicate</button>`
               : `<button class="secondary" onclick="markDuplicate('${pg.id}')">Mark as duplicate</button>`}

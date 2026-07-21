@@ -90,9 +90,45 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
             return d["proofed_md"]
         return md
 
+    from .stages.assemble import _NUM_WORDS, _TOC_ENTRY
+
+    chs = split_chapters(book_md)
+    titles = [t for t, _ in chs]
+
+    def target_for(label: str) -> str | None:
+        """Map a printed-contents entry to its chapter file, translating
+        'Chapter N' to the book's own opener names (ONE, TWO...)."""
+        e = label.strip().casefold()
+        cands = [e]
+        m = re.match(r"chapter\s+(\d+)$", e)
+        if m and int(m.group(1)) < len(_NUM_WORDS):
+            w = _NUM_WORDS[int(m.group(1))]
+            cands += [w.casefold(), w.title().casefold()]
+        for j, t in enumerate(titles):
+            if t.strip().casefold() in cands:
+                return f"ch{j:03d}.xhtml"
+        return None
+
+    def format_contents(body: str) -> str:
+        out = []
+        for ln in body.splitlines():
+            mt = _TOC_ENTRY.match(ln.strip())
+            if mt and not ln.lstrip().startswith(("#", "!", "-")):
+                title2 = re.sub(r"[.·\s]+$", "", mt.group(1)).strip()
+                href = target_for(title2)
+                item = f"[{title2}]({href})" if href else title2
+                out.append(f"- {item} — {mt.group(2)}")
+            else:
+                out.append(ln)
+        return "\n".join(out)
+
     chapters = []
-    for i, (ch_title, ch_md) in enumerate(split_chapters(book_md)):
+    for i, (ch_title, ch_md) in enumerate(chs):
         ch_md = with_proof(i, ch_md)
+        if ch_title.strip().casefold() == "contents":
+            # single-newline TOC lines render as one run-together paragraph;
+            # make it a real, linked list
+            ch_md = format_contents(ch_md)
         for rel, epub_name in added_images.items():
             ch_md = ch_md.replace(f"({rel})", f"({epub_name})")
         html = md_lib.markdown(ch_md, extensions=["tables"])
@@ -100,6 +136,20 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
         # attribute — the in-browser reader maps it back to page + crop slot
         html = re.sub(r'<img([^>]*?)src="images/(p\d+_[a-z])',
                       r'<img data-fig="\2"\1src="images/\2', html)
+
+        # captions live in the markdown alt text, which HTML never displays —
+        # render them as visible figcaptions (skipped when the same caption
+        # already appears as text nearby, e.g. a printed caption line)
+        def _figify(m: re.Match) -> str:
+            tag, alt = m.group(0), m.group(2)
+            if not alt.strip() or alt.strip() in html_nocap[m.end():m.end() + 400]:
+                return tag
+            return (f'<figure style="margin:1em 0;text-align:center">{tag}'
+                    f'<figcaption style="font-size:.85em;font-style:italic;'
+                    f'opacity:.85;margin-top:.3em">{alt}</figcaption></figure>')
+
+        html_nocap = html
+        html = re.sub(r'<img([^>]*?)alt="([^"]*)"([^>]*?)/?>', _figify, html)
         ch = epub.EpubHtml(title=ch_title, file_name=f"ch{i:03d}.xhtml", lang="en")
         ch.content = f"<html><body>{html}</body></html>"
         book.add_item(ch)

@@ -25,6 +25,12 @@
            padding-bottom: calc(.3rem + env(safe-area-inset-bottom)); }
   #loading { position:absolute; inset:0; display:flex; align-items:center;
              justify-content:center; color:#78716c; font-size:.95rem; }
+  .pgbtn { position:absolute; top:50%; transform:translateY(-50%); z-index:6;
+           width:2.4rem; height:2.4rem; border-radius:50%; border:0;
+           background:rgba(120,113,108,.28); color:#fff; font-size:1.25rem;
+           cursor:pointer; line-height:1; }
+  .pgbtn:hover { background:rgba(13,148,136,.75); }
+  #pg-prev { left:.4rem; } #pg-next { right:.4rem; }
   :root[data-theme="dark"] body { background:#0c0a09; }
   :root[data-theme="dark"] #viewer { background:#1c1917; }
   :root[data-theme="dark"] footer { background:#0c0a09; color:#a8a29e; }
@@ -43,6 +49,8 @@ flag it for the reshoot list">⚑ flag</button>
 </header>
 <div id="viewer">
   <div id="loading">loading book…</div>
+  <button class="pgbtn" id="pg-prev" title="previous page">‹</button>
+  <button class="pgbtn" id="pg-next" title="next page">›</button>
 </div>
 <footer id="pos"></footer>
 
@@ -110,7 +118,14 @@ function updatePos(loc) {
   localStorage.setItem(posKey, loc.start.cfi);
   const pct = book.locations.length()
     ? Math.round(book.locations.percentageFromCfi(loc.start.cfi) * 100) : null;
-  document.getElementById("pos").textContent = pct == null ? "" : pct + "%";
+  document.getElementById("pos").textContent =
+    (pct == null ? "" : pct + "% — ") + "tap ‹ › or the page edges to turn";
+  const sel = document.getElementById("toc");
+  if (loc.start.href && sel.options.length) {
+    for (const o of sel.options)
+      if (o.value && loc.start.href.endsWith(o.value.split("#")[0]))
+        { sel.value = o.value; break; }
+  }
 }
 rendition.on("relocated", updatePos);
 
@@ -133,7 +148,11 @@ rendition.hooks.content.register(contents => {
   // the old invisible overlays sat on top and ate the TOC's clicks
   doc.addEventListener("click", (e) => {
     if (e.target.closest("a, button, select, input")) return;
-    const w = doc.documentElement.clientWidth || 1;
+    // clientX is viewport-relative; the VIEWPORT width is the visible page.
+    // (documentElement.clientWidth is the whole columnized chapter — using
+    // it made every tap deep in a chapter land in the 'previous' zone)
+    const w = (doc.defaultView && doc.defaultView.innerWidth)
+              || doc.documentElement.clientWidth || 1;
     const x = e.clientX / w;
     if (x < 0.3) rendition.prev();
     else if (x > 0.7) rendition.next();
@@ -206,6 +225,8 @@ document.getElementById("flag").onclick = async () => {
   } catch (e) { alert("flag failed: " + e.message); }
 };
 
+document.getElementById("pg-prev").onclick = () => rendition.prev();
+document.getElementById("pg-next").onclick = () => rendition.next();
 document.getElementById("font-minus").onclick = () => {
   fontPct = Math.max(60, fontPct - 10);
   localStorage.setItem("flipscan-reader-font", fontPct); applyFont();
