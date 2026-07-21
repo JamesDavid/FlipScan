@@ -865,7 +865,7 @@ function renderTab(tab, p) {
               title="write or adjust the corrected text yourself — applied at the
 proof layer, the page OCR text stays untouched"
               onclick="editFix(${ci}, ${fi})">✎ ${f.replacement != null ? "edit fix" : "write a fix"}</button>` : ""}
-          ${f.page && f.replacement == null ? ` <button class="secondary"
+          ${f.page ? ` <button class="secondary"
               style="padding:.05rem .5rem;font-size:.7rem"
               title="ask the vision model to re-read this passage straight from
 the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</button>` : ""}
