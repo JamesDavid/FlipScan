@@ -188,10 +188,32 @@ def _parse_findings(raw: str) -> list[dict]:
 
 # ---------------- applying the edit list
 
+def _quote_pattern(quote: str) -> re.Pattern:
+    """Whitespace/typography-tolerant matcher: the model quotes text with
+    normalized spacing and straight quotes, while the chapter has line
+    breaks, curly quotes, and long dashes at the same spots."""
+    parts = []
+    for tok in quote.split():
+        chars = []
+        for ch in tok:
+            if ch in "'’‘":
+                chars.append("['’‘]")
+            elif ch in '"“”':
+                chars.append('["“”]')
+            elif ch in "-–—":
+                chars.append("[-–—]")
+            else:
+                chars.append(re.escape(ch))
+        # OCR hyphenation: the text may split a word as 'dirigi- ble'
+        parts.append(r"(?:[-–—]\s+)?".join(chars))
+    return re.compile(r"\s+".join(parts))
+
+
 def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
-    """Apply the safe edits: an exact quote occurring exactly once (or one
-    the user explicitly promoted to apply-to-all). Everything else records
-    WHY it was skipped so the UI can offer the right action."""
+    """Apply the safe edits: a quote matching exactly once (or one the user
+    explicitly promoted to apply-to-all). Matching is exact first, then
+    whitespace/typography-tolerant. Everything else records WHY it was
+    skipped so the UI can offer the right action."""
     applied = 0
     for f in findings:
         f["applied"] = False
@@ -200,14 +222,24 @@ def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
         if not q or r is None or r == q:
             continue
         n = md.count(q)
-        if n == 0:
+        if n > 0:
+            if n == 1 or f.get("apply_all"):
+                md = md.replace(q, r)   # every occurrence when apply_all
+                f["applied"] = True
+                applied += 1
+            else:
+                f["skip_reason"] = f"ambiguous:{n}"
+            continue
+        pat = _quote_pattern(q)
+        hits = list(pat.finditer(md))
+        if not hits:
             f["skip_reason"] = "not_found"
-        elif n == 1 or f.get("apply_all"):
-            md = md.replace(q, r)   # replaces every occurrence when apply_all
+        elif len(hits) == 1 or f.get("apply_all"):
+            md = pat.sub(lambda _m: r, md)
             f["applied"] = True
             applied += 1
         else:
-            f["skip_reason"] = f"ambiguous:{n}"
+            f["skip_reason"] = f"ambiguous:{len(hits)}"
     return md, applied
 
 

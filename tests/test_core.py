@@ -377,3 +377,19 @@ def test_build_uses_accepted_proof_only_when_hash_matches(tmp_path):
     md = "# ONE\n\nsome chapter text"
     assert chapter_hash(md) == chapter_hash(md + "  \n")   # strip-insensitive
     assert chapter_hash(md) != chapter_hash(md + " changed")
+
+
+def test_apply_edits_tolerates_linebreaks_and_typography():
+    from flipscan.proofread import apply_edits
+    md = ("in less than fifty years dirigible became\na word for doomed\n"
+          "futur- istic visions and the crew’s hope faded")
+    finds = [
+        {"quote": "years dirigible became a word for doomed futuristic",
+         "replacement": "years, dirigible became a word for doomed futurism",
+         "note": ""},
+        {"quote": "the crew's hope", "replacement": "the crews' hope", "note": ""},
+    ]
+    out, applied = apply_edits(md, finds)
+    assert applied == 2
+    assert "doomed futurism visions" in out.replace("\n", " ")
+    assert "crews' hope" in out
