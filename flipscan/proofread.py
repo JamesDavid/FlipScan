@@ -189,23 +189,25 @@ def _parse_findings(raw: str) -> list[dict]:
 # ---------------- applying the edit list
 
 def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
-    """Apply only the safe edits: an exact quote that occurs exactly once and
-    has a replacement. Everything else stays a note for the user."""
+    """Apply the safe edits: an exact quote occurring exactly once (or one
+    the user explicitly promoted to apply-to-all). Everything else records
+    WHY it was skipped so the UI can offer the right action."""
     applied = 0
     for f in findings:
-        f.setdefault("applied", False)
+        f["applied"] = False
+        f.pop("skip_reason", None)
         q, r = f.get("quote"), f.get("replacement")
         if not q or r is None or r == q:
             continue
         n = md.count(q)
-        if n == 1:
-            md = md.replace(q, r)
+        if n == 0:
+            f["skip_reason"] = "not_found"
+        elif n == 1 or f.get("apply_all"):
+            md = md.replace(q, r)   # replaces every occurrence when apply_all
             f["applied"] = True
             applied += 1
-        elif n == 0:
-            f["note"] = (f["note"] + " [not applied: quote not found]").strip()
         else:
-            f["note"] = (f["note"] + f" [not applied: quote appears {n}×]").strip()
+            f["skip_reason"] = f"ambiguous:{n}"
     return md, applied
 
 
@@ -239,9 +241,11 @@ def proofread_chapter(ws: Workspace, cfg: dict, idx: int) -> dict:
     return data
 
 
-def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool) -> dict:
+def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool,
+                   apply_all: bool = False) -> dict:
     """Reject or re-enable one finding's fix; the proofed copy is rebuilt
-    from the base chapter + all still-enabled edits."""
+    from the base chapter + all still-enabled edits. apply_all promotes an
+    ambiguous fix (quote occurs N times) to replace every occurrence."""
     d = load_proof(ws, idx)
     if d is None:
         raise FileNotFoundError("chapter not proofread yet")
@@ -254,8 +258,13 @@ def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool) -> dict:
     if not 0 <= fi < len(d["findings"]):
         raise IndexError(f"no finding {fi}")
     d["findings"][fi]["rejected"] = not enabled
+    if apply_all:
+        d["findings"][fi]["apply_all"] = True
+    elif not enabled:
+        d["findings"][fi].pop("apply_all", None)
     for f in d["findings"]:
         f["applied"] = False
+        f.pop("skip_reason", None)
     proofed, applied = apply_edits(
         md, [f for f in d["findings"] if not f.get("rejected")])
     d["proofed_md"] = proofed

@@ -1014,12 +1014,13 @@ def create_app(root: Path) -> FastAPI:
         return d
 
     @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}")
-    def proof_finding(name: str, idx: int, fi: int, enabled: bool):
+    def proof_finding(name: str, idx: int, fi: int, enabled: bool,
+                      apply_all: bool = False):
         """Per-finding accept/reject: rebuilds the proofed chapter copy."""
         from ..proofread import toggle_finding
         ws = ws_for(name)
         try:
-            return toggle_finding(ws, idx, fi, enabled)
+            return toggle_finding(ws, idx, fi, enabled, apply_all=apply_all)
         except (FileNotFoundError, IndexError) as e:
             raise HTTPException(404, str(e))
         except ValueError as e:

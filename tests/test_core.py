@@ -347,8 +347,12 @@ def test_apply_edits_safety():
     assert applied == 1
     assert "crew slept." in out
     assert "sailled" in out               # ambiguous edit NOT applied
-    assert finds[1]["applied"] is False and "2×" in finds[1]["note"]
-    assert finds[2]["applied"] is False and "not found" in finds[2]["note"]
+    assert finds[1]["applied"] is False and finds[1]["skip_reason"] == "ambiguous:2"
+    assert finds[2]["applied"] is False and finds[2]["skip_reason"] == "not_found"
+    # promoting an ambiguous fix applies it everywhere
+    finds[1]["apply_all"] = True
+    out2, applied2 = apply_edits(md, finds)
+    assert applied2 == 2 and "sailled" not in out2
 
 
 def test_lint_finds_duplicate_paragraph_and_garble():

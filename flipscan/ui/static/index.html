@@ -814,17 +814,24 @@ function renderTab(tab, p) {
         <div style="font-family:ui-monospace,monospace;font-size:.78rem;margin:.15rem 0">
           “${esc(f.quote)}”${f.replacement != null
             ? ` → <span style="${f.rejected ? "text-decoration:line-through" : ""}">“${esc(f.replacement)}”</span>` : ""}
-          ${f.rejected
-            ? ` <span style="color:#78716c">rejected</span>
+          ${f.replacement == null
+            ? ' <span class="meta">— note only, nothing to auto-fix (use the page link)</span>'
+            : f.rejected
+            ? ` <span style="color:#78716c">undone</span>
                 <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
-                  onclick="toggleFinding(${ci}, ${fi}, true)">re-apply</button>`
+                  onclick="toggleFinding(${ci}, ${fi}, true)">apply</button>`
             : f.applied
-            ? ` <span style="color:#166534">✓ applied</span>
+            ? ` <span style="color:#166534">✓ applied to the proofed copy</span>
                 <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
                   title="undo just this one fix"
-                  onclick="toggleFinding(${ci}, ${fi}, false)">reject</button>`
-            : f.replacement != null
-            ? ' <span style="color:#b45309">suggested only — quote not unique in the chapter</span>' : ""}
+                  onclick="toggleFinding(${ci}, ${fi}, false)">undo</button>`
+            : (f.skip_reason || "").startsWith("ambiguous")
+            ? ` <span style="color:#b45309">quote appears ${f.skip_reason.split(":")[1]}× —
+                  not applied automatically</span>
+                <button style="padding:.05rem .5rem;font-size:.7rem"
+                  onclick="toggleFinding(${ci}, ${fi}, true, true)">apply to all
+                  ${f.skip_reason.split(":")[1]}</button>`
+            : ' <span style="color:#78716c">quote not found — the text may have changed</span>'}
         </div>
         ${f.note ? `<div class="meta" style="margin:0">${esc(f.note)}</div>` : ""}
       </div>`;
@@ -866,9 +873,14 @@ function renderTab(tab, p) {
         c.status === "unproofed" ? null
           : api(`/projects/${name}/proof/${c.idx}`).catch(() => null)));
       body.innerHTML = `<div class="card">
-        <h2>Proofread <span class="meta">(chapter by chapter — the model returns
-          an edit list, never a rewrite; accepted chapters feed the next build;
-          page OCR data is never touched)</span></h2>
+        <h2>Proofread</h2>
+        <div class="meta" style="margin-bottom:.6rem">
+          How it works: each chapter is checked and comes back as a list of
+          small fixes. Safe fixes are <b>applied automatically</b> to a proofed
+          copy — “undo” reverses any single one; ambiguous ones wait for your
+          “apply” click; plain notes have nothing to apply. None of it touches
+          the page OCR text, and none of it reaches the built book until you
+          press <b>Accept</b> on the chapter.</div>
         <div class="row">
           <button onclick="proofAll()">Proofread all pending</button>
           <span class="meta" id="proofall-status" style="margin:0"></span>
@@ -1216,9 +1228,9 @@ async function runProof(idx, btn) {
   renderTab("proof", window._proj);
 }
 
-async function toggleFinding(ci, fi, enabled) {
-  try { await api(`/projects/${current}/proof/${ci}/finding/${fi}?enabled=${enabled}`,
-                  {method: "POST"}); }
+async function toggleFinding(ci, fi, enabled, applyAll) {
+  try { await api(`/projects/${current}/proof/${ci}/finding/${fi}?enabled=${enabled}`
+                  + (applyAll ? "&apply_all=true" : ""), {method: "POST"}); }
   catch (e) { alert(e.message); return; }
   renderTab("proof", window._proj);
 }
