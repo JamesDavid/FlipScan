@@ -148,6 +148,54 @@ def _dedupe_headings(page_texts: list[str]) -> list[str]:
     return out
 
 
+_NUM_WORDS = ["ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN",
+              "EIGHT", "NINE", "TEN", "ELEVEN", "TWELVE", "THIRTEEN",
+              "FOURTEEN", "FIFTEEN", "SIXTEEN", "SEVENTEEN", "EIGHTEEN",
+              "NINETEEN", "TWENTY"]
+_ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+          "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"]
+
+
+def _normalize_inserted_titles(texts: list[str],
+                               synth: list[tuple[int, str]], log=print) -> None:
+    """A synthetic 'Chapter N' heading (inserted from the printed contents
+    page) must match the book's own naming style: if the surviving openers
+    say ONE / TWO / FOUR, an inserted 'Chapter 3' becomes THREE. The style
+    is inferred per book, never assumed."""
+    synth_titles = {(i, t) for i, t in synth}
+    book_headings = []
+    for j, t in enumerate(texts):
+        for ln in t.splitlines():
+            if ln.startswith("# "):
+                h = ln[2:].strip()
+                if (j, h) not in synth_titles:
+                    book_headings.append(h)
+
+    def style_count(pred):
+        return sum(1 for h in book_headings if pred(h))
+
+    if style_count(lambda h: h in _NUM_WORDS) >= 2:
+        style = lambda n: _NUM_WORDS[n] if n < len(_NUM_WORDS) else None
+    elif style_count(lambda h: h.title() in [w.title() for w in _NUM_WORDS]
+                     and h == h.title()) >= 2:
+        style = lambda n: (_NUM_WORDS[n].title()
+                           if n < len(_NUM_WORDS) else None)
+    elif style_count(lambda h: h in _ROMAN) >= 2:
+        style = lambda n: _ROMAN[n] if n < len(_ROMAN) else None
+    else:
+        return  # this book (or this capture) shows no clear convention
+
+    for i, title in synth:
+        m = re.match(r"(?i)^chapter\s+(\d+)$", title.strip())
+        if not m:
+            continue
+        styled = style(int(m.group(1)))
+        if styled and f"# {title}" in texts[i]:
+            texts[i] = texts[i].replace(f"# {title}", f"# {styled}", 1)
+            log(f"  chapter heading normalized to the book's own style: "
+                f"{title!r} -> {styled!r}")
+
+
 def _insert_chapter_breaks(pages: list[dict], texts: list[str],
                            toc: list[tuple[str, int]], log=print) -> list[str]:
     """The printed TOC says chapter N starts on printed page P. If that page
@@ -159,28 +207,30 @@ def _insert_chapter_breaks(pages: list[dict], texts: list[str],
         if isinstance(n, int) and n not in by_num:
             by_num[n] = i
     added = 0
+    synth: list[tuple[int, str]] = []
     for title, start in toc:
         i = by_num.get(start)
         if i is None or not texts[i].strip():
             continue
         lines = texts[i].splitlines()
-        first = next((j for j, ln in enumerate(lines) if ln.strip()), None)
-        if first is not None and _HEADING.match(lines[first]):
-            # the page opens with its own heading ('## ONE') — promote it to
-            # level 1 so it splits a chapter, keeping the book's own title
-            promoted = re.sub(r"^#{1,6}\s*", "# ", lines[first])
-            if promoted != lines[first]:
-                lines[first] = promoted
+        # a chapter opener's own heading may sit under a page-top figure —
+        # look for a heading among the first three non-blank lines
+        head_idx = [j for j, ln in enumerate(lines) if ln.strip()][:3]
+        own = next((j for j in head_idx if _HEADING.match(lines[j])), None)
+        if own is not None:
+            # promote the book's own heading ('## ONE') to a chapter break
+            promoted = re.sub(r"^#{1,6}\s*", "# ", lines[own])
+            if promoted != lines[own]:
+                lines[own] = promoted
                 texts[i] = "\n".join(lines)
                 added += 1
             continue
-        head = [ln for ln in lines if ln.strip()][:2]
-        if any(_HEADING.match(ln) for ln in head):
-            continue  # a heading close to the top — leave the page alone
         texts[i] = f"# {title}\n\n{texts[i]}"
+        synth.append((i, title))
         added += 1
     if added:
         log(f"  adjusted {added} chapter openings from the printed contents page")
+    _normalize_inserted_titles(texts, synth, log)
     return texts
 
 

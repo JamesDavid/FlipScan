@@ -483,3 +483,21 @@ def test_destructive_edits_held_back():
     finds[1]["replacement"] = 'costly "honorarium" demanded by builders'
     out2, applied2 = apply_edits(md, finds)
     assert applied2 == 1 and 'costly "honorarium" demanded' in out2
+
+
+def test_inserted_chapter_titles_match_book_style():
+    from flipscan.stages.assemble import _insert_chapter_breaks
+    pages = [{"printed_number": n} for n in (9, 45, 74, 103)]
+    texts = ["## ONE\nchapter one text", "## TWO\nchapter two text",
+             "lost its heading entirely", "## FOUR\nchapter four text"]
+    toc = [("Chapter 1", 9), ("Chapter 2", 45), ("Chapter 3", 74),
+           ("Chapter 4", 103)]
+    out = _insert_chapter_breaks(pages, texts, toc, log=lambda m: None)
+    assert out[0].splitlines()[0] == "# ONE"
+    assert out[2].splitlines()[0] == "# THREE"    # synthetic, restyled
+    # a book with no clear convention keeps the TOC title
+    texts2 = ["The Beginning\ntext", "no heading here", "also none"]
+    pages2 = [{"printed_number": n} for n in (1, 20, 40)]
+    out2 = _insert_chapter_breaks(pages2, texts2,
+                                  [("Chapter 2", 20)], log=lambda m: None)
+    assert out2[1].splitlines()[0] == "# Chapter 2"
