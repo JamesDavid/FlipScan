@@ -1074,6 +1074,22 @@ def create_app(root: Path) -> FastAPI:
             f"removes all {n_hidden} hidden pages from the project entirely — "
             f"a clean page list, no un-hide afterwards")
 
+        dup_files = []
+        n_dups = 0
+        for p in pages:
+            if p.get("status") != "duplicate":
+                continue
+            n_dups += 1
+            for rel in ([p.get("patched_source"), p.get("color"),
+                         p.get("llm_image"), p.get("md")]
+                        + (p.get("figures") or [])):
+                if rel and (ws.root / rel).exists():
+                    dup_files.append(ws.root / rel)
+        cat("duplicate_pages", "Duplicate pages (superseded captures)",
+            dup_files,
+            f"removes all {n_dups} duplicates — each has a better surviving "
+            f"capture of the same page; 'not a duplicate' rescue is gone after")
+
         orphans = []
         pages_dir = ws.root / "work" / "pages"
         if pages_dir.exists():
@@ -1120,13 +1136,22 @@ def create_app(root: Path) -> FastAPI:
                 continue
             for f in c["_files"]:
                 freed += rm(f)
-            if key == "hidden_pages":
+            if key in ("hidden_pages", "duplicate_pages"):
+                status = ("deleted" if key == "hidden_pages" else "duplicate")
                 # remove the page entries themselves — a clean project. The
-                # deleted_captures markers stay, so a future re-cluster that
+                # deleted_captures markers make sure a future re-cluster that
                 # rediscovers these frames hides them again automatically.
+                from ..stages.transcribe import cache_key
+                dl = ws.manifest.setdefault("deleted_captures", [])
+                gone = [p for p in ws.manifest["pages"]
+                        if p.get("status") == status]
+                for p in gone:
+                    ck = cache_key(p)
+                    if ck and ck not in dl:
+                        dl.append(ck)
                 ws.manifest["pages"] = [
                     p for p in ws.manifest["pages"]
-                    if p.get("status") != "deleted"]
+                    if p.get("status") != status]
         for vid in req.videos:
             v = next((v for v in ws.manifest["videos"] if v["id"] == vid), None)
             info = next((x for x in r["videos"] if x["id"] == vid), None)

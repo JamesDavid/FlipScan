@@ -1438,6 +1438,7 @@ async function runCleanup() {
   if (!cats.length && !vids.length) { alert("Nothing selected."); return; }
   const warn = [];
   if (cats.includes("hidden_pages")) warn.push("hidden pages can no longer be un-hidden");
+  if (cats.includes("duplicate_pages")) warn.push("duplicates can no longer be rescued with 'not a duplicate'");
   if (vids.length) warn.push(`source video${vids.length > 1 ? "s" : ""} ${vids.join(", ")} cannot be re-extracted afterwards`);
   if (!confirm(`Delete selected files?${warn.length ? "\n\nNote: " + warn.join("; ") + "." : ""}`))
     return;
