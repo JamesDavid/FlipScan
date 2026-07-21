@@ -458,3 +458,28 @@ def test_heal_hyphenation():
     assert heal_hyphenation("a well-known pre-war design") == \
         "a well-known pre-war design"
     assert heal_hyphenation("pages 12- 14 stay") == "pages 12- 14 stay"
+
+
+def test_destructive_edits_held_back():
+    from flipscan.proofread import apply_edits
+    md = ("assurances were sent me\n\n![Santos](figures/p0012_a.png)\n\nmore text "
+          "and the costly \"honorar-lum\" demanded by builders restraints.123 end")
+    finds = [
+        # deletes an image tag + invents words
+        {"quote": "assurances were sent me\n\n![Santos](figures/p0012_a.png)",
+         "replacement": "assurances were sent me that the", "note": ""},
+        # deletes most of the quoted text
+        {"quote": "costly \"honorar-lum\" demanded by builders",
+         "replacement": "\"honorarium\"", "note": ""},
+        # rewrites footnote digits
+        {"quote": "restraints.123", "replacement": "restraints.¹²ⁱ", "note": ""},
+    ]
+    out, applied = apply_edits(md, finds)
+    assert applied == 0
+    assert all((f.get("skip_reason") or "").startswith("unsafe") for f in finds)
+    assert "![Santos]" in out                     # nothing was harmed
+    # a user-authored fix bypasses the guard
+    finds[1]["user_edit"] = True
+    finds[1]["replacement"] = 'costly "honorarium" demanded by builders'
+    out2, applied2 = apply_edits(md, finds)
+    assert applied2 == 1 and 'costly "honorarium" demanded' in out2

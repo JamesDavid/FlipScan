@@ -879,6 +879,9 @@ proof layer, the page OCR text stays untouched"
                 <button style="padding:.05rem .5rem;font-size:.7rem"
                   onclick="toggleFinding(${ci}, ${fi}, true, true)">apply to all
                   ${f.skip_reason.split(":")[1]}</button>`
+            : (f.skip_reason || "").startsWith("unsafe")
+            ? ` <span style="color:#dc2626">held back: ${esc(f.skip_reason.slice(7))} —
+                  review with ✎ before applying</span>`
             : ' <span style="color:#78716c">quote not found — the text may have changed</span>'}
         </div>
         ${f.note ? `<div class="meta" style="margin:0">${esc(f.note)}</div>` : ""}

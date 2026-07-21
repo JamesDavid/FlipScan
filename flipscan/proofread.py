@@ -36,6 +36,14 @@ Rules:
 - NEVER paraphrase, restyle, or improve the prose. Only fix objective errors:
   OCR misreads, garbled characters (like �), broken hyphen- ation, doubled or
   missing spaces, obviously wrong words, stray page artifacts.
+- A replacement must be a MINIMAL edit of the quote: same content, same
+  images, same footnote markers, one small correction. Never delete words,
+  names, or ![image](...) tags; never invent text that is not clearly implied.
+- Leave proper names alone unless the SAME name is spelled differently
+  elsewhere in this chapter (then match the majority spelling). Do not
+  "correct" names against your outside knowledge.
+- Leave footnote/endnote markers exactly as printed (superscripts, <sup>,
+  bracketed numbers).
 - "quote" must match the chapter text EXACTLY, character for character, and be
   unique enough to locate. Include surrounding words if needed.
 - Suspected missing text, duplicated passages, contradictions, or sentences
@@ -123,13 +131,42 @@ def llm_findings(cfg: dict, chapter_md: str) -> list[dict]:
     if provider == "mock":
         return []
     if provider == "anthropic":
-        raw = _anthropic_review(cfg, chapter_md)
-    else:  # ollama / hybrid — local is plenty for an edit list
-        raw = _ollama_review(cfg, chapter_md)
-    return _parse_findings(raw)
+        return _parse_findings(_anthropic_review(cfg, chapter_md))
+    # ollama / hybrid — local is plenty for an edit list, but greedy decoding
+    # can loop until the budget truncates the JSON: salvage what parsed, and
+    # retry once with anti-repetition sampling before giving up
+    raw = _ollama_review(cfg, chapter_md)
+    try:
+        return _parse_findings(raw)
+    except (ValueError, json.JSONDecodeError):
+        found = _salvage_findings(raw)
+        if found:
+            return found
+    raw = _ollama_review(cfg, chapter_md,
+                         extra={"repeat_penalty": 1.15, "repeat_last_n": 256,
+                                "num_predict": 8192})
+    try:
+        return _parse_findings(raw)
+    except (ValueError, json.JSONDecodeError):
+        return _salvage_findings(raw)  # possibly [] — a clean 'no findings'
+        #                               beats failing the whole chapter
 
 
-def _ollama_review(cfg: dict, chapter_md: str) -> str:
+def _salvage_findings(raw: str) -> list[dict]:
+    """Pull whatever complete finding objects exist out of a truncated reply
+    (findings are flat objects, so brace matching is trivial)."""
+    out = []
+    for m in re.finditer(r"\{[^{}]*\}", raw):
+        try:
+            obj = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("quote"):
+            out.append(_norm_finding(obj))
+    return out[:MAX_FINDINGS]
+
+
+def _ollama_review(cfg: dict, chapter_md: str, extra: dict | None = None) -> str:
     import httpx
     p = cfg["provider"]
     resp = httpx.post(
@@ -141,7 +178,8 @@ def _ollama_review(cfg: dict, chapter_md: str) -> str:
             "think": p.get("ollama_think", False),
             # long chapters need a big context window; findings stay small
             "options": {"num_predict": 4096, "temperature": 0,
-                        "num_ctx": int(p.get("proof_num_ctx", 32768))},
+                        "num_ctx": int(p.get("proof_num_ctx", 32768)),
+                        **(extra or {})},
             "messages": [{"role": "user", "content": PROOF_PROMPT + chapter_md}],
         },
         timeout=900.0,
@@ -170,20 +208,21 @@ def _parse_findings(raw: str) -> list[dict]:
     if start == -1 or end <= start:
         raise ValueError(f"no JSON in proofread response: {raw[:200]!r}")
     obj = json.loads(text[start:end + 1])
-    out = []
-    for f in obj.get("findings", []):
-        if not isinstance(f, dict) or not f.get("quote"):
-            continue
-        out.append({
-            "type": str(f.get("type") or "other"),
-            "severity": str(f.get("severity") or "low"),
-            "quote": str(f["quote"])[:200],
-            "replacement": (str(f["replacement"])
-                            if f.get("replacement") is not None else None),
-            "note": str(f.get("note") or "")[:300],
-            "source": "llm",
-        })
+    out = [_norm_finding(f) for f in obj.get("findings", [])
+           if isinstance(f, dict) and f.get("quote")]
     return out[:MAX_FINDINGS]
+
+
+def _norm_finding(f: dict) -> dict:
+    return {
+        "type": str(f.get("type") or "other"),
+        "severity": str(f.get("severity") or "low"),
+        "quote": str(f["quote"])[:200],
+        "replacement": (str(f["replacement"])
+                        if f.get("replacement") is not None else None),
+        "note": str(f.get("note") or "")[:300],
+        "source": "llm",
+    }
 
 
 # ---------------- applying the edit list
@@ -209,6 +248,31 @@ def _quote_pattern(quote: str) -> re.Pattern:
     return re.compile(r"\s+".join(parts))
 
 
+_IMG_MD = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+
+
+def edit_is_destructive(q: str, r: str) -> str | None:
+    """LLM 'fixes' that delete content or rewrite too much are the dangerous
+    kind (observed: dropped image tags with invented continuations, deleted
+    clauses/names, footnote markers replaced with garbage). Returns a human
+    reason, or None when the edit looks like a genuine small correction."""
+    from difflib import SequenceMatcher
+    if len(_IMG_MD.findall(r)) < len(_IMG_MD.findall(q)):
+        return "the fix would delete a figure reference"
+    if len(q) > 40 and len(r) < 0.6 * len(q):
+        return "the fix deletes most of the quoted text"
+    digits_q = re.findall(r"\d+", q)
+    digits_r = re.findall(r"\d+", r)
+    marker = any(s in q or s in r
+                 for s in ("<sup", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸",
+                           "⁹", "⁰", "ⁱ"))
+    if digits_q != digits_r and marker:
+        return "the fix rewrites footnote/reference numbers"
+    if SequenceMatcher(None, q, r).ratio() < 0.55 and len(q) > 20:
+        return "the fix rewrites rather than corrects"
+    return None
+
+
 def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
     """Apply the safe edits: a quote matching exactly once (or one the user
     explicitly promoted to apply-to-all). Matching is exact first, then
@@ -221,6 +285,11 @@ def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
         q, r = f.get("quote"), f.get("replacement")
         if not q or r is None or r == q:
             continue
+        if not f.get("user_edit") and not f.get("apply_all"):
+            danger = edit_is_destructive(q, r)
+            if danger:
+                f["skip_reason"] = f"unsafe:{danger}"
+                continue
         n = md.count(q)
         if n > 0:
             if n == 1 or f.get("apply_all"):
