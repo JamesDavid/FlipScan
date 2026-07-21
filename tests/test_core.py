@@ -446,3 +446,15 @@ def test_dedupe_by_content_catches_unnumbered_twin():
     assert pages[0]["status"] == "duplicate"      # video copy loses
     assert pages[1]["status"] == "patched" and pages[1].get("content_duplicate") is None
     assert pages[2]["status"] == "ok"
+
+
+def test_heal_hyphenation():
+    from flipscan.stages.assemble import heal_hyphenation
+    assert heal_hyphenation("the poten-\ntial of wing- less flight") == \
+        "the potential of wingless flight"
+    # suspended hyphens and true compounds survive
+    assert heal_hyphenation("nineteenth- and twentieth-century craft") == \
+        "nineteenth- and twentieth-century craft"
+    assert heal_hyphenation("a well-known pre-war design") == \
+        "a well-known pre-war design"
+    assert heal_hyphenation("pages 12- 14 stay") == "pages 12- 14 stay"

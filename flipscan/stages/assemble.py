@@ -17,6 +17,25 @@ _SENTENCE_END = re.compile(r'[.!?:;"”’)\]]\s*$')
 _HEADING = re.compile(r"^#{1,6}\s")
 _TOC_ENTRY = re.compile(r"^(.{2,60}?)[\s.·]+(\d{1,4})\s*$")
 
+# words that legitimately follow a suspended hyphen ("nineteenth- and
+# twentieth-century") — never glue these onto the previous fragment
+_HYPHEN_STOP = {"and", "or", "to", "the", "a", "an", "in", "of", "on", "at",
+                "by", "for", "with", "but", "nor", "not", "so", "yet"}
+
+
+def heal_hyphenation(text: str) -> str:
+    """Remove print-line-break hyphenation: reflowable output must not keep
+    'wing- less' or 'poten-\\ntial'. Real compounds ('well-known') have no
+    space after the hyphen and are left alone."""
+    text = re.sub(r"(\w)-\s*\n\s*([a-z])", r"\1\2", text)
+
+    def join(m):
+        if m.group(2).lower() in _HYPHEN_STOP:
+            return m.group(0)
+        return m.group(1) + m.group(2)
+
+    return re.sub(r"\b([A-Za-z]{2,})- ([a-z]{2,})\b", join, text)
+
 
 def _norm_line(ln: str) -> str:
     """Normalize for running-header comparison: drop markdown heading markers,
@@ -290,9 +309,7 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     # unresolved figure placeholders (region never cropped) must not reach
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
-    # heal hyphen splits at line breaks inside a page: 'poten-\ntial' -> the
-    # word the book actually printed (only when the tail starts lowercase)
-    texts = [re.sub(r"(\w)-\s*\n\s*([a-z])", r"\1\2", t) for t in texts]
+    texts = [heal_hyphenation(t) for t in texts]
     book = _join_pages(_with_gap_markers(kept, texts))
     missing_nums = ws.manifest.get("missing_pages") or []
     if missing_nums:
