@@ -534,6 +534,12 @@ function renderTab(tab, p) {
       </div>`;
     renderStorage(name);
   } else if (tab === "pages") {
+    // unsaved markdown edits must survive re-renders (section change, ignore,
+    // crop save, page links all rebuild this tab)
+    const dirtyMd = {};
+    document.querySelectorAll('textarea[id^="md-"]').forEach(t => {
+      if (t.dataset.dirty) dirtyMd[t.id] = t.value;
+    });
     if (window._filterProj !== name) {   // fresh project -> fresh filters
       pageFilters = {chapter: "", unnumbered: false};
       window._filterProj = name;
@@ -611,6 +617,15 @@ function renderTab(tab, p) {
     body.innerHTML = toolbar
       + shown.map(pg => gapBefore(pg) + (pg2html(pg))).join("")
       + nextBtn + cropModalHtml();
+    for (const [id, val] of Object.entries(dirtyMd)) {
+      const t = $(id);
+      if (t) {
+        t.value = val;
+        t.dataset.dirty = 1;
+        const b = $("mdsave-" + id.slice(3));
+        if (b) { b.textContent = "Save markdown *"; b.disabled = false; }
+      }
+    }
     function pg2html(pg) {
       const collapsed = pg.status === "deleted" || pg.status === "duplicate";
       const numLabel = pg.printed_number != null

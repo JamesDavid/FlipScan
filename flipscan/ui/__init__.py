@@ -824,10 +824,17 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)
         page, rel, region = _figure(ws, page_id, fig_idx)
         data = await photo.read()
-        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
+
+        def _decode_write():   # 12MP decode off the event loop
+            img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                return False
+            # keep filename: markdown link stays valid
+            cv2.imwrite(str(ws.root / rel), img)
+            return True
+
+        if not await asyncio.to_thread(_decode_write):
             raise HTTPException(400, "not a readable image")
-        cv2.imwrite(str(ws.root / rel), img)  # keep filename: markdown link stays valid
         if region is not None:
             region["user_crop"] = True  # never let the figures stage overwrite it
         ws.stage_reset("assemble")
@@ -924,17 +931,23 @@ def create_app(root: Path) -> FastAPI:
             result = page["id"]
         elif kind == "figure" and page_id is not None and fig_idx is not None:
             # fig_idx is the REGION index here (queue items address regions)
-            import cv2
-            import numpy as np
             page = ws.page(page_id)
             if page is None:
                 raise HTTPException(404, "no such page")
-            img = cv2.imdecode(np.frombuffer(tmp.read_bytes(), np.uint8),
-                               cv2.IMREAD_COLOR)
-            if img is None:
-                raise HTTPException(400, "not a readable image")
             rel = f"figures/{page_id}_{chr(97 + fig_idx % 26)}.png"
-            cv2.imwrite(str(ws.root / rel), img)
+
+            def _decode_write():   # 12MP decode off the event loop
+                import cv2
+                import numpy as np
+                img = cv2.imdecode(np.frombuffer(tmp.read_bytes(), np.uint8),
+                                   cv2.IMREAD_COLOR)
+                if img is None:
+                    return False
+                cv2.imwrite(str(ws.root / rel), img)
+                return True
+
+            if not await asyncio.to_thread(_decode_write):
+                raise HTTPException(400, "not a readable image")
             if rel not in (page.get("figures") or []):
                 page.setdefault("figures", []).append(rel)
             regions = page.get("regions") or []
