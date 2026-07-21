@@ -58,6 +58,10 @@ class ReaderFlag(BaseModel):
     note: str | None = None
 
 
+class FindingEdit(BaseModel):
+    replacement: str | None = None   # user-authored fix ("" deletes the quote)
+
+
 class CropEdit(BaseModel):
     bbox_norm: list[float] | None = None
     quad_norm: list[list[float]] | None = None  # 4 corners; skewed quads get
@@ -1015,12 +1019,16 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}")
     def proof_finding(name: str, idx: int, fi: int, enabled: bool,
-                      apply_all: bool = False):
-        """Per-finding accept/reject: rebuilds the proofed chapter copy."""
+                      apply_all: bool = False, edit: FindingEdit | None = None):
+        """Per-finding accept/reject/author-a-fix: rebuilds the proofed copy."""
         from ..proofread import toggle_finding
         ws = ws_for(name)
+        set_repl = edit is not None and "replacement" in edit.model_fields_set
         try:
-            return toggle_finding(ws, idx, fi, enabled, apply_all=apply_all)
+            return toggle_finding(
+                ws, idx, fi, enabled, apply_all=apply_all,
+                replacement=edit.replacement if set_repl else None,
+                set_replacement=set_repl)
         except (FileNotFoundError, IndexError) as e:
             raise HTTPException(404, str(e))
         except ValueError as e:

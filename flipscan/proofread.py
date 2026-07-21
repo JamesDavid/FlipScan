@@ -274,10 +274,14 @@ def proofread_chapter(ws: Workspace, cfg: dict, idx: int) -> dict:
 
 
 def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool,
-                   apply_all: bool = False) -> dict:
+                   apply_all: bool = False, replacement: str | None = None,
+                   set_replacement: bool = False) -> dict:
     """Reject or re-enable one finding's fix; the proofed copy is rebuilt
     from the base chapter + all still-enabled edits. apply_all promotes an
-    ambiguous fix (quote occurs N times) to replace every occurrence."""
+    ambiguous fix (quote occurs N times) to replace every occurrence.
+    set_replacement stores a user-authored fix on the finding — the way to
+    resolve a note-only finding without ever touching the page OCR text
+    (an empty replacement deletes the quoted text)."""
     d = load_proof(ws, idx)
     if d is None:
         raise FileNotFoundError("chapter not proofread yet")
@@ -290,6 +294,9 @@ def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool,
     if not 0 <= fi < len(d["findings"]):
         raise IndexError(f"no finding {fi}")
     d["findings"][fi]["rejected"] = not enabled
+    if set_replacement:
+        d["findings"][fi]["replacement"] = replacement or ""
+        d["findings"][fi]["user_edit"] = True
     if apply_all:
         d["findings"][fi]["apply_all"] = True
     elif not enabled:

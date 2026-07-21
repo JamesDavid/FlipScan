@@ -814,8 +814,13 @@ function renderTab(tab, p) {
         <div style="font-family:ui-monospace,monospace;font-size:.78rem;margin:.15rem 0">
           “${esc(f.quote)}”${f.replacement != null
             ? ` → <span style="${f.rejected ? "text-decoration:line-through" : ""}">“${esc(f.replacement)}”</span>` : ""}
+          ${f.user_edit ? ' <span class="badge ok">your fix</span>' : ""}
+          ${f.quote ? ` <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
+              title="write or adjust the corrected text yourself — applied at the
+proof layer, the page OCR text stays untouched"
+              onclick="editFix(${ci}, ${fi})">✎ ${f.replacement != null ? "edit fix" : "write a fix"}</button>` : ""}
           ${f.replacement == null
-            ? ' <span class="meta">— note only, nothing to auto-fix (use the page link)</span>'
+            ? ' <span class="meta">— note: ✎ write the fix here, or use the page link if the capture itself needs work</span>'
             : f.rejected
             ? ` <span style="color:#78716c">undone</span>
                 <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
@@ -834,6 +839,18 @@ function renderTab(tab, p) {
             : ' <span style="color:#78716c">quote not found — the text may have changed</span>'}
         </div>
         ${f.note ? `<div class="meta" style="margin:0">${esc(f.note)}</div>` : ""}
+        <div id="fixed-${ci}-${fi}" style="display:none;margin:.35rem 0 0">
+          <textarea id="fixta-${ci}-${fi}" style="min-height:64px;font-size:.8rem"
+            >${esc(f.replacement ?? f.quote)}</textarea>
+          <div class="row" style="margin-top:.25rem">
+            <button style="padding:.3rem .8rem;font-size:.8rem"
+              onclick="saveFix(${ci}, ${fi})">Apply this fix</button>
+            <button class="secondary" style="padding:.3rem .8rem;font-size:.8rem"
+              onclick="$('fixed-${ci}-${fi}').style.display='none'">Cancel</button>
+            <span class="meta" style="margin:0">edit into what the book should say —
+              empty deletes the quoted text; the page OCR is never modified</span>
+          </div>
+        </div>
       </div>`;
     const chCard = (c, d) => {
       const badgeCls = {review: "patched", accepted: "ok", rejected: "deleted",
@@ -1225,6 +1242,22 @@ async function runProof(idx, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "proofreading…"; }
   try { await api(`/projects/${current}/proof/${idx}/run`, {method: "POST"}); }
   catch (e) { alert(e.message); }
+  renderTab("proof", window._proj);
+}
+
+function editFix(ci, fi) {
+  const box = $(`fixed-${ci}-${fi}`);
+  box.style.display = box.style.display === "none" ? "block" : "none";
+  if (box.style.display === "block") $(`fixta-${ci}-${fi}`).focus();
+}
+
+async function saveFix(ci, fi) {
+  const v = $(`fixta-${ci}-${fi}`).value;
+  try {
+    await api(`/projects/${current}/proof/${ci}/finding/${fi}?enabled=true`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({replacement: v})});
+  } catch (e) { alert(e.message); return; }
   renderTab("proof", window._proj);
 }
 

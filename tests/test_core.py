@@ -393,3 +393,11 @@ def test_apply_edits_tolerates_linebreaks_and_typography():
     assert applied == 2
     assert "doomed futurism visions" in out.replace("\n", " ")
     assert "crews' hope" in out
+
+
+def test_apply_edits_empty_replacement_deletes():
+    from flipscan.proofread import apply_edits
+    md = "keep this 5 4 3 2 1 artifact gone"
+    finds = [{"quote": "5 4 3 2 1 artifact ", "replacement": "", "note": ""}]
+    out, applied = apply_edits(md, finds)
+    assert applied == 1 and out == "keep this gone"
