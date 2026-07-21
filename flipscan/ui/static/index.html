@@ -492,6 +492,10 @@ function renderTab(tab, p) {
         </div>
       </div>
       ${addPagePanel()}
+      <div class="card" id="storage-card">
+        <h2>Storage &amp; cleanup</h2>
+        <div class="meta">loading sizes…</div>
+      </div>
       <div class="card">
         <h2>Videos (${p.videos.length})</h2>
         ${p.videos.map(v => `
@@ -527,10 +531,6 @@ function renderTab(tab, p) {
           </div>`).join("")
           || "<div class='meta'>no photos added yet — use 'Add page from photo' above " +
              "for covers, inside-cover text, or missed pages</div>"}
-      </div>
-      <div class="card" id="storage-card">
-        <h2>Storage &amp; cleanup</h2>
-        <div class="meta">loading sizes…</div>
       </div>`;
     renderStorage(name);
   } else if (tab === "pages") {
