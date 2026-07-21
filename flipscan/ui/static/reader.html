@@ -20,9 +20,6 @@
     background:#44403c; color:#fafaf9; border:0; border-radius:6px;
     padding:.35rem .7rem; font-size:.85rem; cursor:pointer; max-width:9rem; }
   #viewer { flex:1; min-height:0; background:#fff; position:relative; }
-  #viewer .arrow { position:absolute; top:0; bottom:0; width:18%; z-index:5;
-                   cursor:pointer; background:transparent; border:0; }
-  #prev { left:0; } #next { right:0; }
   footer { flex:none; padding:.3rem .8rem; font-size:.75rem; color:#78716c;
            text-align:center; background:#f5f5f4;
            padding-bottom: calc(.3rem + env(safe-area-inset-bottom)); }
@@ -46,8 +43,6 @@ flag it for the reshoot list">⚑ flag</button>
 </header>
 <div id="viewer">
   <div id="loading">loading book…</div>
-  <button class="arrow" id="prev" title="previous page"></button>
-  <button class="arrow" id="next" title="next page"></button>
 </div>
 <footer id="pos"></footer>
 
@@ -123,6 +118,26 @@ rendition.on("relocated", updatePos);
 // maps straight back to its page and crop slot in FlipScan
 rendition.hooks.content.register(contents => {
   const doc = contents.document;
+  // internal links (the book's contents page!) must navigate — bind them
+  // explicitly; the sandboxed iframe drops epub.js's default handling
+  doc.querySelectorAll("a[href]").forEach(a => {
+    const href = a.getAttribute("href");
+    if (!href || /^[a-z]+:/i.test(href)) return;   // external links untouched
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      rendition.display(href.replace(/^\.\//, ""));
+    });
+  });
+  // tap zones live INSIDE the content so links and buttons always win —
+  // the old invisible overlays sat on top and ate the TOC's clicks
+  doc.addEventListener("click", (e) => {
+    if (e.target.closest("a, button, select, input")) return;
+    const w = doc.documentElement.clientWidth || 1;
+    const x = e.clientX / w;
+    if (x < 0.3) rendition.prev();
+    else if (x > 0.7) rendition.next();
+  });
   doc.querySelectorAll("img").forEach(img => {
     // epub.js rewrites src to blob: URLs — identity rides in data-fig instead
     const m = (img.getAttribute("data-fig") || "").match(/^(p\d{4})_([a-z])$/);
@@ -191,8 +206,6 @@ document.getElementById("flag").onclick = async () => {
   } catch (e) { alert("flag failed: " + e.message); }
 };
 
-document.getElementById("prev").onclick = () => rendition.prev();
-document.getElementById("next").onclick = () => rendition.next();
 document.getElementById("font-minus").onclick = () => {
   fontPct = Math.max(60, fontPct - 10);
   localStorage.setItem("flipscan-reader-font", fontPct); applyFont();
