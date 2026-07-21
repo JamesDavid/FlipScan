@@ -1056,15 +1056,19 @@ def create_app(root: Path) -> FastAPI:
             "turn-motion debris and dropped clusters — nothing references them")
 
         hidden_files = []
+        n_hidden = 0
         for p in pages:
-            if p.get("status") != "deleted" or p.get("purged"):
+            if p.get("status") != "deleted":
                 continue
-            for rel in ([p.get("patched_source"), p.get("color"),
-                         p.get("llm_image")] + (p.get("figures") or [])):
+            n_hidden += 1
+            rels = ([p.get("patched_source"), p.get("color"), p.get("llm_image"),
+                     p.get("md")] + (p.get("figures") or []))
+            for rel in rels:
                 if rel and (ws.root / rel).exists():
                     hidden_files.append(ws.root / rel)
-        cat("hidden_pages", "Images of hidden pages", hidden_files,
-            "frees the space but those pages can no longer be un-hidden")
+        cat("hidden_pages", "Hidden pages (images + page entries)", hidden_files,
+            f"removes all {n_hidden} hidden pages from the project entirely — "
+            f"a clean page list, no un-hide afterwards")
 
         orphans = []
         pages_dir = ws.root / "work" / "pages"
@@ -1113,11 +1117,12 @@ def create_app(root: Path) -> FastAPI:
             for f in c["_files"]:
                 freed += rm(f)
             if key == "hidden_pages":
-                for p in ws.manifest["pages"]:
-                    if p.get("status") == "deleted":
-                        p["purged"] = True   # images gone — can't un-hide
-                        for k in ("color", "llm_image"):
-                            p.pop(k, None)
+                # remove the page entries themselves — a clean project. The
+                # deleted_captures markers stay, so a future re-cluster that
+                # rediscovers these frames hides them again automatically.
+                ws.manifest["pages"] = [
+                    p for p in ws.manifest["pages"]
+                    if p.get("status") != "deleted"]
         for vid in req.videos:
             v = next((v for v in ws.manifest["videos"] if v["id"] == vid), None)
             info = next((x for x in r["videos"] if x["id"] == vid), None)
