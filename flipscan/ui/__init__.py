@@ -194,7 +194,20 @@ def create_app(root: Path) -> FastAPI:
         m = ws.manifest
         sig = _build_signature(ws)
         built = m.get("outputs_built", {})
+        # per-file versions: thumbnail URLs embed these so a re-crop or
+        # re-patch changes the URL and can never be served from memory cache
+        file_v: dict[str, int] = {}
+        for p in m["pages"]:
+            for rel in ([p.get("color"), p.get("patched_source")]
+                        + (p.get("figures") or [])):
+                if rel and rel not in file_v:
+                    try:
+                        file_v[rel] = (ws.root / rel).stat().st_mtime_ns \
+                            // 1_000_000
+                    except OSError:
+                        pass
         return {
+            "file_versions": file_v,
             "name": name,
             "book": m["book"],
             "toc": printed_toc(ws),

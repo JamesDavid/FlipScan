@@ -718,7 +718,7 @@ function renderTab(tab, p) {
             <div>
               ${pg.color ? `<img loading="lazy" decoding="async" style="width:100%;
                  border:1px solid var(--line);border-radius:4px"
-                 src="/api/projects/${name}/thumb/${pg.color}?w=${thumbW()}">` : ""}
+                 src="/api/projects/${name}/thumb/${pg.color}?w=${thumbW()}${fv(pg.color)}">` : ""}
               ${figs ? `<div class="row" style="margin-top:.4rem">${figs}</div>` : ""}
             </div>
             <div>
@@ -1192,7 +1192,7 @@ function renderWizard() {
   if (!it) { return finishWizard(); }
   const preview = wiz.mode === "unidentified" ? it.color : it.preview;
   const img = preview ? `
-    <img decoding="async" src="/api/projects/${current}/thumb/${preview}?w=900"
+    <img decoding="async" src="/api/projects/${current}/thumb/${preview}?w=900${fv(preview)}"
          style="max-height:45vh;border:1px solid var(--line);border-radius:6px;
                 margin-bottom:1rem">` : "";
   const title = wiz.mode === "unidentified"
@@ -1315,8 +1315,12 @@ function toggleCell(pageId) {
 }
 
 let pageFilters = {chapter: "", unnumbered: false};
-let figV = {};   // rel-path -> version bump after re-crop/upload
-const fv = (k) => figV[k] ? "&v=" + figV[k] : "";
+let figV = {};   // session bumps (fallback until the next detail fetch)
+const fv = (k) => {
+  const sv = window._proj?.file_versions?.[k] || 0;
+  const b = figV[k] || 0;
+  return (sv || b) ? `&v=${sv}.${b}` : "";
+};
 function bumpFig(k) { figV[k] = (figV[k] || 0) + 1; }
 
 // thumbnail width matched to the actual layout: full-width cells on phones,
@@ -1516,7 +1520,7 @@ function renderReview() {
     </div>
     <div style="color:#b45309;margin:.4rem 0">⚠ ${esc(it.reasons.join("; "))}</div>
     ${pg.color ? `<img decoding="async"
-       src="/api/projects/${current}/thumb/${pg.color}?w=900"
+       src="/api/projects/${current}/thumb/${pg.color}?w=900${fv(pg.color)}"
        style="max-height:56vh;max-width:100%;border:1px solid var(--line);
               border-radius:6px;display:block;margin:0 auto">`
       : "<div class='meta'>no processed image for this page yet</div>"}
