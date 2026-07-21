@@ -840,6 +840,10 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/projects/{name}/pages/{page_id}/restore")
     def restore_page(name: str, page_id: str):
         ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is not None and page.get("purged"):
+            raise HTTPException(409, "this page's images were cleaned up — "
+                                     "re-photograph it instead")
         from ..project import set_page_deleted
         try:
             set_page_deleted(ws, page_id, False)
@@ -981,6 +985,132 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True, "page": p["id"],
                 "printed_number": p.get("printed_number")}
+
+    # ---------------- storage report + cleanup
+
+    def _storage_report(ws: Workspace) -> dict:
+        pages = ws.manifest["pages"]
+        referenced: set[str] = set()
+        for p in pages:
+            for fid in (p.get("cluster_frames") or []):
+                referenced.add(fid)
+            for k in ("canonical", "fallback"):
+                if p.get(k):
+                    referenced.add(p[k])
+        live_ids = {p["id"] for p in pages}
+
+        def size(f: Path) -> int:
+            try:
+                return f.stat().st_size
+            except OSError:
+                return 0
+
+        videos = []
+        for v in ws.manifest["videos"]:
+            f = ws.root / v["path"]
+            videos.append({
+                "id": v["id"], "path": v["path"], "size": size(f),
+                "exists": f.exists(),
+                "deleted": bool(v.get("source_deleted")),
+                "deletable": (f.exists()
+                              and ws.stage_status("extract") == "done"),
+                "frames": v.get("frames_extracted"),
+            })
+
+        cats: dict[str, dict] = {}
+
+        def cat(key, label, files, note=""):
+            cats[key] = {"label": label, "note": note,
+                         "count": len(files),
+                         "size": sum(size(f) for f in files),
+                         "_files": files}
+
+        frames_dir = ws.root / "frames"
+        unused_frames = []
+        if frames_dir.exists():
+            for f in frames_dir.rglob("*.jpg"):
+                fid = f"{f.parent.name}_{f.stem}"
+                if fid not in referenced:
+                    unused_frames.append(f)
+        cat("frames_unused", "Extracted frames no page uses", unused_frames,
+            "turn-motion debris and dropped clusters — nothing references them")
+
+        hidden_files = []
+        for p in pages:
+            if p.get("status") != "deleted" or p.get("purged"):
+                continue
+            for rel in ([p.get("patched_source"), p.get("color"),
+                         p.get("llm_image")] + (p.get("figures") or [])):
+                if rel and (ws.root / rel).exists():
+                    hidden_files.append(ws.root / rel)
+        cat("hidden_pages", "Images of hidden pages", hidden_files,
+            "frees the space but those pages can no longer be un-hidden")
+
+        orphans = []
+        pages_dir = ws.root / "work" / "pages"
+        if pages_dir.exists():
+            for f in pages_dir.glob("*.*"):
+                pid = f.name.split("_")[0]
+                if pid not in live_ids:
+                    orphans.append(f)
+        cat("orphans", "Working images of pages that no longer exist", orphans)
+
+        thumbs = list((ws.root / "work" / "thumbs").glob("*.jpg")) \
+            if (ws.root / "work" / "thumbs").exists() else []
+        cat("thumbs", "Thumbnail cache", thumbs, "regenerated on demand")
+
+        uploads = [f for f in (ws.root / "uploads").glob("*")
+                   if f.is_file()] if (ws.root / "uploads").exists() else []
+        cat("uploads", "Leftover upload temp files", uploads)
+
+        return {"videos": videos, "categories": cats}
+
+    @app.get("/api/projects/{name}/storage")
+    def storage(name: str):
+        r = _storage_report(ws_for(name))
+        for c in r["categories"].values():
+            c.pop("_files", None)
+        return r
+
+    class Cleanup(BaseModel):
+        categories: list[str] = []
+        videos: list[str] = []      # video ids whose SOURCE file to delete
+
+    @app.post("/api/projects/{name}/cleanup")
+    def cleanup(name: str, req: Cleanup):
+        ws = ws_for(name)
+        r = _storage_report(ws)
+        freed = 0
+
+        def rm(f: Path) -> int:
+            try:
+                n = f.stat().st_size
+                f.unlink()
+                return n
+            except OSError:
+                return 0
+
+        for key in req.categories:
+            c = r["categories"].get(key)
+            if not c:
+                continue
+            for f in c["_files"]:
+                freed += rm(f)
+            if key == "hidden_pages":
+                for p in ws.manifest["pages"]:
+                    if p.get("status") == "deleted":
+                        p["purged"] = True   # images gone — can't un-hide
+                        for k in ("color", "llm_image"):
+                            p.pop(k, None)
+        for vid in req.videos:
+            v = next((v for v in ws.manifest["videos"] if v["id"] == vid), None)
+            info = next((x for x in r["videos"] if x["id"] == vid), None)
+            if v is None or info is None or not info["deletable"]:
+                continue
+            freed += rm(ws.root / v["path"])
+            v["source_deleted"] = True   # extracted frames/pages live on
+        ws.save()
+        return {"ok": True, "freed": freed}
 
     # ---------------- proofread: a distinct, non-destructive layer
 

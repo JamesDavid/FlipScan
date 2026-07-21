@@ -527,7 +527,12 @@ function renderTab(tab, p) {
           </div>`).join("")
           || "<div class='meta'>no photos added yet — use 'Add page from photo' above " +
              "for covers, inside-cover text, or missed pages</div>"}
+      </div>
+      <div class="card" id="storage-card">
+        <h2>Storage &amp; cleanup</h2>
+        <div class="meta">loading sizes…</div>
       </div>`;
+    renderStorage(name);
   } else if (tab === "pages") {
     if (window._filterProj !== name) {   // fresh project -> fresh filters
       pageFilters = {chapter: "", unnumbered: false};
@@ -1311,6 +1316,76 @@ async function proofAll() {
     }
   }
   renderTab("proof", window._proj);
+}
+
+// ---- storage & cleanup (media tab)
+function fmtBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + " MB";
+  return Math.max(1, Math.round(n / 1e3)) + " KB";
+}
+
+async function renderStorage(name) {
+  const card = $("storage-card");
+  if (!card) return;
+  let s;
+  try { s = await api(`/projects/${name}/storage`); }
+  catch (e) { card.querySelector(".meta").textContent = e.message; return; }
+  const catRow = (key, c) => c.count ? `
+    <label class="row" style="border-top:1px solid var(--line);padding:.45rem 0;
+           cursor:pointer">
+      <input type="checkbox" class="cln-cat" value="${key}"
+             data-size="${c.size}" style="width:auto;margin:0">
+      <span style="flex:1;min-width:10rem">${esc(c.label)}
+        ${c.note ? `<div class="meta" style="margin:0">${esc(c.note)}</div>` : ""}</span>
+      <span class="meta" style="margin:0">${c.count.toLocaleString()} files</span>
+      <b style="min-width:5.5rem;text-align:right">${fmtBytes(c.size)}</b>
+    </label>` : "";
+  const vidRow = (v) => `
+    <label class="row" style="border-top:1px solid var(--line);padding:.45rem 0;
+           cursor:${v.deletable ? "pointer" : "default"}">
+      <input type="checkbox" class="cln-vid" value="${v.id}"
+             data-size="${v.size}" style="width:auto;margin:0"
+             ${v.deletable ? "" : "disabled"}>
+      <span style="flex:1;min-width:10rem">source video <b>${v.id}</b>
+        <div class="meta" style="margin:0">${
+          v.deleted ? "source already deleted — extracted pages live on"
+          : v.deletable ? `processed (${v.frames ?? "?"} frames extracted) — the
+              pages built from it survive deletion; re-extraction won't be possible`
+          : "not fully processed yet — keep it"}</div></span>
+      <b style="min-width:5.5rem;text-align:right">${v.exists ? fmtBytes(v.size) : "—"}</b>
+    </label>`;
+  card.innerHTML = `<h2>Storage &amp; cleanup</h2>
+    ${s.videos.map(vidRow).join("")}
+    ${Object.entries(s.categories).map(([k, c]) => catRow(k, c)).join("")}
+    <div class="row" style="margin-top:.7rem">
+      <button class="danger" onclick="runCleanup()">Delete selected</button>
+      <span class="meta" id="cln-total" style="margin:0"></span>
+    </div>`;
+  const update = () => {
+    const tot = [...card.querySelectorAll("input:checked")]
+      .reduce((a, el) => a + (+el.dataset.size || 0), 0);
+    $("cln-total").textContent = tot ? `${fmtBytes(tot)} will be freed` : "";
+  };
+  card.querySelectorAll("input").forEach(el => el.onchange = update);
+}
+
+async function runCleanup() {
+  const cats = [...document.querySelectorAll(".cln-cat:checked")].map(e => e.value);
+  const vids = [...document.querySelectorAll(".cln-vid:checked")].map(e => e.value);
+  if (!cats.length && !vids.length) { alert("Nothing selected."); return; }
+  const warn = [];
+  if (cats.includes("hidden_pages")) warn.push("hidden pages can no longer be un-hidden");
+  if (vids.length) warn.push(`source video${vids.length > 1 ? "s" : ""} ${vids.join(", ")} cannot be re-extracted afterwards`);
+  if (!confirm(`Delete selected files?${warn.length ? "\n\nNote: " + warn.join("; ") + "." : ""}`))
+    return;
+  try {
+    const r = await api(`/projects/${current}/cleanup`, {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({categories: cats, videos: vids})});
+    alert(`Freed ${fmtBytes(r.freed)}.`);
+  } catch (e) { alert("cleanup failed: " + e.message); }
+  renderStorage(current);
 }
 
 // ---- reshoot review: triage the flagged pages one by one before capturing
