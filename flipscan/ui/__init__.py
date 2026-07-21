@@ -1185,6 +1185,21 @@ def create_app(root: Path) -> FastAPI:
         except ValueError as e:
             raise HTTPException(409, str(e))
 
+    @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}/resolve")
+    async def proof_resolve(name: str, idx: int, fi: int):
+        """Re-read a garbled passage from its source page image."""
+        from ..proofread import resolve_finding
+        ws = ws_for(name)
+        cfg = load_config(ws.root)
+        try:
+            return await asyncio.to_thread(resolve_finding, ws, cfg, idx, fi)
+        except (FileNotFoundError, IndexError, LookupError) as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except Exception as e:
+            raise HTTPException(502, f"re-read failed: {e}")
+
     @app.post("/api/projects/{name}/proof/{idx}/review")
     def proof_review(name: str, idx: int, accept: bool):
         from ..proofread import load_proof, save_proof

@@ -862,6 +862,10 @@ function renderTab(tab, p) {
               title="write or adjust the corrected text yourself — applied at the
 proof layer, the page OCR text stays untouched"
               onclick="editFix(${ci}, ${fi})">✎ ${f.replacement != null ? "edit fix" : "write a fix"}</button>` : ""}
+          ${f.page && f.replacement == null ? ` <button class="secondary"
+              style="padding:.05rem .5rem;font-size:.7rem"
+              title="ask the vision model to re-read this passage straight from
+the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</button>` : ""}
           ${f.replacement == null
             ? ' <span class="meta">— note: ✎ write the fix here, or use the page link if the capture itself needs work</span>'
             : f.rejected
@@ -882,6 +886,11 @@ proof layer, the page OCR text stays untouched"
             : (f.skip_reason || "").startsWith("unsafe")
             ? ` <span style="color:#dc2626">held back: ${esc(f.skip_reason.slice(7))} —
                   review with ✎ before applying</span>`
+            : f.skip_reason === "reference"
+            ? ` <span style="color:#b45309">reference matter — verify against the
+                  page, then</span>
+                <button style="padding:.05rem .5rem;font-size:.7rem"
+                  onclick="toggleFinding(${ci}, ${fi}, true, true)">apply</button>`
             : ' <span style="color:#78716c">quote not found — the text may have changed</span>'}
         </div>
         ${f.note ? `<div class="meta" style="margin:0">${esc(f.note)}</div>` : ""}
@@ -1319,6 +1328,21 @@ async function saveFix(ci, fi) {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({replacement: v})});
   } catch (e) { alert(e.message); return; }
+  renderTab("proof", window._proj);
+}
+
+async function resolveFinding(ci, fi, btn) {
+  btn.disabled = true;
+  btn.textContent = "re-reading…";
+  try {
+    await api(`/projects/${current}/proof/${ci}/finding/${fi}/resolve`,
+              {method: "POST"});
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "🔎 re-read page";
+    alert(e.message);
+    return;
+  }
   renderTab("proof", window._proj);
 }
 

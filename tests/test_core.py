@@ -501,3 +501,16 @@ def test_inserted_chapter_titles_match_book_style():
     out2 = _insert_chapter_breaks(pages2, texts2,
                                   [("Chapter 2", 20)], log=lambda m: None)
     assert out2[1].splitlines()[0] == "# Chapter 2"
+
+
+def test_reference_findings_never_auto_apply():
+    from flipscan.proofread import apply_edits
+    md = "Cross, Wilbur. Zeppelins of World War I. New York, 1991."
+    finds = [{"quote": "Cross, Wilbur", "replacement": "Croix, Wilbur",
+              "note": "", "reference": True}]
+    out, applied = apply_edits(md, finds)
+    assert applied == 0 and finds[0]["skip_reason"] == "reference"
+    assert "Cross" in out
+    finds[0]["apply_all"] = True          # explicit user approval applies
+    out2, applied2 = apply_edits(md, finds)
+    assert applied2 == 1 and "Croix" in out2

@@ -285,6 +285,12 @@ def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
         q, r = f.get("quote"), f.get("replacement")
         if not q or r is None or r == q:
             continue
+        if (f.get("reference") and not f.get("user_edit")
+                and not f.get("apply_all")):
+            # reference matter (index page numbers, bibliography names):
+            # the model can't verify these — never auto-apply
+            f["skip_reason"] = "reference"
+            continue
         if not f.get("user_edit") and not f.get("apply_all"):
             danger = edit_is_destructive(q, r)
             if danger:
@@ -312,14 +318,63 @@ def apply_edits(md: str, findings: list[dict]) -> tuple[str, int]:
     return md, applied
 
 
+REFERENCE_TITLES = {"index", "notes", "bibliography", "contents"}
+
+
+def name_consistency_findings(ws: Workspace, chapter_md: str) -> list[dict]:
+    """Deterministic proper-name check: a spelling that appears once or twice
+    while a near-identical one appears many times across the WHOLE book is a
+    misread (Mater vs Mather). Majority vote inside the book only — outside
+    knowledge is never consulted (that's how 'Cross' becomes 'Croix')."""
+    from collections import Counter
+    from difflib import SequenceMatcher
+
+    book_file = ws.work_file("book.md")
+    text = (book_file.read_text(encoding="utf-8") if book_file.exists()
+            else chapter_md)
+    words = re.findall(r"\b[A-Z][a-zA-ZÀ-ÖØ-öø-ÿ]{3,}\b", text)
+    cnt = Counter(words)
+    out = []
+    for minority, mc in cnt.items():
+        if mc > 2 or minority not in chapter_md:
+            continue
+        if text.count(minority.lower()) > 2:
+            continue    # a common word capitalized at sentence start
+        if re.search(rf"{re.escape(minority)}[a-z]", chapter_md):
+            continue    # substring of longer words — plain replace unsafe
+        best, best_n = None, 0
+        for major, jc in cnt.items():
+            if (jc >= 4 and jc > best_n and major[0] == minority[0]
+                    and abs(len(major) - len(minority)) <= 2
+                    and major not in (minority + "s", minority + "es")
+                    and minority not in (major + "s", major + "es")
+                    and SequenceMatcher(None, minority, major).ratio() >= 0.84):
+                best, best_n = major, jc
+        if best:
+            out.append({
+                "type": "spelling", "severity": "medium", "quote": minority,
+                "replacement": best, "apply_all": True, "source": "lint",
+                "note": f"'{best}' appears {best_n}× in this book, this "
+                        f"variant {mc}× — majority spelling wins",
+            })
+    return out[:10]
+
+
 def proofread_chapter(ws: Workspace, cfg: dict, idx: int) -> dict:
     """Run lint + LLM on one chapter; store findings and the proofed copy."""
     chs = chapters(ws)
     if not 0 <= idx < len(chs):
         raise IndexError(f"no chapter {idx}")
     title, md = chs[idx]
+    reference = title.strip().lower() in REFERENCE_TITLES
     findings = lint_chapter(md)
-    findings += llm_findings(cfg, md)
+    if not reference:
+        findings += name_consistency_findings(ws, md)
+    llm = llm_findings(cfg, md)
+    if reference:
+        for f in llm:
+            f["reference"] = True   # suggestions only, never auto-applied
+    findings += llm
     proofed, applied = apply_edits(md, findings)
 
     from .review import find_page_by_text
@@ -380,6 +435,95 @@ def toggle_finding(ws: Workspace, idx: int, fi: int, enabled: bool,
     d["heavy"] = abs(len(proofed) - len(md)) > max(200, len(md) * 0.05)
     save_proof(ws, idx, d)
     return d
+
+
+REREAD_PROMPT = """This is a photograph of one book page. An OCR pass produced \
+this garbled passage from it:
+
+"{quote}"
+
+Find that spot on the page and read it again carefully. Respond with JSON:
+{{"replacement": "the exact printed text for that span, corrected"}}
+Rules: transcribe ONLY what is printed — same span, same length, no additions.
+If you cannot locate or read the passage, respond {{"replacement": null}}."""
+
+
+def reread_from_image(cfg: dict, image_path: Path, quote: str) -> str | None:
+    """Ask a vision model to re-read one garbled passage straight from the
+    page image. Anthropic when configured, else the local Ollama model."""
+    import base64
+    p = cfg["provider"]
+    prompt = REREAD_PROMPT.format(quote=quote[:300])
+    use_anthropic = (p["name"] == "anthropic"
+                     or (p.get("anthropic_api_key") and p["name"] == "hybrid"))
+    if use_anthropic:
+        import anthropic
+        client = anthropic.Anthropic(api_key=p.get("anthropic_api_key") or None)
+        msg = client.messages.create(
+            model=p["anthropic_model"], max_tokens=800,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/jpeg",
+                    "data": base64.standard_b64encode(
+                        image_path.read_bytes()).decode()}},
+                {"type": "text", "text": prompt}]}])
+        raw = "".join(b.text for b in msg.content if b.type == "text")
+    else:
+        import httpx
+        resp = httpx.post(
+            f"{p['ollama_url'].rstrip('/')}/api/chat",
+            json={"model": p["ollama_model"], "stream": False, "format": "json",
+                  "think": p.get("ollama_think", False),
+                  "options": {"num_predict": 800, "temperature": 0},
+                  "messages": [{"role": "user", "content": prompt,
+                                "images": [base64.standard_b64encode(
+                                    image_path.read_bytes()).decode()]}]},
+            timeout=600.0)
+        resp.raise_for_status()
+        raw = resp.json()["message"]["content"]
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        r = json.loads(raw[start:end + 1]).get("replacement")
+    except json.JSONDecodeError:
+        return None
+    return str(r).strip() if r else None
+
+
+def resolve_finding(ws: Workspace, cfg: dict, idx: int, fi: int) -> dict:
+    """Re-read one finding's passage from its source page image and store the
+    result as this finding's suggested replacement (still guard-checked and
+    user-reviewable — the page OCR text is untouched)."""
+    d = load_proof(ws, idx)
+    if d is None:
+        raise FileNotFoundError("chapter not proofread yet")
+    _title, md = chapters(ws)[idx]
+    if chapter_hash(md) != d.get("base_hash"):
+        raise ValueError("chapter text changed since this proof — re-run it")
+    f = d["findings"][fi]
+    page = ws.page(f.get("page") or "")
+    if page is None or not page.get("llm_image"):
+        raise LookupError("no source page image for this finding")
+    corrected = reread_from_image(cfg, ws.root / page["llm_image"], f["quote"])
+    if not corrected or _squashed(corrected) == _squashed(f["quote"]):
+        raise LookupError("the page re-read matched the OCR — fix it with ✎ "
+                          "or re-photograph the page")
+    f["replacement"] = corrected
+    f["note"] = (f.get("note", "") + " [re-read from the page image]").strip()
+    f.pop("rejected", None)
+    for x in d["findings"]:
+        x["applied"] = False
+        x.pop("skip_reason", None)
+    proofed, applied = apply_edits(
+        md, [x for x in d["findings"] if not x.get("rejected")])
+    d["proofed_md"], d["applied"] = proofed, applied
+    save_proof(ws, idx, d)
+    return d
+
+
+def _squashed(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 def proof_status(ws: Workspace) -> list[dict]:
