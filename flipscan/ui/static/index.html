@@ -716,6 +716,9 @@ function renderTab(tab, p) {
             </div>
             <div>
               <textarea id="md-${pg.id}" data-page="${pg.id}"
+                placeholder="${pg.md ? "" : pg.status === "patched"
+                  ? "not transcribed yet — Run / Resume on the pipeline tab transcribes this new photo"
+                  : "no transcription yet"}"
                 oninput="this.dataset.dirty=1;
                          const b=$('mdsave-${pg.id}');
                          b.textContent='Save markdown *';b.disabled=false"></textarea>

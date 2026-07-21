@@ -491,7 +491,9 @@ def create_app(root: Path) -> FastAPI:
         page["patched_source"] = f"patches/{dest.name}"
         page["status"] = "patched"
         page["md"] = None
-        for key in ("confidence", "flags", "transcribe_error"):
+        # regions/figures described the OLD image — the new read defines them
+        for key in ("confidence", "flags", "transcribe_error",
+                    "regions", "figures"):
             page.pop(key, None)
 
         from ..stages.preprocess import preprocess_page
@@ -969,6 +971,8 @@ def create_app(root: Path) -> FastAPI:
             page["status"] = "patched"
             page["md"] = None
             page.pop("needs_reshoot", None)
+            page.pop("regions", None)   # described the old image
+            page.pop("figures", None)
             # the wizard told the user "photograph page N" and they did —
             # that's a human confirmation of the number, even if the printed
             # folio isn't visible on the page (full-page plates often have

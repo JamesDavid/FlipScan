@@ -80,6 +80,11 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
         regions = page.get("regions") or []
         if (not regions or not page.get("md") or not page.get("color")
                 or page.get("status") in ("duplicate", "deleted")):
+            if (not regions and page.get("figures")
+                    and page.get("status") not in ("duplicate", "deleted")):
+                # no regions on this page (any more) — a leftover figures
+                # list points at crops of an OLDER image; drop it
+                page["figures"] = []
             continue
         color = cv2.imread(str(ws.root / page["color"]))
         if color is None:
