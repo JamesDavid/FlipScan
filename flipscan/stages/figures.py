@@ -7,6 +7,7 @@ are inserted at their [[region-N]] placeholders in the page markdown.
 
 from __future__ import annotations
 
+import re
 import string
 
 import cv2
@@ -144,6 +145,19 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
                 md = md.replace(placeholder, img_md)
             elif rel not in md:  # don't stack a second copy on re-runs
                 md = md.rstrip() + f"\n\n{img_md}\n"
+
+        # hygiene: older stage versions appended the same image again on every
+        # run — keep only the first reference to each figure file
+        seen_imgs: set[str] = set()
+        kept_lines = []
+        for ln in md.splitlines():
+            im = re.match(r"!\[[^\]]*\]\((figures/[^)]+)\)\s*$", ln.strip())
+            if im:
+                if im.group(1) in seen_imgs:
+                    continue
+                seen_imgs.add(im.group(1))
+            kept_lines.append(ln)
+        md = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines))
 
         md_path.write_text(md, encoding="utf-8")
         page["figures"] = page_figs

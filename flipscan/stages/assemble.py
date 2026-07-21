@@ -59,7 +59,9 @@ def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15,
         s = ln.strip()
         if s.startswith("!["):   # figure images are never running headers
             return False
-        if not s or re.fullmatch(r"\d{1,4}", s):
+        # bare digit runs at page edges: page numbers, and printer's keys
+        # like the copyright page's "5 4 3 2 1"
+        if not s or re.fullmatch(r"[\d\s.·]{1,24}", s):
             return True
         norm = _norm_line(s)
         return norm in repeated or fuzzy_header(norm)
@@ -201,6 +203,26 @@ def _with_gap_markers(pages: list[dict], texts: list[str]) -> list[str]:
     return out
 
 
+def _split_leading_figures(text: str) -> tuple[str | None, str]:
+    """Peel a page-top image (and its italic caption) off the page text so a
+    sentence continuing across the page break isn't interrupted by it."""
+    lines = text.splitlines()
+    figs, i = [], 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        if s.startswith("![") or (figs and s.startswith("*") and s.endswith("*")):
+            figs.append(s)
+            i += 1
+            continue
+        break
+    if not figs:
+        return None, text
+    return "\n\n".join(figs), "\n".join(lines[i:]).strip()
+
+
 def _join_pages(pages: list[str]) -> str:
     """Concatenate page texts, healing hyphenation and mid-sentence page breaks."""
     book = ""
@@ -211,16 +233,31 @@ def _join_pages(pages: list[str]) -> str:
         if not book:
             book = text
             continue
-        first_word = text.split(None, 1)[0] if text.split() else ""
+        # a photo page often opens with its figure; if the sentence continues
+        # from the previous page, the figure must not sit mid-sentence
+        figs, body = _split_leading_figures(text)
+        first_word = body.split(None, 1)[0] if body.split() else ""
         starts_lower = bool(first_word) and first_word[0].islower()
-        if book.endswith("-") and starts_lower:
+        last_line = book.splitlines()[-1]
+        # a line with almost no letters (printer's key, stray digits) never
+        # continues a sentence
+        gluey = sum(c.isalpha() for c in last_line) >= 3
+        if figs is not None and not starts_lower:
+            text = f"{figs}\n\n{body}" if body else figs
+            book = book + "\n\n" + text
+        elif book.endswith("-") and starts_lower:
             # hyphenated word split across the page boundary
-            book = book.rstrip("-") + text
-        elif (starts_lower and not _SENTENCE_END.search(book.splitlines()[-1])
-              and not book.splitlines()[-1].startswith("> ⟦")  # gap notices
-              and not _HEADING.match(text)):                   # stand alone
-            # paragraph continues across the page break
-            book = book + " " + text
+            book = book.rstrip("-") + (body if figs else text)
+            if figs:
+                book = book + "\n\n" + figs
+        elif (starts_lower and gluey and not _SENTENCE_END.search(last_line)
+              and not last_line.startswith("> ⟦")     # gap notices
+              and not _HEADING.match(body or text)):  # stand alone
+            # paragraph continues across the page break; a page-top figure
+            # moves below the joined paragraph
+            book = book + " " + (body if figs else text)
+            if figs:
+                book = book + "\n\n" + figs
         else:
             book = book + "\n\n" + text
     return book
@@ -253,6 +290,9 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     # unresolved figure placeholders (region never cropped) must not reach
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
+    # heal hyphen splits at line breaks inside a page: 'poten-\ntial' -> the
+    # word the book actually printed (only when the tail starts lowercase)
+    texts = [re.sub(r"(\w)-\s*\n\s*([a-z])", r"\1\2", t) for t in texts]
     book = _join_pages(_with_gap_markers(kept, texts))
     missing_nums = ws.manifest.get("missing_pages") or []
     if missing_nums:
