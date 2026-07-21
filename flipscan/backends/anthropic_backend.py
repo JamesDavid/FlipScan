@@ -97,3 +97,48 @@ class AnthropicBackend(TranscriptionBackend):
         log(f"  anthropic: batch done, "
             f"{sum(1 for r in results.values() if 'error' not in r)}/{len(pages)} ok")
         return results
+
+
+FIGURE_BBOX_PROMPT = """This is a photograph of one book page containing printed \
+photograph(s)/illustration(s). For EVERY printed figure on the page, give its \
+tight bounding box as fractions of the full image (0.0 top-left to 1.0 \
+bottom-right), enclosing exactly the figure's printed edges — exclude captions, \
+body text, page margins, and anything outside the figure. Respond with JSON only:
+{"figures": [{"bbox": [x0, y0, x1, y1], "caption": "nearby caption or empty"}]}
+If the page has no printed figure, respond {"figures": []}."""
+
+
+def claude_figure_boxes(cfg: dict, image_jpeg: bytes) -> list[dict]:
+    """Ask Claude vision for figure bounding boxes on a page image.
+    Returns [{"bbox": [x0,y0,x1,y1], "caption": str}] with sane boxes only."""
+    import base64
+    import json as _json
+    import re as _re
+
+    p = cfg["provider"]
+    client = anthropic.Anthropic(api_key=p.get("anthropic_api_key") or None)
+    msg = client.messages.create(
+        model=p["anthropic_model"], max_tokens=700,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/jpeg",
+                "data": base64.standard_b64encode(image_jpeg).decode()}},
+            {"type": "text", "text": FIGURE_BBOX_PROMPT}]}])
+    raw = "".join(b.text for b in msg.content if b.type == "text")
+    m = _re.search(r"\{.*\}", raw, _re.S)
+    if not m:
+        return []
+    try:
+        obj = _json.loads(m.group(0))
+    except _json.JSONDecodeError:
+        return []
+    out = []
+    for f in obj.get("figures", []):
+        bb = f.get("bbox")
+        if (isinstance(bb, list) and len(bb) == 4
+                and all(isinstance(v, (int, float)) for v in bb)):
+            x0, y0, x1, y1 = (max(0.0, min(1.0, float(v))) for v in bb)
+            if x1 - x0 > 0.03 and y1 - y0 > 0.03:
+                out.append({"bbox": [x0, y0, x1, y1],
+                            "caption": str(f.get("caption") or "")[:200]})
+    return out

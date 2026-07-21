@@ -830,6 +830,9 @@ function renderTab(tab, p) {
       <div class="row" style="margin-bottom:.6rem">
         <button class="secondary" onclick="autoRefine()">✨ Auto-refine crops
           (edge detection)</button>
+        <button onclick="aiRefine(this)" title="Claude proposes each figure's
+corners from the page photo; current manual crops are never touched">
+          🤖 AI refine crops (Claude)</button>
         <span class="meta">snaps every non-hand-cropped figure to the actual
           photo boundaries</span>
       </div>` +
@@ -977,10 +980,13 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
           `<button onclick="buildFmt('${f}')">Build ${f}</button>`).join("")}
       </div>
       <h2 style="margin-top:1rem">Downloads</h2>
-      <ul>${p.outputs.map(f =>
-        `<li><a href="/api/projects/${name}/file/out/${f}">${f}</a>
-           ${f.endsWith(".epub") ? `<a href="/static/reader.html?project=${
-               encodeURIComponent(name)}&file=${encodeURIComponent(f)}"
+      <ul>${p.outputs.map(o =>
+        `<li><a href="/api/projects/${name}/file/out/${o.name}">${o.name}</a>
+           ${o.stale ? `<span class="badge acceptable" title="pages, figures,
+              or proofs changed after this was built — rebuild to update">
+              stale — rebuild</span>` : `<span class="badge ok">current</span>`}
+           ${o.name.endsWith(".epub") ? `<a href="/static/reader.html?project=${
+               encodeURIComponent(name)}&file=${encodeURIComponent(o.name)}"
              style="margin-left:.6rem">📖 read in browser</a>` : ""}</li>`).join("")
         || "<div class='meta'>nothing built yet</div>"}</ul></div>`;
   }
@@ -1332,6 +1338,17 @@ async function saveFix(ci, fi) {
       body: JSON.stringify({replacement: v})});
   } catch (e) { alert(e.message); return; }
   renderTab("proof", window._proj);
+}
+
+async function aiRefine(btn) {
+  btn.disabled = true;
+  btn.textContent = "🤖 refining… (a few minutes)";
+  try {
+    const r = await api(`/projects/${current}/figures/ai-refine`, {method: "POST"});
+    alert(`AI refine done: ${r.refined} crops updated, ` +
+          `${r.kept_manual} manual crops kept, ${r.failed} failed.`);
+  } catch (e) { alert(e.message); }
+  openProject(current, "figures");
 }
 
 async function resolveFinding(ci, fi, btn) {

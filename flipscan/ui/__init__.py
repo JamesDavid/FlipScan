@@ -151,11 +151,48 @@ def create_app(root: Path) -> FastAPI:
                     texts.append(f.read_text(encoding="utf-8"))
         return [{"title": t, "start": s} for t, s in parse_printed_toc(texts)]
 
+    def _build_signature(ws: Workspace) -> str:
+        """Fingerprint of everything a built output depends on: the assembled
+        book text, every referenced figure file, proof states, and whether
+        assemble is even up to date. Any page/figure/proof change after a
+        build makes the output stale."""
+        import hashlib
+        import re as _re
+        h = hashlib.sha1()
+        h.update(ws.stage_status("assemble").encode())
+        book = ws.work_file("book.md")
+        if book.exists():
+            text = book.read_text(encoding="utf-8")
+            h.update(text.encode())
+            for rel in sorted(set(_re.findall(r"\]\((figures/[^)]+)\)", text))):
+                f = ws.root / rel
+                h.update(rel.encode())
+                if f.exists():
+                    h.update(str(f.stat().st_mtime_ns).encode())
+        pdir = ws.work_file("proof")
+        if pdir.exists():
+            for f in sorted(pdir.glob("proof_*.json")):
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                h.update(f"{f.name}|{d.get('status')}|{d.get('base_hash')}|"
+                         f"{len(d.get('proofed_md') or '')}".encode())
+        cover = next((p for p in ws.manifest["pages"]
+                      if p.get("role") == "cover"), None)
+        if cover and cover.get("color"):
+            f = ws.root / cover["color"]
+            if f.exists():
+                h.update(str(f.stat().st_mtime_ns).encode())
+        return h.hexdigest()[:16]
+
     @app.get("/api/projects/{name}")
     def project_detail(name: str):
         from ..review import page_reasons
         ws = ws_for(name)
         m = ws.manifest
+        sig = _build_signature(ws)
+        built = m.get("outputs_built", {})
         return {
             "name": name,
             "book": m["book"],
@@ -164,7 +201,8 @@ def create_app(root: Path) -> FastAPI:
             "stages": {s: ws.stage_status(s) for s in STAGES},
             "pages": [{**p, "reasons": page_reasons(p)} for p in m["pages"]],
             "running": name in runs and runs[name]["thread"].is_alive(),
-            "outputs": [f.name for f in ws.dir("out").glob("*") if f.is_file()],
+            "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
+                        for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
         }
 
@@ -754,6 +792,166 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/figures/ai-refine")
+    async def ai_refine_figures(name: str):
+        """Claude-vision pass over every figure whose crop is NOT a current
+        manual one: Claude proposes the corners from the page image, the CV
+        refiner snaps them tight, and the crop is regenerated. A manual crop
+        made on the CURRENT page image is the most recent human input and is
+        never touched; a manual crop orphaned by a later re-patch (stale) IS
+        eligible — that's exactly how the bad crops happened."""
+        import cv2
+
+        from ..imaging import refine_figure_bbox
+        from ..stages.figures import file_ref
+
+        ws = ws_for(name)
+        cfg = load_config(ws.root)
+        if not cfg["provider"].get("anthropic_api_key"):
+            raise HTTPException(400, "add an Anthropic API key in settings first")
+        from ..backends.anthropic_backend import claude_figure_boxes
+
+        def iou(a, b):
+            x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+            x1, y1 = min(a[2], b[2]), min(a[3], b[3])
+            inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+            ua = ((a[2] - a[0]) * (a[3] - a[1])
+                  + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+            return inter / ua if ua > 0 else 0.0
+
+        def work():
+            refined, skipped_manual, failed = 0, 0, 0
+            for page in ws.manifest["pages"]:
+                if (page.get("status") in ("duplicate", "deleted")
+                        or not page.get("color")):
+                    continue
+                regions = page.get("regions") or []
+                todo = []
+                cur_ref = None
+                for ri, region in enumerate(regions):
+                    if region.get("deleted"):
+                        continue
+                    if region.get("user_crop"):
+                        if cur_ref is None:
+                            cur_ref = file_ref(ws.root / page["color"])
+                        if region.get("color_ref") == cur_ref:
+                            skipped_manual += 1
+                            continue   # current human input wins
+                    todo.append((ri, region))
+                if not todo:
+                    continue
+                color = cv2.imread(str(ws.root / page["color"]))
+                if color is None:
+                    continue
+                h, w = color.shape[:2]
+                scale = 1400.0 / max(h, w)
+                small = (cv2.resize(color, (int(w * scale), int(h * scale)))
+                         if scale < 1 else color)
+                ok, buf = cv2.imencode(".jpg", small,
+                                       [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if not ok:
+                    continue
+                try:
+                    boxes = claude_figure_boxes(cfg, buf.tobytes())
+                except Exception:
+                    failed += len(todo)
+                    continue
+                used: set[int] = set()
+                ref = file_ref(ws.root / page["color"])
+                for ri, region in todo:
+                    best_i, best = None, 0.05
+                    for bi, b in enumerate(boxes):
+                        if bi in used:
+                            continue
+                        v = iou(b["bbox"], region.get("bbox_norm") or [0, 0, 1, 1])
+                        if v > best:
+                            best_i, best = bi, v
+                    if best_i is None:   # no overlap info — largest unused box
+                        free = [bi for bi in range(len(boxes)) if bi not in used]
+                        if not free:
+                            failed += 1
+                            continue
+                        best_i = max(free, key=lambda bi: (
+                            (boxes[bi]["bbox"][2] - boxes[bi]["bbox"][0])
+                            * (boxes[bi]["bbox"][3] - boxes[bi]["bbox"][1])))
+                    used.add(best_i)
+                    box = boxes[best_i]["bbox"]
+                    # pass 2: zoom into the proposed area and ask again — a
+                    # tight box on a zoomed crop is far more accurate than
+                    # one on the whole page (pass 1 sometimes returns the
+                    # entire page)
+                    bw, bh = box[2] - box[0], box[3] - box[1]
+                    zx0 = max(0.0, box[0] - 0.08 * bw)
+                    zy0 = max(0.0, box[1] - 0.08 * bh)
+                    zx1 = min(1.0, box[2] + 0.08 * bw)
+                    zy1 = min(1.0, box[3] + 0.08 * bh)
+                    zoom = color[int(zy0 * h):int(zy1 * h),
+                                 int(zx0 * w):int(zx1 * w)]
+                    if zoom.size:
+                        zh, zw = zoom.shape[:2]
+                        zs = 1200.0 / max(zh, zw)
+                        zsmall = (cv2.resize(zoom, (int(zw * zs), int(zh * zs)))
+                                  if zs < 1 else zoom)
+                        ok2, buf2 = cv2.imencode(".jpg", zsmall,
+                                                 [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if ok2:
+                            try:
+                                b2 = claude_figure_boxes(cfg, buf2.tobytes())
+                            except Exception:
+                                b2 = []
+                            if b2:
+                                big = max(b2, key=lambda f: (
+                                    (f["bbox"][2] - f["bbox"][0])
+                                    * (f["bbox"][3] - f["bbox"][1])))["bbox"]
+                                zarea = ((big[2] - big[0]) * (big[3] - big[1]))
+                                if zarea < 0.93:   # Claude actually tightened
+                                    box = [zx0 + big[0] * (zx1 - zx0),
+                                           zy0 + big[1] * (zy1 - zy0),
+                                           zx0 + big[2] * (zx1 - zx0),
+                                           zy0 + big[3] * (zy1 - zy0)]
+                    def area(b):
+                        return (b[2] - b[0]) * (b[3] - b[1])
+
+                    snapped = refine_figure_bbox(color, box)
+                    if snapped is not None:
+                        if iou(snapped, box) > 0.5:
+                            box = snapped   # CV agrees — take the tighter edges
+                        elif area(box) > 0.65 and area(snapped) < area(box):
+                            # Claude returned ~the whole page; the CV snap
+                            # found the actual figure inside it
+                            box = snapped
+                    # a "figure" that is basically the whole page is a miss
+                    if (area(box) > 0.85
+                            or ((box[2] - box[0]) > 0.93
+                                and (box[3] - box[1]) > 0.93)):
+                        failed += 1
+                        continue
+                    px = (int(box[0] * w), int(box[1] * h),
+                          int(box[2] * w), int(box[3] * h))
+                    if px[2] - px[0] < 30 or px[3] - px[1] < 30:
+                        failed += 1
+                        continue
+                    rel = f"figures/{page['id']}_{chr(97 + ri % 26)}.png"
+                    cv2.imwrite(str(ws.root / rel),
+                                color[px[1]:px[3], px[0]:px[2]])
+                    region["bbox_norm"] = [float(v) for v in box]
+                    region["auto_refined"] = True
+                    region["ai_crop"] = True
+                    region["color_ref"] = ref
+                    for k in ("user_crop", "stale_crop", "quad_norm"):
+                        region.pop(k, None)
+                    figs = page.setdefault("figures", [])
+                    if rel not in figs:
+                        figs.append(rel)
+                    refined += 1
+            ws.stage_reset("assemble")
+            ws.save()
+            return {"refined": refined, "kept_manual": skipped_manual,
+                    "failed": failed}
+
+        r = await asyncio.to_thread(work)
+        return {"ok": True, **r}
+
     @app.post("/api/projects/{name}/figures/auto-refine")
     def auto_refine_figures(name: str):
         """Edge-detection pass over every figure the user hasn't hand-cropped:
@@ -1276,6 +1474,11 @@ def create_app(root: Path) -> FastAPI:
                 raise HTTPException(400, f"unknown format {format!r}")
         except (RuntimeError, FileNotFoundError) as e:
             raise HTTPException(400, str(e))
+        # record what this output was built from — any later page/figure/
+        # proof change makes it stale
+        ws.manifest.setdefault("outputs_built", {})[out.name] = \
+            _build_signature(ws)
+        ws.save()
         return {"ok": True, "file": out.name}
 
     @app.get("/api/projects/{name}/thumb/{path:path}")
