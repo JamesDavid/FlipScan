@@ -222,6 +222,78 @@ def find_flat_page(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
     return box if ok else None
 
 
+def detect_figures(gray: np.ndarray) -> list[list[float]]:
+    """Find printed photos on a page with no prior at all (the LLM's reported
+    figure boxes measured near-random on real footage: median IoU 0.002).
+
+    Cues, tuned against the user's manual crops:
+    - a printed photo is one LARGE connected dark region under a
+      lighting-normalized darkness map; text is thousands of tiny ones
+    - wide figures are typeset at text-column width, so candidates wider
+      than ~half the column snap to the column bounds
+    - figures grow vertically until they run into text rows
+    Returns candidate bbox_norm boxes, largest first.
+    """
+    h0, w0 = gray.shape
+    scale = 1400.0 / max(h0, w0)
+    g = (cv2.resize(gray, (int(w0 * scale), int(h0 * scale)),
+                    interpolation=cv2.INTER_AREA) if scale < 1 else gray.copy())
+    h, w = g.shape
+
+    bg = cv2.blur(g, (w // 3 | 1, w // 3 | 1))
+    dark = (cv2.subtract(bg, g) > 25).astype(np.uint8) * 255
+
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(dark)
+    if n < 2:
+        return []
+    hs = [stats[i, 3] for i in range(1, n) if 3 < stats[i, 3] < 0.04 * h]
+    line_h = int(np.median(hs)) if hs else int(0.015 * h)
+
+    big_ids = [i for i in range(1, n) if stats[i, 4] > 0.006 * h * w
+               and stats[i, 3] > 2.2 * line_h]      # photos, not drop caps
+    text_mask = dark.copy()
+    for i in big_ids:
+        text_mask[lab == i] = 0
+    bars = cv2.dilate(text_mask, np.ones((1, line_h * 4), np.uint8))
+    row_cov = bars.sum(axis=1) / 255.0 / w
+    col_cov = bars.sum(axis=0) / 255.0 / h
+    text_rows = row_cov > 0.25
+    xs = np.nonzero(col_cov > 0.08)[0]
+    cx0, cx1 = (int(xs.min()), int(xs.max())) if len(xs) else (0, w - 1)
+
+    seed = np.zeros_like(dark)
+    for i in big_ids:
+        seed[lab == i] = 255
+    seed = cv2.dilate(seed, np.ones((line_h * 3, line_h * 3), np.uint8))
+    n2, lab2, _st2, _ = cv2.connectedComponentsWithStats(seed)
+
+    cands: list[list[float]] = []
+    for i in range(1, n2):
+        comp = (lab2 == i) & (dark > 0)
+        ys, xs2 = np.nonzero(comp)
+        if len(xs2) == 0:
+            continue
+        x0, x1 = int(xs2.min()), int(xs2.max())
+        y0, y1 = int(ys.min()), int(ys.max())
+        if (x1 - x0) * (y1 - y0) < 0.008 * h * w:
+            continue
+        if (x1 - x0) > 0.45 * (cx1 - cx0):
+            x0, x1 = cx0, cx1
+        else:
+            x0, x1 = max(0, x0 - line_h), min(w - 1, x1 + line_h)
+        ty = y0
+        while ty > 0 and not text_rows[ty] and (y0 - ty) < 0.18 * h:
+            ty -= 1
+        by = y1
+        while by < h - 1 and not text_rows[by] and (by - y1) < 0.18 * h:
+            by += 1
+        pad = line_h // 2
+        cands.append([max(0, x0) / w, max(0, ty + pad) / h,
+                      min(w - 1, x1) / w, min(h - 1, by - pad) / h])
+    cands.sort(key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
+    return cands
+
+
 def refine_figure_bbox(color: np.ndarray,
                        prior: list[float]) -> list[float] | None:
     """Snap an approximate figure bbox to the actual photo on the page.

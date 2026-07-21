@@ -584,9 +584,18 @@ function renderTab(tab, p) {
       lastNum = n;
       return out;
     };
+    // work through the book section by section: a jump to the next one
+    const nextCh = flt.chapter
+      ? chapters[chapters.indexOf(flt.chapter) + 1] : null;
+    const nextBtn = flt.chapter ? `
+      <div class="card" style="text-align:center">
+        ${nextCh ? `<button style="font-size:1rem;padding:.7rem 1.6rem"
+            onclick="nextSection('${esc(nextCh)}')">next section: ${esc(nextCh)} →</button>`
+          : `<span class="meta">last section — the whole book is behind you</span>`}
+      </div>` : "";
     body.innerHTML = toolbar
       + shown.map(pg => gapBefore(pg) + (pg2html(pg))).join("")
-      + cropModalHtml();
+      + nextBtn + cropModalHtml();
     function pg2html(pg) {
       const collapsed = pg.status === "deleted" || pg.status === "duplicate";
       const numLabel = pg.printed_number != null
@@ -1133,7 +1142,15 @@ async function finishWizard() {
 
 async function gotoPage(pageId) {
   await openProject(current, "pages");
-  const el = document.getElementById("cell-" + pageId);
+  let el = document.getElementById("cell-" + pageId);
+  if (!el) {
+    // the active section/unnumbered filter hides this page — switch the
+    // filter to the section that contains it
+    const pg = (window._proj?.pages || []).find(x => x.id === pageId);
+    pageFilters = {chapter: pg?._chapter || "", unnumbered: false};
+    renderTab("pages", window._proj);
+    el = document.getElementById("cell-" + pageId);
+  }
   if (!el) return;
   el.style.outline = "3px solid var(--accent)";
   setTimeout(() => el.style.outline = "", 3000);
@@ -1197,6 +1214,12 @@ async function proofAll() {
     }
   }
   renderTab("proof", window._proj);
+}
+
+function nextSection(ch) {
+  pageFilters.chapter = ch;
+  renderTab("pages", window._proj);
+  $("main").scrollTop = 0;
 }
 
 async function setSection(pageId) {
@@ -1391,11 +1414,18 @@ function drawCropQuad() {
 
 async function magicCrop() {
   try {
-    const r = await api(`/projects/${current}/pages/${cropCtx.pageId}/magic-crop`, {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(cropCtx.quad ? {quad_norm: cropCtx.quad} : {})});
-    if (!r.ok) { alert(r.detail || "no confident detection"); return; }
-    const [x0, y0, x1, y1] = r.bbox_norm;
+    // first click fetches candidates; further clicks cycle through them
+    if (!cropCtx.magic || !cropCtx.magic.length) {
+      const r = await api(`/projects/${current}/pages/${cropCtx.pageId}/magic-crop`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(cropCtx.quad ? {quad_norm: cropCtx.quad} : {})});
+      if (!r.ok) { alert(r.detail || "no confident detection"); return; }
+      cropCtx.magic = r.candidates || [r.bbox_norm];
+      cropCtx.magicI = 0;
+    } else {
+      cropCtx.magicI = (cropCtx.magicI + 1) % cropCtx.magic.length;
+    }
+    const [x0, y0, x1, y1] = cropCtx.magic[cropCtx.magicI];
     cropCtx.quad = [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
     drawCropQuad();
   } catch (e) { alert("magic crop failed: " + e.message); }

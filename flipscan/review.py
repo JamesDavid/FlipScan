@@ -48,7 +48,12 @@ def page_reasons(p: dict) -> list[str]:
         if p.get("confidence") == "low":
             reasons.append("low transcription confidence")
         for f in p.get("flags") or []:
-            reasons.append(f"flagged: {f}")
+            if f == "multi_column":
+                # a reshoot can't fix a layout; the model reads both columns —
+                # this is only a check-the-reading-order note
+                reasons.append("note: multi-column layout — verify text order")
+            else:
+                reasons.append(f"flagged: {f}")
         if p.get("figure_quality"):
             reasons.append("figure source frame is low quality")
     if p.get("needs_reshoot"):
@@ -56,6 +61,8 @@ def page_reasons(p: dict) -> list[str]:
         reasons.append(f"marked for re-acquisition by you{note}")
     if any(r.get("needs_reshoot") for r in p.get("regions") or []):
         reasons.append("figure marked for re-acquisition (shoot it close-up)")
+    if any(r.get("stale_crop") for r in p.get("regions") or []):
+        reasons.append("figure crop was drawn on an older page image — re-crop it")
     if p.get("number_rejected"):
         reasons.append("page number misread (broke the page order)")
     if p.get("number_conflict"):
@@ -77,7 +84,8 @@ def reshoot_list(ws: Workspace) -> list[dict]:
     """Pages that should be re-photographed, with reasons."""
     items = []
     for p in ws.manifest["pages"]:
-        reasons = page_reasons(p)
+        # informational notes (multi-column etc.) don't justify a reshoot
+        reasons = [r for r in page_reasons(p) if not r.startswith("note:")]
         if reasons and p["status"] not in ("duplicate", "deleted"):
             items.append({"id": p["id"], "printed_number": p.get("printed_number"),
                           "reasons": reasons})

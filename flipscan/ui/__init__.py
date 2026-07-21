@@ -76,6 +76,15 @@ class Settings(BaseModel):
     anthropic_api_key: str = ""
 
 
+def _iou(a: list[float], b: list[float]) -> float:
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+    ua = ((a[2] - a[0]) * (a[3] - a[1])
+          + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+    return inter / ua if ua > 0 else 0.0
+
+
 def create_app(root: Path) -> FastAPI:
     root = Path(root).resolve()
     app = FastAPI(title="FlipScan")
@@ -589,10 +598,13 @@ def create_app(root: Path) -> FastAPI:
         crop, bbox, stored_quad = _compute_crop(ws, page, edit)
         cv2.imwrite(str(ws.root / rel), crop)
         if region is not None:
+            from ..stages.figures import file_ref
             region["bbox_norm"] = bbox
             if stored_quad:
                 region["quad_norm"] = stored_quad
             region["user_crop"] = True
+            region["color_ref"] = file_ref(ws.root / page["color"])
+            region.pop("stale_crop", None)
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True, "figure": rel}
@@ -618,10 +630,13 @@ def create_app(root: Path) -> FastAPI:
         while len(regions) <= ridx:
             regions.append({"type": "figure", "bbox_norm": [0, 0, 1, 1], "caption": ""})
         region = regions[ridx]
+        from ..stages.figures import file_ref
         region["bbox_norm"] = bbox
         if stored_quad:
             region["quad_norm"] = stored_quad
         region["user_crop"] = True
+        region["color_ref"] = file_ref(ws.root / page["color"])
+        region.pop("stale_crop", None)
         region.pop("deleted", None)
 
         figs = page.setdefault("figures", [])
@@ -693,11 +708,23 @@ def create_app(root: Path) -> FastAPI:
             prior = edit.bbox_norm
         else:
             prior = [0.05, 0.05, 0.95, 0.95]
+        from ..imaging import detect_figures
+        # candidate list: the prior-anchored refiner first (when it fires),
+        # then prior-free full-page detections — the modal cycles through them
+        cands = []
         box = refine_figure_bbox(color, prior)
-        if box is None:
+        if box is not None:
+            cands.append(box)
+        gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+        for c in detect_figures(gray):
+            if all(_iou(c, b) < 0.6 for b in cands):
+                cands.append(c)
+        if not cands:
             return {"ok": False, "detail": "no confident detection here — "
                                            "draw the box manually"}
-        return {"ok": True, "bbox_norm": box}
+        # most-relevant first: overlap with the user's current box wins
+        cands.sort(key=lambda c: -_iou(c, prior))
+        return {"ok": True, "bbox_norm": cands[0], "candidates": cands}
 
     @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/reshoot")
     def figure_reshoot(name: str, page_id: str, fig_idx: int, flag: bool = True):

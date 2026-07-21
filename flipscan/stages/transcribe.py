@@ -48,7 +48,10 @@ def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) ->
     page["flags"] = result["flags"]
     page["transcribed_by"] = backend_name
     page.pop("transcribe_error", None)
-    if ((result["confidence"] == "low" or result["flags"])
+    # multi_column alone is layout info, not a quality problem — the model
+    # reads both columns; the page just deserves a reading-order glance
+    real_flags = [f for f in result["flags"] if f != "multi_column"]
+    if ((result["confidence"] == "low" or real_flags)
             and not page.get("suspect_ignored")):
         page["status"] = "suspect"
 

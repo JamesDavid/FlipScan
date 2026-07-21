@@ -20,6 +20,18 @@ SNAP_MARGIN = 8         # px kept around detected content
 MIN_FIGURE_SHARPNESS = 40.0
 
 
+def file_ref(path) -> str | None:
+    """Content fingerprint of a page image — crop coordinates are only valid
+    against the exact image they were drawn on (preprocess can reframe a
+    page, silently shifting every normalized coordinate)."""
+    import hashlib
+    from pathlib import Path
+    p = Path(path)
+    if not p.exists():
+        return None
+    return hashlib.sha1(p.read_bytes()).hexdigest()[:16]
+
+
 def crop_from_region(color: np.ndarray, region: dict) -> np.ndarray | None:
     """Reproduce a stored crop exactly: perspective-correct quad_norm when the
     user skewed the corners, else a straight bbox_norm slice."""
@@ -86,12 +98,19 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             if region.get("user_crop") or region.get("auto_refined"):
                 # a human placed (or accepted) this crop — keep it in the
                 # figure list and markdown, and regenerate the file from the
-                # stored geometry if it went missing
+                # stored geometry if it went missing — but ONLY when the page
+                # image is the one the crop was drawn on; regenerating against
+                # a reframed image cuts out the wrong part of the page
                 if not (fig_dir / name).exists():
+                    ref = region.get("color_ref")
+                    if not ref or ref != file_ref(ws.root / page["color"]):
+                        region["stale_crop"] = True
+                        continue
                     crop = crop_from_region(color, region)
                     if crop is None:
                         continue
                     cv2.imwrite(str(fig_dir / name), crop)
+                region.pop("stale_crop", None)
                 page_figs.append(rel)
                 img_md = f"![{region.get('caption') or ''}]({rel})"
                 placeholder = f"[[region-{i}]]"
