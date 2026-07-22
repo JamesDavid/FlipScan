@@ -144,6 +144,24 @@
 <script>
 let current = null;
 const $ = (id) => document.getElementById(id);
+
+// ---- self-updating app shell: when the server serves newer code, reload —
+// but never while the user has unsaved work or a flow open
+let appV = null;
+async function checkAppVersion() {
+  let v;
+  try { v = (await (await fetch("/api/version")).json()).v; } catch { return; }
+  if (appV === null) { appV = v; return; }
+  if (v === appV) return;
+  const busy = document.querySelector('textarea[data-dirty]')
+    || ($("crop-modal") && $("crop-modal").style.display === "flex")
+    || (typeof wiz !== "undefined" && wiz)
+    || (typeof review !== "undefined" && review);
+  if (busy) return;      // try again next tick
+  location.reload();
+}
+setInterval(checkAppVersion, 5000);
+checkAppVersion();
 const api = async (path, opts) => {
   const r = await fetch("/api" + path, opts);
   if (!r.ok) throw new Error((await r.json()).detail || r.statusText);

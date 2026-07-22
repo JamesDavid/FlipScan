@@ -1630,6 +1630,15 @@ def create_app(root: Path) -> FastAPI:
 
     static_dir = Path(__file__).parent / "static"
 
+    @app.get("/api/version")
+    def app_version():
+        """The frontend polls this and reloads itself when the served app
+        changed — stale-script tabs caused endless 'feature isn't there'."""
+        try:
+            return {"v": str((static_dir / "index.html").stat().st_mtime_ns)}
+        except OSError:
+            return {"v": "0"}
+
     @app.get("/")
     def index():
         # always revalidate the app shell — stale cached UI on phones is worse
