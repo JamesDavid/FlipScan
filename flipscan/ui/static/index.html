@@ -1904,10 +1904,10 @@ function renderFiguresTab(p, clusters) {
             <b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
                 : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></a>
             ${r.reacq ? `<span class="badge acceptable">📷 re-acquire queued</span>` : ""}</div>
-          <div class="row" style="margin-top:.3rem">
-            <input value="${esc(r.caption)}" placeholder="caption for this figure…"
-                   style="flex:1;min-width:8rem;margin:0"
-                   onchange="setCaption('${r.pg.id}', ${r.i}, this.value)">
+          <div class="row" style="margin-top:.3rem;align-items:flex-start">
+            <textarea rows="3" placeholder="caption for this figure…"
+                   style="flex:1;min-width:8rem;margin:0;min-height:0;resize:vertical"
+                   onchange="setCaption('${r.pg.id}', ${r.i}, this.value)">${esc(r.caption)}</textarea>
             ${canSwap ? `<button class="secondary" title="swap this caption with the figure below"
                 onclick="swapCaptions('${r.pg.id}', ${r.i}, ${next.i})">⇅ swap</button>` : ""}
           </div>
