@@ -550,11 +550,15 @@ def create_app(root: Path) -> FastAPI:
                     "regions", "figures"):
             page.pop(key, None)
 
+        from ..project import fix_photo_orientation
         from ..stages.preprocess import preprocess_page
         await asyncio.to_thread(preprocess_page, ws, page, cfg)
+        rotated = await asyncio.to_thread(
+            fix_photo_orientation, ws, cfg, page, lambda m: None)
         ws.stage_reset("transcribe")  # the deferred page must transcribe next run
         ws.save()
-        return {"ok": True, "transcription": "deferred — run the pipeline"}
+        return {"ok": True, "rotated": rotated,
+                "transcription": "deferred — run the pipeline"}
 
     def _reconcile(ws):
         from ..stages.transcribe import reconcile
@@ -1086,6 +1090,26 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no such page")
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/rotate")
+    async def rotate_page_photo(name: str, page_id: str, degrees: int = 180):
+        """Rotate a photo page's pixels (EXIF tags on phone photos are
+        unreliable); processed images re-derive, transcription re-runs."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        if not page.get("patched_source"):
+            raise HTTPException(400, "video-sourced page — flip its video on "
+                                     "the media tab instead")
+        cfg = load_config(ws.root)
+        from ..project import rotate_patch
+        try:
+            await asyncio.to_thread(rotate_patch, ws, cfg, page, degrees,
+                                    lambda m: None)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
     @app.get("/api/projects/{name}/capture-queue")
     def capture_queue(name: str):
         """Everything worth photographing, in page order: pages never captured
@@ -1142,6 +1166,9 @@ def create_app(root: Path) -> FastAPI:
             page = await asyncio.to_thread(
                 add_page_from_photo, ws, cfg, tmp, position="end",
                 transcribe=False, log=lambda m: None)
+            from ..project import fix_photo_orientation
+            await asyncio.to_thread(fix_photo_orientation, ws, cfg, page,
+                                    lambda m: None)
             page.pop("pinned", None)  # order by page number, not by "end"
             if number is not None:
                 page["printed_number"] = number
@@ -1201,8 +1228,11 @@ def create_app(root: Path) -> FastAPI:
                 page["number_manual"] = True
             for key in ("confidence", "flags", "transcribe_error"):
                 page.pop(key, None)
+            from ..project import fix_photo_orientation
             from ..stages.preprocess import preprocess_page
             await asyncio.to_thread(preprocess_page, ws, page, cfg)
+            await asyncio.to_thread(fix_photo_orientation, ws, cfg, page,
+                                    lambda m: None)
             ws.stage_reset("transcribe")
             ws.save()
             result = page_id

@@ -154,6 +154,52 @@ def set_video_rotation(ws: Workspace, vid: str, rotate: int,
     log(f"{vid}: orientation set to {rotate} degrees")
 
 
+def rotate_patch(ws: Workspace, cfg: dict, page: dict, degrees: int = 180,
+                 log: Callable[[str], None] = print) -> None:
+    """Rotate a photo-sourced page's pixels in place and re-derive its
+    processed images. The old transcription described the wrong orientation,
+    so it's cleared and deferred to the next run."""
+    import cv2
+
+    src = ws.root / (page.get("patched_source") or "")
+    if not src.exists():
+        raise FileNotFoundError(f"{page['id']} has no patch photo")
+    img = cv2.imread(str(src))
+    if img is None:
+        raise ValueError(f"{page['id']}: patch unreadable")
+    rot = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+           270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(degrees % 360)
+    if rot is None:
+        raise ValueError(f"unsupported rotation {degrees}")
+    cv2.imwrite(str(src), cv2.rotate(img, rot))
+    page["md"] = None
+    for key in ("confidence", "flags", "transcribe_error", "regions", "figures"):
+        page.pop(key, None)
+    from .stages.preprocess import preprocess_page
+    preprocess_page(ws, page, cfg)
+    ws.stage_reset("transcribe")
+    ws.save()
+    log(f"{page['id']}: rotated {degrees}° — re-transcribes next run")
+
+
+def fix_photo_orientation(ws: Workspace, cfg: dict, page: dict,
+                          log: Callable[[str], None] = print) -> bool:
+    """Vision-check a freshly captured photo page (same check videos get);
+    auto-rotate 180° when it was shot upside down. Returns True if rotated."""
+    if not page.get("llm_image"):
+        return False
+    check_cfg = cfg
+    if cfg["provider"]["name"] == "hybrid":
+        check_cfg = {**cfg, "provider": {**cfg["provider"], "name": "ollama"}}
+    from .backends import get_backend
+    verdict = get_backend(check_cfg).check_orientation(
+        ws.root / page["llm_image"])
+    if verdict:
+        rotate_patch(ws, cfg, page, 180, log=log)
+        return True
+    return False
+
+
 def set_page_deleted(ws: Workspace, page_id: str, deleted: bool = True) -> dict:
     """Soft-delete an erroneous page (mid-turn junk, desk shots, misfires).
 

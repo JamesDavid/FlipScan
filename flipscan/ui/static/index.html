@@ -746,6 +746,9 @@ function renderTab(tab, p) {
             <button class="secondary" title="draw a crop for artwork the model
 missed on this page" onclick="openCrop('${pg.id}',
               ${(pg.regions || []).length}, 'pages', true)">＋ Add figure</button>
+            ${pg.patched_source ? `<button class="secondary"
+              title="photo shot upside down? flip its pixels and re-process"
+              onclick="rotatePage('${pg.id}')">↻ 180°</button>` : ""}
             ${pg.status === "duplicate"
               ? `<button class="secondary" onclick="unduplicate('${pg.id}')">Not a duplicate</button>`
               : `<button class="secondary" onclick="markDuplicate('${pg.id}')">Mark as duplicate</button>`}
@@ -1601,6 +1604,13 @@ async function setSection(pageId) {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({section: v})});
   } catch (e) { alert("failed: " + e.message); return; }
+  gotoPage(pageId);
+}
+
+async function rotatePage(pageId) {
+  try { await api(`/projects/${current}/pages/${pageId}/rotate?degrees=180`,
+                  {method: "POST"}); }
+  catch (e) { alert(e.message); return; }
   gotoPage(pageId);
 }
 
