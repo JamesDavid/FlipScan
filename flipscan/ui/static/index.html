@@ -819,79 +819,11 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
         ? `<img style="max-width:100%" src="/api/projects/${name}/file/work/contact_sheet.jpg">`
         : "<div class='meta'>run the pipeline first</div>"}</div>`;
   } else if (tab === "figures") {
-    // chronological rows (book order), grouped by printed page number so
-    // duplicate captures of the same figure sit together
-    const rows = [];
-    p.pages.forEach(pg => {
-      if (pg.status === "duplicate" || pg.status === "deleted") return;
-      (pg.figures || []).forEach((f, i) => {
-        const letter = f.split("_").pop().split(".")[0];
-        const ridx = letter.charCodeAt(0) - 97;
-        rows.push({pg, f, i, caption: (pg.regions?.[ridx]?.caption) || "",
-                   reacq: !!(pg.regions?.[ridx]?.needs_reshoot)});
-      });
-    });
-    const groups = [];
-    rows.forEach(r => {
-      const last = groups[groups.length - 1];
-      const num = r.pg.printed_number;
-      if (last && num != null && last.num === num) last.rows.push(r);
-      else groups.push({num, rows: [r]});
-    });
-    const figRow = (r) => `
-      <div class="row" style="border-top:1px solid var(--line);padding:.7rem 0">
-        <a href="javascript:void(0)" onclick="openCrop('${r.pg.id}', ${r.i})"
-           title="click to re-crop">
-          <img loading="lazy" decoding="async"
-               src="/api/projects/${name}/thumb/${r.f}?w=380${fv(r.f)}"
-               style="height:130px;border:1px solid var(--line);border-radius:4px;
-                      cursor:crosshair"></a>
-        <div style="flex:1;min-width:12rem">
-          <div><a href="javascript:void(0)" onclick="gotoPage('${r.pg.id}')">
-            <b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
-                : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></a>
-            ${r.reacq ? `<span class="badge acceptable"
-               title="queued in the capture wizard as a close-up shot — clears
-when you photograph or re-upload it">📷 re-acquire queued</span>` : ""}</div>
-          ${r.caption ? `<div class="meta">${esc(r.caption)}</div>` : ""}
-        </div>
-        <span class="row">
-          <button class="secondary" onclick="openCrop('${r.pg.id}', ${r.i})">Re-crop</button>
-          <input type="file" accept="image/*" id="figup-${r.pg.id}-${r.i}"
-                 style="display:none" onchange="uploadFigure('${r.pg.id}', ${r.i})">
-          <button class="secondary"
-                  onclick="$('figup-${r.pg.id}-${r.i}').click()">Re-upload</button>
-          <button class="secondary"
-                  onclick="figReacq('${r.pg.id}', ${r.i}, ${!r.reacq})">
-            ${r.reacq ? "Unmark re-acquire" : "Re-acquire"}</button>
-          <button class="danger" onclick="delFigure('${r.pg.id}', ${r.i})">Delete</button>
-        </span>
-      </div>`;
-    body.innerHTML = `<div class="card"><h2>Figures <span class="meta">
-      (book order — re-crop, replace, or delete; duplicate groups can keep the
-      sharpest automatically)</span></h2>
-      <div class="row" style="margin-bottom:.6rem">
-        <button class="secondary" onclick="autoRefine()">✨ Auto-refine crops
-          (edge detection)</button>
-        <button onclick="aiRefine(this)" title="Claude proposes each figure's
-corners from the page photo; current manual crops are never touched">
-          🤖 AI refine crops (Claude)</button>
-        <span class="meta">snaps every non-hand-cropped figure to the actual
-          photo boundaries</span>
-      </div>` +
-      (groups.map(g => g.rows.length > 1 ? `
-        <div style="border:2px solid #f59e0b;border-radius:8px;padding:.2rem .8rem;
-             margin:.6rem 0">
-          <div class="row" style="padding:.4rem 0">
-            <span class="meta">⚠ ${g.rows.length} figures on printed page ${g.num}
-              — duplicates?</span>
-            <button class="secondary" onclick='keepBest(${JSON.stringify(
-              g.rows.map(r => ({page_id: r.pg.id, fig_idx: r.i})))})'>
-              Keep sharpest, delete rest</button>
-          </div>
-          ${g.rows.map(figRow).join("")}
-        </div>` : g.rows.map(figRow).join("")).join("")
-       || "<div class='meta'>no figures yet</div>") + `</div>` + cropModalHtml();
+    // real duplicates (same image captured twice) are told from distinct
+    // figures on one page by perceptual hash — not by page number
+    api(`/projects/${name}/figures/duplicate-clusters`)
+      .then(d => renderFiguresTab(p, d.clusters || []))
+      .catch(() => renderFiguresTab(p, []));
   } else if (tab === "proof") {
     const sevColor = {high: "#dc2626", medium: "#d97706", low: "#78716c"};
     const findingHtml = (f, ci, fi) => `
@@ -1915,6 +1847,114 @@ async function delFigure(pageId, figIdx) {
   if (!confirm("Delete this figure from the book?")) return;
   await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}`, {method:"DELETE"});
   openProject(current, "figures");
+}
+
+async function setCaption(pageId, figIdx, caption) {
+  try { await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}/caption`,
+    {method:"POST", headers:{"Content-Type":"application/json"},
+     body: JSON.stringify({caption})}); }
+  catch (e) { alert("caption save failed: " + e.message); }
+}
+
+async function swapCaptions(pageId, a, b) {
+  try { await api(`/projects/${current}/pages/${pageId}/figures/swap-captions`,
+    {method:"POST", headers:{"Content-Type":"application/json"},
+     body: JSON.stringify({a, b})}); }
+  catch (e) { alert("swap failed: " + e.message); return; }
+  renderTab("figures", window._proj);
+}
+
+function renderFiguresTab(p, clusters) {
+  const name = p.name, body = $("tabbody");
+  const key = (pid, fi) => pid + "#" + fi;
+  const clusterOf = {};
+  clusters.forEach((cl, ci) => cl.forEach(m => clusterOf[key(m.page_id, m.fig_idx)] = ci));
+
+  const rows = [];
+  p.pages.forEach(pg => {
+    if (pg.status === "duplicate" || pg.status === "deleted") return;
+    (pg.figures || []).forEach((f, i) => {
+      const letter = f.split("_").pop().split(".")[0];
+      const ridx = letter.charCodeAt(0) - 97;
+      rows.push({pg, f, i, caption: (pg.regions?.[ridx]?.caption) || "",
+                 reacq: !!(pg.regions?.[ridx]?.needs_reshoot)});
+    });
+  });
+  const groups = [];
+  rows.forEach(r => {
+    const last = groups[groups.length - 1];
+    const num = r.pg.printed_number;
+    if (last && num != null && last.num === num) last.rows.push(r);
+    else groups.push({num, rows: [r]});
+  });
+
+  const figRow = (r, g) => {
+    const gi = g.rows.indexOf(r), next = g.rows[gi + 1];
+    const canSwap = next && next.pg.id === r.pg.id;   // swap within one page
+    return `
+      <div class="row" style="border-top:1px solid var(--line);padding:.7rem 0">
+        <a href="javascript:void(0)" onclick="openCrop('${r.pg.id}', ${r.i})"
+           title="click to re-crop">
+          <img loading="lazy" decoding="async"
+               src="/api/projects/${name}/thumb/${r.f}?w=380${fv(r.f)}"
+               style="height:130px;border:1px solid var(--line);border-radius:4px;
+                      cursor:crosshair"></a>
+        <div style="flex:1;min-width:14rem">
+          <div><a href="javascript:void(0)" onclick="gotoPage('${r.pg.id}')">
+            <b>${r.pg.printed_number != null ? "page " + r.pg.printed_number
+                : "unnumbered"}</b> <span class="meta">· ${r.pg.id}</span></a>
+            ${r.reacq ? `<span class="badge acceptable">📷 re-acquire queued</span>` : ""}</div>
+          <div class="row" style="margin-top:.3rem">
+            <input value="${esc(r.caption)}" placeholder="caption for this figure…"
+                   style="flex:1;min-width:8rem;margin:0"
+                   onchange="setCaption('${r.pg.id}', ${r.i}, this.value)">
+            ${canSwap ? `<button class="secondary" title="swap this caption with the figure below"
+                onclick="swapCaptions('${r.pg.id}', ${r.i}, ${next.i})">⇅ swap</button>` : ""}
+          </div>
+        </div>
+        <span class="row">
+          <button class="secondary" onclick="openCrop('${r.pg.id}', ${r.i})">Re-crop</button>
+          <input type="file" accept="image/*" id="figup-${r.pg.id}-${r.i}"
+                 style="display:none" onchange="uploadFigure('${r.pg.id}', ${r.i})">
+          <button class="secondary" onclick="$('figup-${r.pg.id}-${r.i}').click()">Re-upload</button>
+          <button class="secondary" onclick="figReacq('${r.pg.id}', ${r.i}, ${!r.reacq})">
+            ${r.reacq ? "Unmark re-acquire" : "Re-acquire"}</button>
+          <button class="danger" onclick="delFigure('${r.pg.id}', ${r.i})">Delete</button>
+        </span>
+      </div>`;
+  };
+
+  const groupHtml = (g) => {
+    if (g.rows.length <= 1) return g.rows.map(r => figRow(r, g)).join("");
+    const byCluster = {};
+    g.rows.forEach(r => {
+      const c = clusterOf[key(r.pg.id, r.i)];
+      if (c != null) (byCluster[c] = byCluster[c] || []).push(r);
+    });
+    const dupBanners = Object.values(byCluster).filter(a => a.length > 1).map(a => `
+      <div class="row" style="background:#fffbeb;border-radius:6px;padding:.35rem .7rem;margin:.35rem 0">
+        <span class="meta" style="margin:0;color:#b45309">⚠ ${a.length} of these are the
+          SAME figure captured twice</span>
+        <button class="secondary" onclick='keepBest(${JSON.stringify(
+          a.map(r => ({page_id: r.pg.id, fig_idx: r.i})))})'>Keep sharpest, delete the rest</button>
+      </div>`).join("");
+    return `<div style="border:1px solid var(--line);border-radius:8px;padding:.2rem .8rem;margin:.6rem 0">
+      <div class="meta" style="padding:.4rem 0">${g.rows.length} figures on printed page ${g.num}
+        — each keeps its own caption; use ⇅ swap if two captions are transposed</div>
+      ${dupBanners}
+      ${g.rows.map(r => figRow(r, g)).join("")}
+    </div>`;
+  };
+
+  body.innerHTML = `<div class="card"><h2>Figures <span class="meta">
+    (book order — re-crop, caption, replace, or delete)</span></h2>
+    <div class="row" style="margin-bottom:.6rem">
+      <button class="secondary" onclick="autoRefine()">✨ Auto-refine crops (edge detection)</button>
+      <button onclick="aiRefine(this)" title="Claude proposes each figure's corners
+from the page photo; current manual crops are never touched">🤖 AI refine crops (Claude)</button>
+    </div>` +
+    (groups.map(groupHtml).join("") || "<div class='meta'>no figures yet</div>")
+    + `</div>` + cropModalHtml();
 }
 
 async function uploadFigure(pageId, figIdx) {

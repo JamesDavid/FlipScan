@@ -69,6 +69,15 @@ class Cleanup(BaseModel):
     videos: list[str] = []           # video ids whose SOURCE file to delete
 
 
+class CaptionEdit(BaseModel):
+    caption: str = ""
+
+
+class SwapCaptions(BaseModel):
+    a: int
+    b: int
+
+
 class CropEdit(BaseModel):
     bbox_norm: list[float] | None = None
     quad_norm: list[list[float]] | None = None  # 4 corners; skewed quads get
@@ -682,6 +691,111 @@ def create_app(root: Path) -> FastAPI:
         if crop.shape[0] < 10 or crop.shape[1] < 10:
             raise HTTPException(400, "crop too small")
         return crop, bbox, stored_quad
+
+    def _set_caption(ws, page, rel, region, caption):
+        """Set a figure's caption on its region AND in the page markdown's
+        image alt text (the alt text is what becomes the EPUB figcaption)."""
+        import re as _re
+        caption = (caption or "").strip()
+        if region is not None:
+            region["caption"] = caption
+            region["caption_manual"] = True
+        if page.get("md") and (ws.root / page["md"]).exists():
+            mdp = ws.root / page["md"]
+            md = mdp.read_text(encoding="utf-8")
+            pat = _re.compile(r"!\[[^\]]*\]\(" + _re.escape(rel) + r"\)")
+            repl = f"![{caption}]({rel})"
+            if pat.search(md):
+                md = pat.sub(lambda _m: repl, md)
+                mdp.write_text(md, encoding="utf-8")
+
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/caption")
+    def set_figure_caption(name: str, page_id: str, fig_idx: int,
+                           edit: CaptionEdit):
+        """Assign/correct one figure's caption."""
+        ws = ws_for(name)
+        page, rel, region = _figure(ws, page_id, fig_idx)
+        _set_caption(ws, page, rel, region, edit.caption)
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True}
+
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/swap-captions")
+    def swap_figure_captions(name: str, page_id: str, spec: SwapCaptions):
+        """Swap the captions of two figures on the same page (fixes the
+        model attaching the right caption to the wrong image)."""
+        ws = ws_for(name)
+        pa, rela, rega = _figure(ws, page_id, spec.a)
+        _pb, relb, regb = _figure(ws, page_id, spec.b)
+        ca = (rega or {}).get("caption", "")
+        cb = (regb or {}).get("caption", "")
+        _set_caption(ws, pa, rela, rega, cb)
+        _set_caption(ws, pa, relb, regb, ca)
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True}
+
+    _phash_cache: dict[str, tuple[float, int]] = {}
+
+    @app.get("/api/projects/{name}/figures/duplicate-clusters")
+    def figure_duplicate_clusters(name: str):
+        """Which same-page figures are ACTUALLY the same image (near-identical
+        perceptual hash) vs merely on the same page. Only real clusters get
+        the destructive keep-sharpest option."""
+        import cv2
+
+        from ..imaging import hamming, phash64
+
+        ws = ws_for(name)
+
+        def ph(rel):
+            f = ws.root / rel
+            try:
+                mt = f.stat().st_mtime
+            except OSError:
+                return None
+            hit = _phash_cache.get(rel)
+            if hit and hit[0] == mt:
+                return hit[1]
+            img = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                return None
+            h = phash64(cv2.resize(img, (32, 32)))
+            _phash_cache[rel] = (mt, h)
+            return h
+
+        by_num: dict = {}
+        for p in ws.manifest["pages"]:
+            if p.get("status") in ("duplicate", "deleted"):
+                continue
+            n = p.get("printed_number")
+            if n is None:
+                continue
+            for i, rel in enumerate(p.get("figures") or []):
+                by_num.setdefault(n, []).append(
+                    {"page_id": p["id"], "fig_idx": i, "rel": rel,
+                     "hash": ph(rel)})
+
+        clusters = []
+        for figs in by_num.values():
+            if len(figs) < 2:
+                continue
+            used = set()
+            for i in range(len(figs)):
+                if i in used or figs[i]["hash"] is None:
+                    continue
+                group = [i]
+                for j in range(i + 1, len(figs)):
+                    if (j not in used and figs[j]["hash"] is not None
+                            and hamming(figs[i]["hash"], figs[j]["hash"]) <= 10):
+                        group.append(j)
+                        used.add(j)
+                if len(group) >= 2:
+                    used.update(group)
+                    clusters.append([{"page_id": figs[k]["page_id"],
+                                      "fig_idx": figs[k]["fig_idx"]}
+                                     for k in group])
+        return {"clusters": clusters}
 
     @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
     def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
