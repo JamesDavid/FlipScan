@@ -752,7 +752,10 @@ missed on this page" onclick="openCrop('${pg.id}',
               ${(pg.regions || []).length}, 'pages', true)">＋ Add figure</button>
             ${pg.patched_source ? `<button class="secondary"
               title="photo shot upside down? flip its pixels and re-process"
-              onclick="rotatePage('${pg.id}')">↻ 180°</button>` : ""}
+              onclick="rotatePage('${pg.id}')">↻ 180°</button>
+            <button class="secondary" title="crop this page's photo down with
+corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
+              ✂ Crop page</button>` : ""}
             ${pg.status === "duplicate"
               ? `<button class="secondary" onclick="unduplicate('${pg.id}')">Not a duplicate</button>`
               : `<button class="secondary" onclick="markDuplicate('${pg.id}')">Mark as duplicate</button>`}
@@ -1631,6 +1634,18 @@ async function setSection(pageId) {
   gotoPage(pageId);
 }
 
+function openPageCrop(pageId) {
+  const pg = (window._proj?.pages || []).find(x => x.id === pageId);
+  if (!pg) return;
+  cropCtx = {pageId, figIdx: -1, origin: "pages", isRegion: false,
+             isPage: true, mode: null, corner: -1,
+             quad: [[0.03,0.03],[0.97,0.03],[0.97,0.97],[0.03,0.97]]};
+  const img = $("crop-img");
+  img.src = `/api/projects/${current}/file/${pg.patched_source}?t=${Date.now()}`;
+  $("crop-modal").style.display = "flex";
+  img.onload = () => drawCropQuad();
+}
+
 async function rotatePage(pageId) {
   try { await api(`/projects/${current}/pages/${pageId}/rotate?degrees=180`,
                   {method: "POST"}); }
@@ -1841,11 +1856,14 @@ async function saveCrop() {
   if (!cropCtx?.quad) { alert("draw a box first"); return; }
   try {
     await api(`/projects/${current}/pages/${cropCtx.pageId}/`
-      + (cropCtx.isRegion ? `regions/${cropCtx.figIdx}/crop` : `figures/${cropCtx.figIdx}/crop`), {
+      + (cropCtx.isPage ? "crop-page"
+         : cropCtx.isRegion ? `regions/${cropCtx.figIdx}/crop`
+         : `figures/${cropCtx.figIdx}/crop`), {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({quad_norm: cropCtx.quad})});
   } catch (e) { alert("crop failed: " + e.message); return; }
-  bumpFig(`figures/${cropCtx.pageId}_${String.fromCharCode(97 + cropCtx.figIdx % 26)}.png`);
+  if (!cropCtx.isPage)
+    bumpFig(`figures/${cropCtx.pageId}_${String.fromCharCode(97 + cropCtx.figIdx % 26)}.png`);
   $("crop-modal").style.display = "none";
   if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
   else openProject(current, "figures");

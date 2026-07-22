@@ -205,6 +205,43 @@ def add_pages_from_pdf(ws: Workspace, cfg: dict, pdf: Path,
     return n
 
 
+def crop_page_photo(ws: Workspace, cfg: dict, page: dict,
+                    quad_norm: list, log: Callable[[str], None] = print) -> None:
+    """Crop a photo-sourced page (cover, back cover, any patched page) with
+    the same corner tool figures use: the quad is perspective-corrected and
+    REPLACES the page's source pixels, so everything derived — EPUB cover,
+    facsimile, thumbnails — uses exactly what the user framed."""
+    import cv2
+    import numpy as np
+
+    from .imaging import order_quad
+    from .stages.preprocess import correct_page, preprocess_page
+
+    src = ws.root / (page.get("patched_source") or "")
+    if not src.exists():
+        raise FileNotFoundError(f"{page['id']} has no photo source to crop")
+    img = cv2.imread(str(src))
+    if img is None:
+        raise ValueError(f"{page['id']}: photo unreadable")
+    quad = order_quad(np.clip(np.array(quad_norm, dtype=np.float64), 0, 1))
+    crop = correct_page(img, quad)
+    if crop.shape[0] < 50 or crop.shape[1] < 50:
+        raise ValueError("crop too small")
+    cv2.imwrite(str(src), crop)
+    # old regions/figures/transcription described the uncropped image
+    for key in ("regions", "figures"):
+        page.pop(key, None)
+    if page.get("role") != "cover":
+        page["md"] = None
+        for key in ("confidence", "flags", "transcribe_error"):
+            page.pop(key, None)
+        ws.stage_reset("transcribe")
+    preprocess_page(ws, page, cfg)
+    ws.stage_reset("assemble")
+    ws.save()
+    log(f"{page['id']}: page photo cropped")
+
+
 def rotate_patch(ws: Workspace, cfg: dict, page: dict, degrees: int = 180,
                  log: Callable[[str], None] = print) -> None:
     """Rotate a photo-sourced page's pixels in place and re-derive its

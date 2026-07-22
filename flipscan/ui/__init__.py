@@ -1114,6 +1114,27 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no such page")
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/crop-page")
+    async def crop_page_endpoint(name: str, page_id: str, edit: CropEdit):
+        """Crop a photo page's own pixels (covers!) with the corner tool."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        if not page.get("patched_source"):
+            raise HTTPException(400, "only photo-sourced pages can be cropped "
+                                     "— video pages are framed automatically")
+        if not edit.quad_norm or len(edit.quad_norm) != 4:
+            raise HTTPException(400, "need quad_norm corners")
+        cfg = load_config(ws.root)
+        from ..project import crop_page_photo
+        try:
+            await asyncio.to_thread(crop_page_photo, ws, cfg, page,
+                                    edit.quad_norm, lambda m: None)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
     @app.post("/api/projects/{name}/pages/{page_id}/rotate")
     async def rotate_page_photo(name: str, page_id: str, degrees: int = 180):
         """Rotate a photo page's pixels (EXIF tags on phone photos are
