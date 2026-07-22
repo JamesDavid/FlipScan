@@ -1127,9 +1127,23 @@ async function addVideoToProject() {
   const fd = new FormData();
   fd.append("video", input.files[0]);
   try {
-    await uploadXHR(`/api/projects/${current}/videos`, fd,
+    const r = await uploadXHR(`/api/projects/${current}/videos`, fd,
                     pct => btn.textContent = `uploading ${pct}%`);
-    if (confirm("Video added. Run the pipeline now to merge its pages in?")) {
+    // orientation: auto-detected during processing unless the user knows
+    const o = prompt(
+      "Video added.\n\nWas it shot upside down?\n" +
+      "  a = auto-detect (recommended — checked during processing)\n" +
+      "  y = yes, it's upside down\n" +
+      "  n = no, normal orientation", "a");
+    if (o && r?.id) {
+      const v = o.trim().toLowerCase();
+      if (v === "y") await api(`/projects/${current}/videos/${r.id}?rotate=180`,
+                               {method: "PUT"});
+      else if (v === "n") await api(`/projects/${current}/videos/${r.id}?rotate=0`,
+                                    {method: "PUT"});
+      // "a" (or anything else): leave unset — preprocess auto-detects
+    }
+    if (confirm("Run the pipeline now to merge its pages in?")) {
       await api(`/projects/${current}/run`, {method:"POST"});
     }
   } catch (e) { alert("add video failed: " + e.message); }
