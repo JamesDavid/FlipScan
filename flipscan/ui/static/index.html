@@ -494,8 +494,12 @@ function renderTab(tab, p) {
                  onchange="addVideoToProject()">
           <button onclick="$('addvideo-file').click()"
                   ${p.running ? "disabled" : ""}>+ Add video</button>
-          <span class="meta">flip-through capture — shared pages merge, new pages
-            slot in; run the pipeline after adding</span>
+          <input type="file" accept="application/pdf,.pdf" id="addpdf-file"
+                 style="display:none" onchange="addPdfToProject()">
+          <button class="secondary" onclick="$('addpdf-file').click()"
+                  ${p.running ? "disabled" : ""}>+ Add PDF</button>
+          <span class="meta">film the book, or import a PDF of it — every PDF
+            page becomes a page here; run the pipeline after adding</span>
         </div>
       </div>
       ${addPagePanel()}
@@ -1150,6 +1154,26 @@ async function addVideoToProject() {
       await api(`/projects/${current}/run`, {method:"POST"});
     }
   } catch (e) { alert("add video failed: " + e.message); }
+  openProject(current, "media");
+}
+
+async function addPdfToProject() {
+  const input = $("addpdf-file");
+  if (!input.files.length) return;
+  const btn = input.nextElementSibling;
+  btn.disabled = true;
+  const fd = new FormData();
+  fd.append("pdf", input.files[0]);
+  try {
+    btn.textContent = "importing…";
+    const r = await uploadXHR(`/api/projects/${current}/pdf`, fd,
+                    pct => btn.textContent = pct < 100
+                      ? `uploading ${pct}%` : "rendering pages…");
+    if (confirm(`${r.pages} pages imported from the PDF. Run the pipeline ` +
+                `now to transcribe them?`)) {
+      await api(`/projects/${current}/run`, {method:"POST"});
+    }
+  } catch (e) { alert("PDF import failed: " + e.message); }
   openProject(current, "media");
 }
 

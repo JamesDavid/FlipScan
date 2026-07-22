@@ -442,6 +442,30 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True, "rotate": rotate}
 
+    @app.post("/api/projects/{name}/pdf")
+    async def add_pdf(name: str, pdf: UploadFile):
+        """Import a whole book from a PDF — the alternative to filming it."""
+        ws = ws_for(name)
+        if name in runs and runs[name]["thread"].is_alive():
+            raise HTTPException(409, "pipeline is running — wait for it to finish")
+        cfg = load_config(ws.root)
+        uploads = ws.root / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        dest = uploads / Path(pdf.filename or "book.pdf").name
+        with open(dest, "wb") as f:
+            while chunk := await pdf.read(1 << 22):
+                f.write(chunk)
+        from ..project import add_pages_from_pdf
+        try:
+            n = await asyncio.to_thread(add_pages_from_pdf, ws, cfg, dest,
+                                        lambda m: None)
+        except Exception as e:
+            raise HTTPException(400, f"PDF import failed: {e}")
+        finally:
+            dest.unlink(missing_ok=True)
+        return {"ok": True, "pages": n,
+                "next": "run the pipeline to transcribe them"}
+
     @app.post("/api/projects/{name}/pages/add")
     async def add_page(name: str, photo: UploadFile, position: str = "end",
                        cover: bool = False):

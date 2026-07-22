@@ -20,6 +20,7 @@ dependencies = [
     "anthropic>=0.40",
     "ebooklib>=0.18",
     "markdown>=3.5",
+    "pypdfium2>=4.30",
 ]
 
 [project.optional-dependencies]
