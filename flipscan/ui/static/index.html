@@ -121,6 +121,19 @@
   .thumbs { display:flex; flex-wrap:wrap; gap:.6rem; }
   .thumbs img { height:160px; border:1px solid var(--line); border-radius:4px; }
   a { color:var(--accent); }
+  #page-peek { position:fixed; z-index:200; width:min(48vw,540px);
+               background:var(--panel); border:1px solid var(--line);
+               border-radius:8px; box-shadow:0 10px 34px rgba(0,0,0,.4);
+               display:none; }
+  #peek-head { display:flex; align-items:center; gap:.5rem; padding:.35rem .6rem;
+               background:#292524; color:#fafaf9; border-radius:8px 8px 0 0;
+               cursor:move; user-select:none; font-size:.85rem;
+               touch-action:none; }
+  #peek-head button { background:#44403c; color:#fafaf9; border:0;
+                      border-radius:5px; padding:.15rem .5rem; cursor:pointer;
+                      font-size:.8rem; }
+  #peek-body { max-height:74vh; overflow:auto; background:#0c0a09; }
+  #peek-body img { display:block; }
 </style>
 </head>
 <body>
@@ -852,7 +865,10 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
         <b>${esc(f.type)}</b>
         ${f.page ? ` · <a href="javascript:void(0)"
             onclick="gotoPage('${f.page}')">${f.printed_number != null
-              ? "page " + f.printed_number : f.page}</a>` : ""}
+              ? "page " + f.printed_number : f.page}</a>
+          <button class="secondary" style="padding:.05rem .5rem;font-size:.7rem"
+            title="open the page image in a movable pane to compare against the quote"
+            onclick="peekPage('${f.page}')">👁 view page</button>` : ""}
         ${f.source === "lint" ? ' · <span class="meta">auto-check</span>' : ""}
         <div style="font-family:ui-monospace,monospace;font-size:.78rem;margin:.15rem 0">
           “${esc(f.quote)}”${f.replacement != null
@@ -1384,6 +1400,59 @@ async function aiRefine(btn) {
           `${r.kept_manual} manual crops kept, ${r.failed} failed.`);
   } catch (e) { alert(e.message); }
   openProject(current, "figures");
+}
+
+let peekZoom = 1;
+function peekPage(pageId) {
+  const pg = (window._proj?.pages || []).find(x => x.id === pageId);
+  if (!pg || !pg.color) { alert("no processed image for this page yet"); return; }
+  let pane = $("page-peek");
+  if (!pane) {
+    pane = document.createElement("div");
+    pane.id = "page-peek";
+    pane.innerHTML = `
+      <div id="peek-head">
+        <b id="peek-title" style="flex:1;white-space:nowrap;overflow:hidden;
+           text-overflow:ellipsis"></b>
+        <button onclick="peekZoomBy(-1)" title="zoom out">−</button>
+        <button onclick="peekZoomBy(1)" title="zoom in">+</button>
+        <button onclick="$('page-peek').style.display='none'" title="close">✕</button>
+      </div>
+      <div id="peek-body"><img id="peek-img"></div>`;
+    document.body.appendChild(pane);
+    const head = $("peek-head");
+    let dx = 0, dy = 0;
+    head.addEventListener("pointerdown", (e) => {
+      if (e.target.tagName === "BUTTON") return;
+      const r = pane.getBoundingClientRect();
+      dx = e.clientX - r.left; dy = e.clientY - r.top;
+      pane.style.right = "auto";
+      head.setPointerCapture(e.pointerId);
+      const move = (ev) => {
+        pane.style.left = Math.max(0, Math.min(innerWidth - 60, ev.clientX - dx)) + "px";
+        pane.style.top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy)) + "px";
+      };
+      const up = () => { head.removeEventListener("pointermove", move);
+                         head.removeEventListener("pointerup", up); };
+      head.addEventListener("pointermove", move);
+      head.addEventListener("pointerup", up);
+    });
+  }
+  peekZoom = 1;
+  $("peek-title").textContent =
+    (pg.printed_number != null ? "page " + pg.printed_number : pg.id) + " · " + pg.id;
+  const img = $("peek-img");
+  img.style.width = "100%";
+  img.src = `/api/projects/${current}/thumb/${pg.color}?w=1100${fv(pg.color)}`;
+  pane.style.display = "block";
+  pane.style.top = "4rem";
+  pane.style.right = "1rem";
+  pane.style.left = "auto";
+}
+function peekZoomBy(dir) {
+  peekZoom = Math.max(1, Math.min(4, peekZoom + dir * 0.5));
+  const img = $("peek-img");
+  if (img) img.style.width = (peekZoom * 100) + "%";
 }
 
 async function resolveFinding(ci, fi, btn) {
