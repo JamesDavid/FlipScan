@@ -241,6 +241,20 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True, "book": ws.manifest["book"]}
 
+    @app.delete("/api/projects/{name}")
+    def delete_project(name: str, confirm: str = ""):
+        """Delete a whole project, videos/frames/pages and all. Irreversible —
+        the caller must echo the exact project name in `confirm`."""
+        import shutil
+        ws = ws_for(name)   # 404s if the project doesn't exist
+        if confirm != name:
+            raise HTTPException(400, "type the exact project name to confirm")
+        if name in runs and runs[name]["thread"].is_alive():
+            raise HTTPException(409, "pipeline is running — stop it first")
+        runs.pop(name, None)
+        shutil.rmtree(ws.root, ignore_errors=True)
+        return {"ok": True}
+
     # ---------------- pipeline
 
     @app.post("/api/projects/{name}/run")
@@ -1664,9 +1678,9 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/projects/{name}/build")
     def build(name: str, format: str = "epub", device: str = "none"):
         ws = ws_for(name)
-        ext = "epub" if format == "epub" else "pdf"
-        suffix = "-facsimile" if format == "pdf-facsimile" else ""
-        if device != "none":
+        ext = {"epub": "epub", "markdown": "zip"}.get(format, "pdf")
+        suffix = {"pdf-facsimile": "-facsimile", "markdown": "-markdown"}.get(format, "")
+        if device != "none" and format not in ("pdf", "markdown"):
             suffix += f"-{device}"
         out = ws.dir("out") / f"{ws.root.name}{suffix}.{ext}"
         try:
@@ -1680,6 +1694,11 @@ def create_app(root: Path) -> FastAPI:
             elif format == "pdf":
                 from ..build_pdf import build_pdf_reflowed
                 build_pdf_reflowed(ws, out, log=lambda m: None)
+            elif format == "markdown":
+                from ..build_markdown import build_markdown_zip
+                build_markdown_zip(ws, out,
+                                   author=ws.manifest["book"].get("author"),
+                                   log=lambda m: None)
             else:
                 raise HTTPException(400, f"unknown format {format!r}")
         except (RuntimeError, FileNotFoundError) as e:

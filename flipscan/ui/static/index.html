@@ -340,6 +340,22 @@ async function createProject() {
 function toggleNav() { $("nav-drawer").classList.toggle("open"); }
 function closeNav() { $("nav-drawer").classList.remove("open"); }
 
+async function deleteProject(name) {
+  if (!confirm(`Delete the project "${name}" and ALL its videos, frames, `
+             + `pages, and outputs?\n\nThis cannot be undone.`)) return;
+  const typed = prompt(`This is permanent. Type the project name exactly to confirm:\n\n${name}`);
+  if (typed === null) return;
+  if (typed !== name) { alert("Name didn't match — nothing deleted."); return; }
+  try {
+    await api(`/projects/${encodeURIComponent(name)}?confirm=`
+              + encodeURIComponent(name), {method: "DELETE"});
+  } catch (e) { alert("delete failed: " + e.message); return; }
+  current = null;
+  location.hash = "";
+  await refreshProjects();
+  $("main").innerHTML = `<div class="card">Project "${esc(name)}" deleted.</div>`;
+}
+
 function toggleProjSettings() {
   const el = $("proj-settings");
   el.style.display = el.style.display === "none" ? "flex" : "none";
@@ -375,7 +391,10 @@ async function openProject(name, tab) {
       ${esc(p.book.title || name)}
       <button class="secondary" style="padding:.15rem .6rem;font-size:.75rem"
               title="edit title / author / page count"
-              onclick="toggleProjSettings()">✎</button></h2>
+              onclick="toggleProjSettings()">✎</button>
+      <button class="danger" style="padding:.15rem .6rem;font-size:.75rem"
+              title="delete this entire project" onclick="deleteProject('${esc(name)}')">
+        🗑 delete</button></h2>
     <div id="proj-settings" class="row" style="display:none;margin-bottom:.8rem">
       <label style="margin:0">title</label>
       <input id="ps-title" value="${esc(p.book.title || "")}"
@@ -951,7 +970,7 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
         <span class="meta">images resized/grayscaled for small e-ink readers</span>
       </div>
       <div class="row">
-        ${["epub","pdf-facsimile","pdf"].map(f =>
+        ${["epub","pdf-facsimile","pdf","markdown"].map(f =>
           `<button onclick="buildFmt('${f}')">Build ${f}</button>`).join("")}
       </div>
       <h2 style="margin-top:1rem">Downloads</h2>
