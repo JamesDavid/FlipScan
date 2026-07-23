@@ -1954,16 +1954,20 @@ function cropModalHtml() {
 let cropCtx = null;
 function openCrop(pageId, figIdx, origin = "figures", isRegion = false) {
   const pg = window._proj.pages.find(p => p.id === pageId);
-  // corners ordered tl,tr,br,bl (normalized); start from the SAVED corners —
-  // a skewed quad must come back as drawn, not as its bounding rectangle
   const reg = pg.regions?.[figIdx];
-  const bb = reg?.bbox_norm;
-  cropCtx = {pageId, figIdx, origin, isRegion, mode: null, corner: -1,
-             quad: (reg?.quad_norm && reg.quad_norm.length === 4)
+  // a re-acquired close-up is its OWN image — trim IT, not the full page,
+  // so re-cropping can never destroy the close-up you took
+  const own = !!(reg && reg.own_image);
+  const figRel = (pg.figures || [])[figIdx];
+  const bb = own ? null : reg?.bbox_norm;
+  cropCtx = {pageId, figIdx, origin, isRegion, own, mode: null, corner: -1,
+             quad: (!own && reg?.quad_norm && reg.quad_norm.length === 4)
                ? reg.quad_norm.map(p => [...p])
-               : bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]] : null};
+               : bb ? [[bb[0],bb[1]],[bb[2],bb[1]],[bb[2],bb[3]],[bb[0],bb[3]]]
+               : own ? [[0.02,0.02],[0.98,0.02],[0.98,0.98],[0.02,0.98]] : null};
   const img = $("crop-img");
-  img.src = `/api/projects/${current}/file/${pg.color}?t=${Date.now()}`;
+  const src = (own && figRel) ? figRel : pg.color;
+  img.src = `/api/projects/${current}/file/${src}?t=${Date.now()}`;
   $("crop-modal").style.display = "flex";
   img.onload = () => drawCropQuad();
   attachCropHandlers();

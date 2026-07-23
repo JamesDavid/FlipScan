@@ -789,20 +789,23 @@ def create_app(root: Path) -> FastAPI:
         region = regions[ridx] if 0 <= ridx < len(regions) else None
         return page, rel, region
 
-    def _compute_crop(ws, page, edit: CropEdit):
+    def _compute_crop(ws, page, edit: CropEdit, source_rel=None):
         """Shared crop math: bbox crops directly; a 4-corner quad is
-        perspective-warped back to a rectangle. Returns (crop, bbox, quad)."""
+        perspective-warped back to a rectangle. Returns (crop, bbox, quad).
+        Crops from `source_rel` when given (a standalone close-up figure),
+        otherwise the page's corrected full image."""
         import cv2
         import numpy as np
 
         from ..imaging import order_quad
         from ..stages.preprocess import correct_page
 
-        if not page.get("color"):
+        src = source_rel or page.get("color")
+        if not src:
             raise HTTPException(400, "page has no corrected image")
-        color = cv2.imread(str(ws.root / page["color"]))
+        color = cv2.imread(str(ws.root / src))
         if color is None:
-            raise HTTPException(500, "page image unreadable")
+            raise HTTPException(500, "image unreadable")
         h, w = color.shape[:2]
 
         if edit.quad_norm and len(edit.quad_norm) == 4:
@@ -932,21 +935,36 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/crop")
     def recrop_figure(name: str, page_id: str, fig_idx: int, edit: CropEdit):
-        """Re-crop an existing figure."""
+        """Re-crop a figure. A re-acquired close-up (own_image) is its OWN
+        photo, not a region of the page — so trim the close-up itself instead
+        of cropping the full page (which would destroy the close-up)."""
         import cv2
 
         ws = ws_for(name)
         page, rel, region = _figure(ws, page_id, fig_idx)
-        crop, bbox, stored_quad = _compute_crop(ws, page, edit)
+        standalone = bool(region and region.get("own_image"))
+        # crop the close-up in place via a temp (can't read+write same file mid-op)
+        src_rel = None
+        if standalone and (ws.root / rel).exists():
+            tmp = ws.work_file(f"_crop_{page_id}_{fig_idx}.png")
+            import shutil
+            shutil.copyfile(ws.root / rel, tmp)
+            src_rel = tmp.relative_to(ws.root).as_posix()
+        crop, bbox, stored_quad = _compute_crop(ws, page, edit, source_rel=src_rel)
         cv2.imwrite(str(ws.root / rel), crop)
+        if src_rel:
+            (ws.root / src_rel).unlink(missing_ok=True)
         if region is not None:
             from ..stages.figures import file_ref
-            region["bbox_norm"] = bbox
-            if stored_quad:
-                region["quad_norm"] = stored_quad
             region["user_crop"] = True
-            region["color_ref"] = file_ref(ws.root / page["color"])
             region.pop("stale_crop", None)
+            if standalone:
+                region["own_image"] = True   # still a standalone close-up
+            else:
+                region["bbox_norm"] = bbox
+                if stored_quad:
+                    region["quad_norm"] = stored_quad
+                region["color_ref"] = file_ref(ws.root / page["color"])
         ws.stage_reset("assemble")
         ws.save()
         return {"ok": True, "figure": rel}
@@ -1332,6 +1350,7 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "not a readable image")
         if region is not None:
             region["user_crop"] = True  # never let the figures stage overwrite it
+            region["own_image"] = True  # an uploaded photo, not a page crop
             region.pop("needs_reshoot", None)   # re-acquisition fulfilled
         ws.stage_reset("assemble")
         ws.save()
@@ -1493,6 +1512,7 @@ def create_app(root: Path) -> FastAPI:
             regions = page.get("regions") or []
             if fig_idx < len(regions):
                 regions[fig_idx]["user_crop"] = True
+                regions[fig_idx]["own_image"] = True   # a standalone close-up
                 regions[fig_idx].pop("needs_reshoot", None)
             ws.stage_reset("assemble")
             ws.save()
