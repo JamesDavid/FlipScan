@@ -8,13 +8,17 @@ See [SPEC.md](SPEC.md) for the full architecture.
 
 ![FlipScan — the pages tab: source frame beside an editable transcription, per-page controls, chapter filter](docs/screenshot.png)
 
+## Starting a project
+
+You give the book a **title** (or look it up) — the folder name is a unique slug generated for you, so you never type or manage an internal name. The **🔍 look up** field searches Google Books / Open Library by ISBN, title, or author and auto-fills title, author, page count, publisher, and year. Metadata is editable later (✎), flows into the EPUB's Dublin Core, and — once a book is transcribed — FlipScan reads the ISBN off the copyright page and offers to fill the rest in one click.
+
 ## Three ways to get pages in
 
 You can mix all three in one project; page order is reconciled from printed page numbers.
 
 - **Flip-through video** — the fastest for a whole book. Film yourself thumbing through it (any direction, any subset, as many videos as you like). Page turns split each video into page captures. Upside-down videos are auto-detected.
 - **Photos** — for the cover, inside-cover text, or any page a video missed. Deliberate photos are used exactly as framed (no warping/cropping). Orientation is auto-checked per shot.
-- **PDF** — the alternative to filming: every PDF page is rendered and imported as a page, in order. Great for books you already have as a scan or a born-digital PDF.
+- **PDF** — the alternative to filming: every PDF page is rendered and imported as a page, in authoritative order. Great for scans or born-digital PDFs — including compilations where several works are concatenated and printed page numbers repeat (each restarting at page 1), which are kept in order rather than merged.
 
 ### Capture tips (video)
 
@@ -42,7 +46,7 @@ One thumbnail per detected page (red borders on suspects). Check this after the 
 ![Frames tab](docs/tabs/frames.png)
 
 ### Pages — the heart of it
-Every page as a three-row cell: source frame, editable Markdown transcription, and action buttons. Assign/correct the printed page number (manual always wins), mark for re-acquisition, replace the photo, add a figure, rotate, set a section heading, mark duplicate, or hide. Filter by **chapter** or "no page number only," with a next-section button to work through the book section by section. Missing-page markers appear inline between non-consecutive pages.
+Every page as a three-row cell: source frame, editable Markdown transcription, and action buttons. Assign/correct the printed page number (manual always wins), mark for re-acquisition, replace the photo, add a figure, rotate, mark duplicate, or hide. **Section heading** makes a page open a chapter — assigning one restructures the book immediately (the printed contents page also seeds chapter titles automatically, normalized to the book's own style). Filter by **chapter** or "no page number only," with a next-section button to work through the book section by section. Missing-page markers appear inline between non-consecutive pages.
 
 ![Pages tab](docs/tabs/pages.png)
 
