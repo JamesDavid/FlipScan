@@ -414,6 +414,46 @@ async function deleteProject(name) {
   $("main").innerHTML = `<div class="card">Project "${esc(name)}" deleted.</div>`;
 }
 
+async function fillFromIsbn(isbn, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "looking up…"; }
+  let r;
+  try { r = await api("/lookup?q=" + encodeURIComponent(isbn)); }
+  catch (e) { alert("lookup failed: " + e.message); return; }
+  const b = (r.results || [])[0];
+  if (!b) { alert("No metadata found for ISBN " + isbn + " — enter it manually (✎)."); return; }
+  // only fill fields that are currently EMPTY — never clobber good existing
+  // data (title/pages the user or OCR already have)
+  const cur = window._proj?.book || {};
+  const merged = {
+    title: cur.title || b.title || null,
+    author: cur.author || b.author || null,
+    expected_pages: cur.expected_pages || b.pages || null,
+    isbn: cur.isbn || b.isbn || isbn,
+    publisher: cur.publisher || b.publisher || null,
+    year: cur.year || b.year || null,
+  };
+  if (!confirm(`Fill the empty book details from ISBN ${b.isbn || isbn}:\n\n` +
+      `title:     ${merged.title || "—"}\n` +
+      `author:    ${merged.author || "—"}\n` +
+      `pages:     ${merged.expected_pages || "—"}\n` +
+      `publisher: ${merged.publisher || "—"}\n` +
+      `year:      ${merged.year || "—"}\n\n` +
+      `(Existing values are kept; you can refine anything with ✎.)`)) return;
+  try {
+    await api("/projects/" + current, {method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(merged)});
+  } catch (e) { alert("save failed: " + e.message); return; }
+  refreshProjects();
+  openProject(current);
+}
+
+async function dismissIsbn() {
+  try { await api("/projects/" + current + "/dismiss-isbn", {method: "POST"}); }
+  catch (e) {}
+  openProject(current);
+}
+
 function toggleProjSettings() {
   const el = $("proj-settings");
   el.style.display = el.style.display === "none" ? "flex" : "none";
@@ -475,6 +515,16 @@ async function openProject(name, tab) {
       <input id="ps-year" value="${esc(p.book.year || "")}" style="width:4.5rem;margin:0">
       <button onclick="saveProjSettings()">Save</button>
     </div>
+    ${p.detected_isbn ? `<div style="border:2px solid var(--accent);
+         background:#f0fdfa;border-radius:8px;padding:.6rem .9rem;margin:.2rem 0 .8rem">
+      <div class="row">
+        <span>📕 Found <b>ISBN ${esc(p.detected_isbn)}</b> in the scanned text —
+          fill in the book details automatically?</span>
+        <span class="row" style="margin-left:auto">
+          <button onclick="fillFromIsbn('${esc(p.detected_isbn)}', this)">Fill book details</button>
+          <button class="secondary" onclick="dismissIsbn()">Dismiss</button>
+        </span>
+      </div></div>` : ""}
     <div class="stages">${stages}</div>
     <div class="row">
       <button id="runbtn" onclick="runPipeline()" ${p.running ? "disabled" : ""}>

@@ -21,6 +21,50 @@ STAGE_MODULES = {
 }
 
 
+def _valid_isbn10(s: str) -> bool:
+    s = s.upper()
+    if len(s) != 10:
+        return False
+    total = 0
+    for i, c in enumerate(s):
+        if c == "X" and i == 9:
+            v = 10
+        elif c.isdigit():
+            v = int(c)
+        else:
+            return False
+        total += v * (10 - i)
+    return total % 11 == 0
+
+
+def _valid_isbn13(s: str) -> bool:
+    if len(s) != 13 or not s.isdigit() or not s.startswith(("978", "979")):
+        return False
+    total = sum(int(c) * (1 if i % 2 == 0 else 3) for i, c in enumerate(s))
+    return total % 10 == 0
+
+
+def find_isbn(ws: Workspace) -> str | None:
+    """Scan the transcribed pages for a checksum-valid ISBN (the copyright
+    page carries it). Prefers an 'ISBN'-labeled number; validation rejects
+    false positives like Library-of-Congress call numbers."""
+    import re
+    labeled = re.compile(r"ISBN[\s:–-]*([\dXx][\dXx\s–-]{7,17}[\dXx])",
+                         re.I)
+    for p in ws.manifest["pages"]:
+        if p.get("status") in ("duplicate", "deleted") or not p.get("md"):
+            continue
+        f = ws.root / p["md"]
+        if not f.exists():
+            continue
+        text = f.read_text(encoding="utf-8")
+        for m in labeled.finditer(text):
+            digits = re.sub(r"[^\dXx]", "", m.group(1)).upper()
+            if _valid_isbn13(digits) or _valid_isbn10(digits):
+                return digits
+    return None
+
+
 def create_project(directory: Path, videos: list[dict[str, Any]],
                    title: str | None = None, expected_pages: int | None = None,
                    book: dict[str, Any] | None = None,

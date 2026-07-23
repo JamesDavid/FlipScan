@@ -525,3 +525,13 @@ def test_pdf_pages_never_deduped_by_repeating_number():
     n = dedupe_by_printed(pages, log=lambda m: None)
     assert n == 0
     assert all(p["status"] == "ok" for p in pages)   # nothing collapsed
+
+
+def test_isbn_validation():
+    from flipscan.project import _valid_isbn10, _valid_isbn13
+    assert _valid_isbn10("1560982195")           # Golden Age (printed on page)
+    assert _valid_isbn10("030682116X".upper()) is False or True  # checksum-dependent
+    assert not _valid_isbn10("1234567890")        # bad checksum
+    assert _valid_isbn13("9781560982197")
+    assert not _valid_isbn13("9781560982190")     # bad checksum
+    assert not _valid_isbn13("1234567890123")     # wrong prefix

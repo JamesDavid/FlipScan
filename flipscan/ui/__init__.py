@@ -292,6 +292,16 @@ def create_app(root: Path) -> FastAPI:
         m = ws.manifest
         sig = _build_signature(ws)
         built = m.get("outputs_built", {})
+        # offer to auto-fill book details from an ISBN found in the OCR — only
+        # when the book has no ISBN yet and the user hasn't dismissed it.
+        # Scan once and cache (ISBNs don't change).
+        detected_isbn = None
+        if not m["book"].get("isbn") and not m.get("isbn_dismissed"):
+            if "isbn_detected" not in m:
+                from ..project import find_isbn
+                m["isbn_detected"] = find_isbn(ws) or ""
+                ws.save()
+            detected_isbn = m.get("isbn_detected") or None
         # per-file versions: thumbnail URLs embed these so a re-crop or
         # re-patch changes the URL and can never be served from memory cache
         file_v: dict[str, int] = {}
@@ -308,6 +318,7 @@ def create_app(root: Path) -> FastAPI:
             "file_versions": file_v,
             "name": name,
             "book": m["book"],
+            "detected_isbn": detected_isbn,
             "toc": printed_toc(ws),
             "videos": m["videos"],
             "stages": {s: ws.stage_status(s) for s in STAGES},
@@ -329,6 +340,13 @@ def create_app(root: Path) -> FastAPI:
                 ws.manifest["book"][k] = (v.strip() or None) if isinstance(v, str) else v
         ws.save()
         return {"ok": True, "book": ws.manifest["book"]}
+
+    @app.post("/api/projects/{name}/dismiss-isbn")
+    def dismiss_isbn(name: str):
+        ws = ws_for(name)
+        ws.manifest["isbn_dismissed"] = True
+        ws.save()
+        return {"ok": True}
 
     @app.delete("/api/projects/{name}")
     def delete_project(name: str, confirm: str = ""):
