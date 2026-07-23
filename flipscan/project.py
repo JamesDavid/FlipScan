@@ -23,10 +23,12 @@ STAGE_MODULES = {
 
 def create_project(directory: Path, videos: list[dict[str, Any]],
                    title: str | None = None, expected_pages: int | None = None,
+                   book: dict[str, Any] | None = None,
                    log: Callable[[str], None] = print) -> Workspace:
-    """Create a workspace from video specs: [{path, pages, direction}, ...]."""
+    """Create a workspace from video specs: [{path, pages, direction}, ...].
+    `book` carries optional metadata (author, isbn, publisher, year)."""
     ws = Workspace.create(directory, videos=[], title=title,
-                          expected_pages=expected_pages)
+                          expected_pages=expected_pages, book=book)
     entries = []
     for i, spec in enumerate(videos):
         vid = f"v{i}"

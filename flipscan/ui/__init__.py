@@ -28,10 +28,14 @@ class VideoSpec(BaseModel):
 
 
 class NewProject(BaseModel):
-    name: str
-    videos: list[VideoSpec]
+    name: str | None = None          # optional — a unique slug is generated
+    videos: list[VideoSpec] = []
     title: str | None = None
+    author: str | None = None
     expected_pages: int | None = None
+    isbn: str | None = None
+    publisher: str | None = None
+    year: str | None = None
 
 
 class MarkdownEdit(BaseModel):
@@ -42,6 +46,29 @@ class BookEdit(BaseModel):
     title: str | None = None
     author: str | None = None
     expected_pages: int | None = None
+    isbn: str | None = None
+    publisher: str | None = None
+    year: str | None = None
+
+
+def _slugify(s: str) -> str:
+    import re
+    s = re.sub(r"[^\w\s-]", "", (s or "").strip().lower())
+    return re.sub(r"[\s_-]+", "-", s).strip("-")[:60] or "book"
+
+
+def _unique_slug(root: Path, title: str | None) -> str:
+    """A readable, collision-free folder name from the title (never shown to
+    the user, who only ever sees the title)."""
+    import uuid
+    base = _slugify(title)
+    if not (root / base).exists():
+        return base
+    for _ in range(50):
+        cand = f"{base}-{uuid.uuid4().hex[:4]}"
+        if not (root / cand).exists():
+            return cand
+    return f"{base}-{uuid.uuid4().hex}"
 
 
 class PageEdit(BaseModel):
@@ -137,17 +164,78 @@ def create_app(root: Path) -> FastAPI:
                 })
         return out
 
+    @app.get("/api/lookup")
+    def book_lookup(q: str):
+        """Look a book up by ISBN, title, or author and return candidates to
+        auto-fill the new-project form. Google Books first (keyless, broad),
+        Open Library as fallback."""
+        import re
+
+        import httpx
+        q = (q or "").strip()
+        if len(q) < 3:
+            return {"results": []}
+        digits = re.sub(r"[^0-9Xx]", "", q)
+        is_isbn = len(digits) in (10, 13) and digits[:-1].isdigit()
+        results: list[dict] = []
+        try:
+            gq = f"isbn:{digits}" if is_isbn else q
+            r = httpx.get("https://www.googleapis.com/books/v1/volumes",
+                          params={"q": gq, "maxResults": 5}, timeout=8.0)
+            for it in (r.json().get("items") or [])[:5]:
+                vi = it.get("volumeInfo") or {}
+                ids = {x.get("type"): x.get("identifier")
+                       for x in vi.get("industryIdentifiers") or []}
+                results.append({
+                    "title": vi.get("title"),
+                    "author": ", ".join(vi.get("authors") or []) or None,
+                    "year": (vi.get("publishedDate") or "")[:4] or None,
+                    "pages": vi.get("pageCount") or None,
+                    "publisher": vi.get("publisher"),
+                    "isbn": ids.get("ISBN_13") or ids.get("ISBN_10"),
+                    "cover_url": (vi.get("imageLinks") or {}).get("thumbnail"),
+                })
+        except Exception:
+            pass
+        if not results:
+            try:
+                key = "isbn" if is_isbn else "q"
+                r = httpx.get("https://openlibrary.org/search.json",
+                              params={key: digits if is_isbn else q,
+                                      "limit": 5, "fields": "title,author_name,"
+                                      "first_publish_year,number_of_pages_median,"
+                                      "isbn,cover_i"}, timeout=8.0)
+                for d in (r.json().get("docs") or [])[:5]:
+                    cover = d.get("cover_i")
+                    results.append({
+                        "title": d.get("title"),
+                        "author": ", ".join(d.get("author_name") or []) or None,
+                        "year": str(d.get("first_publish_year") or "") or None,
+                        "pages": d.get("number_of_pages_median"),
+                        "publisher": None,
+                        "isbn": (d.get("isbn") or [None])[0],
+                        "cover_url": (f"https://covers.openlibrary.org/b/id/"
+                                      f"{cover}-M.jpg" if cover else None),
+                    })
+            except Exception:
+                pass
+        return {"results": [r for r in results if r.get("title")]}
+
     @app.post("/api/projects")
     def new_project(spec: NewProject):
-        target = root / spec.name
+        name = spec.name or _unique_slug(root, spec.title)
+        target = root / name
         if (target / "manifest.json").exists():
             raise HTTPException(409, "project already exists")
         for v in spec.videos:
             if not Path(v.path).exists():
                 raise HTTPException(400, f"video not found: {v.path}")
+        book_meta = {"author": spec.author, "isbn": spec.isbn,
+                     "publisher": spec.publisher, "year": spec.year}
         create_project(target, [v.model_dump() for v in spec.videos],
-                       title=spec.title, expected_pages=spec.expected_pages)
-        return {"ok": True, "name": spec.name}
+                       title=spec.title, expected_pages=spec.expected_pages,
+                       book=book_meta)
+        return {"ok": True, "name": name}
 
     def printed_toc(ws: Workspace) -> list[dict]:
         """Chapter list read from the book's own contents page (front matter)."""
@@ -235,7 +323,7 @@ def create_app(root: Path) -> FastAPI:
         """Update book metadata: title, author, expected page count."""
         ws = ws_for(name)
         fields = edit.model_dump(exclude_unset=True)
-        for k in ("title", "author", "expected_pages"):
+        for k in ("title", "author", "expected_pages", "isbn", "publisher", "year"):
             if k in fields:
                 v = fields[k]
                 ws.manifest["book"][k] = (v.strip() or None) if isinstance(v, str) else v

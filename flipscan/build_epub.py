@@ -47,12 +47,19 @@ def build_epub(ws: Workspace, out_path: Path, title: str | None = None,
         raise FileNotFoundError("work/book.md missing — run the pipeline (assemble) first")
     book_md = book_md_path.read_text(encoding="utf-8")
 
+    meta = ws.manifest["book"]
     book = epub.EpubBook()
-    book_title = title or ws.manifest["book"].get("title") or ws.root.name
+    book_title = title or meta.get("title") or ws.root.name
     book.set_title(book_title)
     book.set_language("en")
-    if author:
-        book.add_author(author)
+    if author or meta.get("author"):
+        book.add_author(author or meta.get("author"))
+    if meta.get("isbn"):
+        book.set_identifier(str(meta["isbn"]))
+    if meta.get("publisher"):
+        book.add_metadata("DC", "publisher", str(meta["publisher"]))
+    if meta.get("year"):
+        book.add_metadata("DC", "date", str(meta["year"]))
 
     from .device import process_image
 

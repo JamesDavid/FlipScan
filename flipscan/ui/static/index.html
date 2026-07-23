@@ -201,26 +201,68 @@ async function refreshProjects() {
   }
 }
 
+let npMeta = {};   // isbn/publisher/year captured from a lookup pick
 function showNew() {
   current = null;
   closeNav();
+  npMeta = {};
   $("main").innerHTML = `
   <div class="card">
     <h2>New project</h2>
-    <label>Project name</label><input id="np-name" placeholder="mybook">
-    <label>Title (EPUB metadata)</label><input id="np-title">
-    <label>Expected pages (optional)</label><input id="np-pages" type="number">
+    <label>Find the book <span class="meta">— ISBN, title, or author (auto-fills the rest)</span></label>
+    <div class="row" style="flex-wrap:nowrap">
+      <input id="np-lookup" placeholder="e.g. 9780306821165, or  Dirigible Dreams Hiam"
+             style="margin-bottom:0" onkeydown="if(event.key==='Enter')lookupBook()">
+      <button class="secondary" onclick="lookupBook()">🔍 Look up</button>
+    </div>
+    <div id="np-results" style="margin:.4rem 0"></div>
+    <label>Title</label><input id="np-title">
+    <label>Author</label><input id="np-author">
+    <label>Expected pages <span class="meta">(optional)</span></label>
+    <input id="np-pages" type="number">
+    <div class="meta" id="np-extra" style="margin-bottom:.6rem"></div>
     <div id="np-videos"></div>
     <div class="row" style="margin:.5rem 0">
       <button class="secondary" onclick="addVideoRow()">+ add video</button>
+      <span class="meta">or leave empty and add videos / a PDF / photos after creating</span>
     </div>
-    <button onclick="createProject()">Create</button>
-    <div class="meta" style="margin-top:.5rem">Upload one or more flip-through videos —
-    any direction, any subset of pages. Pages captured in more than one video are merged
-    automatically and the sharpest capture wins; you can keep adding videos later until
-    every page is covered.</div>
+    <button onclick="createProject()">Create project</button>
+    <div class="meta" style="margin-top:.5rem">The project's folder name is generated
+      automatically from the title — you only ever deal with the title.</div>
   </div>`;
   addVideoRow();
+}
+
+async function lookupBook() {
+  const q = $("np-lookup").value.trim();
+  const box = $("np-results");
+  if (q.length < 3) { box.innerHTML = "<div class='meta'>type a title, author, or ISBN</div>"; return; }
+  box.innerHTML = "<div class='meta'>searching…</div>";
+  let r;
+  try { r = await api("/lookup?q=" + encodeURIComponent(q)); }
+  catch (e) { box.innerHTML = `<div class='meta'>lookup failed: ${esc(e.message)}</div>`; return; }
+  if (!r.results.length) { box.innerHTML = "<div class='meta'>no matches — fill the fields in manually</div>"; return; }
+  box.innerHTML = r.results.map((b, i) => `
+    <div class="row" style="border:1px solid var(--line);border-radius:6px;
+         padding:.4rem .6rem;margin:.25rem 0;cursor:pointer" onclick='pickBook(${i})'>
+      ${b.cover_url ? `<img src="${esc(b.cover_url)}" style="height:48px;border-radius:3px">` : ""}
+      <div style="flex:1;min-width:10rem">
+        <b>${esc(b.title || "")}</b>
+        <div class="meta" style="margin:0">${esc([b.author, b.year, b.pages && b.pages+"pp",
+          b.isbn].filter(Boolean).join(" · "))}</div>
+      </div>
+    </div>`).join("");
+  window._lookup = r.results;
+}
+function pickBook(i) {
+  const b = (window._lookup || [])[i]; if (!b) return;
+  if (b.title) $("np-title").value = b.title;
+  if (b.author) $("np-author").value = b.author;
+  if (b.pages) $("np-pages").value = b.pages;
+  npMeta = {isbn: b.isbn || null, publisher: b.publisher || null, year: b.year || null};
+  $("np-extra").textContent = [b.publisher, b.year, b.isbn && "ISBN " + b.isbn]
+    .filter(Boolean).join(" · ");
+  $("np-results").innerHTML = "<div class='meta'>✓ filled from “" + esc(b.title) + "”</div>";
 }
 
 async function showSettings() {
@@ -339,14 +381,17 @@ async function createProject() {
   const videos = [...document.querySelectorAll("#np-videos .vrow")].map(r => ({
     path: r.querySelector(".np-vpath").value,
   })).filter(v => v.path);
+  const title = $("np-title").value.trim();
+  if (!title) { alert("Give the book a title."); return; }
   try {
-    await api("/projects", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await api("/projects", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
-        name: $("np-name").value, title: $("np-title").value || null,
+        title, author: $("np-author").value || null,
         expected_pages: $("np-pages").value ? +$("np-pages").value : null,
-        videos })});
+        isbn: npMeta.isbn || null, publisher: npMeta.publisher || null,
+        year: npMeta.year || null, videos })});
     await refreshProjects();
-    openProject($("np-name").value);
+    openProject(r.name);   // server returns the generated slug
   } catch (e) { alert(e.message); }
 }
 
@@ -381,7 +426,10 @@ async function saveProjSettings() {
       body: JSON.stringify({
         title: $("ps-title").value || null,
         author: $("ps-author").value || null,
-        expected_pages: $("ps-pages").value ? +$("ps-pages").value : null})});
+        expected_pages: $("ps-pages").value ? +$("ps-pages").value : null,
+        isbn: $("ps-isbn").value || null,
+        publisher: $("ps-publisher").value || null,
+        year: $("ps-year").value || null})});
   } catch (e) { alert("save failed: " + e.message); return; }
   refreshProjects();
   openProject(current);
@@ -419,6 +467,12 @@ async function openProject(name, tab) {
              page-boundary detection and missing-page tracking">expected pages</label>
       <input id="ps-pages" type="number" value="${p.book.expected_pages ?? ""}"
              style="width:6rem;margin:0">
+      <label style="margin:0">ISBN</label>
+      <input id="ps-isbn" value="${esc(p.book.isbn || "")}" style="width:9rem;margin:0">
+      <label style="margin:0">publisher</label>
+      <input id="ps-publisher" value="${esc(p.book.publisher || "")}" style="width:9rem;margin:0">
+      <label style="margin:0">year</label>
+      <input id="ps-year" value="${esc(p.book.year || "")}" style="width:4.5rem;margin:0">
       <button onclick="saveProjSettings()">Save</button>
     </div>
     <div class="stages">${stages}</div>

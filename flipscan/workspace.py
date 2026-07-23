@@ -57,6 +57,7 @@ class Workspace:
         videos: list[dict[str, Any]],
         title: str | None = None,
         expected_pages: int | None = None,
+        book: dict[str, Any] | None = None,
     ) -> "Workspace":
         ws = cls(root)
         ws.root.mkdir(parents=True, exist_ok=True)
@@ -64,10 +65,13 @@ class Workspace:
             raise FileExistsError(f"{ws.manifest_path} already exists; workspace is initialized")
         for d in SUBDIRS:
             (ws.root / d).mkdir(exist_ok=True)
+        book_meta = {"title": title, "expected_pages": expected_pages}
+        if book:                        # author / isbn / publisher / year / ...
+            book_meta.update({k: v for k, v in book.items() if v is not None})
         ws._manifest = {
             "version": MANIFEST_VERSION,
             "created_at": _now(),
-            "book": {"title": title, "expected_pages": expected_pages},
+            "book": book_meta,
             "videos": videos,
             "stages": {},
             "pages": [],
