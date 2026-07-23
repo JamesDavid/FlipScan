@@ -268,6 +268,7 @@ def ui(root, host, port):
         raise click.ClickException(
             "GUI dependencies missing — install with: pip install 'flipscan[ui]'")
     root = root or Path(os.environ.get("FLIPSCAN_ROOT", "."))
+    root.mkdir(parents=True, exist_ok=True)   # ensure the projects folder exists
     click.echo(f"FlipScan GUI  (projects root: {root.resolve()})")
     click.echo(f"  this machine:  http://127.0.0.1:{port}")
     if host == "0.0.0.0":

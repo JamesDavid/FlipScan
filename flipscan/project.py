@@ -166,39 +166,41 @@ def add_pages_from_pdf(ws: Workspace, cfg: dict, pdf: Path,
     from .stages.preprocess import preprocess_page
 
     doc = pdfium.PdfDocument(str(pdf))
-    n = len(doc)
     patches = ws.root / "patches"
     patches.mkdir(exist_ok=True)
     pages = ws.manifest["pages"]
-    for i in range(n):
-        pg = doc[i]
-        w, h = pg.get_size()
-        scale = 2200.0 / max(w, h)     # ~200 DPI for a trade book
-        bitmap = pg.render(scale=scale)
-        arr = bitmap.to_numpy()
-        if arr.ndim == 3 and arr.shape[2] == 4:
-            arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-        elif arr.ndim == 3:
-            arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        page_id = next_page_id(ws)
-        dest = patches / f"{page_id}.png"
-        cv2.imwrite(str(dest), arr)
-        page = {
-            "id": page_id,
-            "cluster_frames": [],
-            "canonical": None,
-            "scores": {},
-            "status": "patched",
-            "printed_number": None,
-            "patched_source": f"patches/{dest.name}",
-            "source": "pdf",
-            "md": None,
-        }
-        pages.append(page)
-        preprocess_page(ws, page, cfg)
-        if (i + 1) % 20 == 0:
-            ws.save()
-            log(f"  {i + 1}/{n} PDF pages rendered")
+    try:
+        n = len(doc)
+        for i in range(n):
+            pg = doc[i]
+            w, h = pg.get_size()
+            scale = 2200.0 / max(w, h)     # ~200 DPI for a trade book
+            arr = pg.render(scale=scale).to_numpy()
+            if arr.ndim == 3 and arr.shape[2] == 4:
+                arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+            elif arr.ndim == 3:
+                arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            page_id = next_page_id(ws)
+            dest = patches / f"{page_id}.png"
+            cv2.imwrite(str(dest), arr)
+            page = {
+                "id": page_id,
+                "cluster_frames": [],
+                "canonical": None,
+                "scores": {},
+                "status": "patched",
+                "printed_number": None,
+                "patched_source": f"patches/{dest.name}",
+                "source": "pdf",
+                "md": None,
+            }
+            pages.append(page)
+            preprocess_page(ws, page, cfg)
+            if (i + 1) % 20 == 0:
+                ws.save()
+                log(f"  {i + 1}/{n} PDF pages rendered")
+    finally:
+        doc.close()   # release the file handle (Windows can't unlink it open)
     ws.stage_reset("transcribe")
     ws.save()
     log(f"{n} pages imported from {pdf.name} — run the pipeline to transcribe")

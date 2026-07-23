@@ -108,6 +108,7 @@ def _iou(a: list[float], b: list[float]) -> float:
 
 def create_app(root: Path) -> FastAPI:
     root = Path(root).resolve()
+    root.mkdir(parents=True, exist_ok=True)   # projects folder made on demand
     app = FastAPI(title="FlipScan")
     runs: dict[str, dict] = {}  # project name -> {queue, thread}
 
@@ -485,7 +486,10 @@ def create_app(root: Path) -> FastAPI:
         except Exception as e:
             raise HTTPException(400, f"PDF import failed: {e}")
         finally:
-            dest.unlink(missing_ok=True)
+            try:
+                dest.unlink(missing_ok=True)   # never let cleanup mask success
+            except OSError:
+                pass
         return {"ok": True, "pages": n,
                 "next": "run the pipeline to transcribe them"}
 
