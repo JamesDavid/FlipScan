@@ -138,7 +138,10 @@ def dedupe_by_printed(pages: list[dict], log=print, mtime_of=None) -> int:
     groups: dict[tuple, list[dict]] = {}
     for p in pages:
         n = p.get("printed_number")
-        if n is None or p.get("role") or p.get("status") == "deleted":
+        # PDF pages are unique-by-position; their numbers may repeat across
+        # concatenated works, so never merge them by printed number
+        if (n is None or p.get("role") or p.get("status") == "deleted"
+                or p.get("source") == "pdf"):
             continue
         groups.setdefault((n,), []).append(p)
 
@@ -515,6 +518,22 @@ def reconcile(ws: Workspace, pages: list[dict], log=print) -> list[dict]:
             _md_cache[p["id"]] = (f.read_text(encoding="utf-8")
                                   if p.get("md") and f.exists() else "")
         return _md_cache[p["id"]]
+
+    # PDF-imported pages are AUTHORITATIVE order: a PDF is already in book
+    # order and each page is unique, so printed numbers are informational only
+    # and may legitimately repeat (e.g. several papers concatenated, each
+    # starting at page 1). The video-capture reconcile (which identifies and
+    # merges pages BY printed number) would wrongly collapse those — so when
+    # the book is PDF-sourced, keep the pages exactly as imported.
+    body = [p for p in pages if not p.get("role")
+            and p.get("status") not in ("deleted",)]
+    if body and all(p.get("source") == "pdf" for p in body):
+        ws.manifest["pages"] = pages          # import order = book order
+        ws.manifest["missing_pages"] = []     # repeating numbers -> no gap list
+        ws.save()
+        log("  PDF book: kept authoritative page order (printed numbers may "
+            "repeat across concatenated works)")
+        return pages
 
     sanitize_numbers_by_video(pages, log)
     infer_from_video_order(pages, log)  # strongest signal: capture order

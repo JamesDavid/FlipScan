@@ -514,3 +514,14 @@ def test_reference_findings_never_auto_apply():
     finds[0]["apply_all"] = True          # explicit user approval applies
     out2, applied2 = apply_edits(md, finds)
     assert applied2 == 1 and "Croix" in out2
+
+
+def test_pdf_pages_never_deduped_by_repeating_number():
+    from flipscan.stages.transcribe import dedupe_by_printed
+    # three concatenated papers, each with its own 'page 1' — all distinct
+    pages = [_pg("a", 1, source="pdf"), _pg("b", 2, source="pdf"),
+             _pg("c", 1, source="pdf"), _pg("d", 2, source="pdf"),
+             _pg("e", 1, source="pdf")]
+    n = dedupe_by_printed(pages, log=lambda m: None)
+    assert n == 0
+    assert all(p["status"] == "ok" for p in pages)   # nothing collapsed
