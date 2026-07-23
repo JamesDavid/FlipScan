@@ -754,7 +754,8 @@ def create_app(root: Path) -> FastAPI:
             # with the original issue noted, not a clean bill of health
             page["ignored_reasons"] = page_reasons(page)
             page["suspect_ignored"] = True   # the user vouches for this page
-        if "section" in fields:
+        section_changed = "section" in fields
+        if section_changed:
             s = (edit.section or "").strip()
             if s:
                 page["section"] = s
@@ -764,6 +765,14 @@ def create_app(root: Path) -> FastAPI:
             if page["status"] == "suspect":
                 page["status"] = "ok"
         _reconcile(ws)
+        if section_changed:
+            # regenerate book.md now so the new chapter shows in proof/output
+            # immediately (assemble is cheap — no model calls)
+            try:
+                from ..stages.assemble import run as assemble_run
+                assemble_run(ws, load_config(ws.root), log=lambda m: None)
+            except Exception:
+                pass
         return {"ok": True, "page": ws.page(page_id)}
 
     def _figure(ws, page_id: str, fig_idx: int):
