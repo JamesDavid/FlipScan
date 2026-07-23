@@ -604,4 +604,5 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     failed = [p["id"] for p in pages if p.get("transcribe_error")]
     if failed:
         log(f"  {len(failed)} pages failed transcription: {', '.join(failed)}")
+    ws.manifest.pop("isbn_detected", None)   # re-scan for an ISBN next detail view
     ws.stage_done("transcribe", warnings=warnings, failed=failed)

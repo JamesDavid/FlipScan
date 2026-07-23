@@ -454,9 +454,36 @@ async function dismissIsbn() {
   openProject(current);
 }
 
+async function lookupProjSettings() {
+  const q = $("ps-lookup").value.trim();
+  const out = $("ps-lookres");
+  if (q.length < 3) { out.textContent = "type a title, author, or ISBN"; return; }
+  out.textContent = "searching…";
+  let r;
+  try { r = await api("/lookup?q=" + encodeURIComponent(q)); }
+  catch (e) { out.textContent = "lookup failed: " + e.message; return; }
+  if (!r.results.length) { out.textContent = "no matches — fill the fields manually"; return; }
+  out.innerHTML = r.results.map((b, i) => `
+    <a href="javascript:void(0)" onclick='pickProjBook(${i})'
+       style="display:inline-block;border:1px solid var(--line);border-radius:5px;
+              padding:.2rem .5rem;margin:.15rem .2rem .15rem 0">
+      ${esc(b.title || "")}${b.author ? " · " + esc(b.author) : ""}${b.year ? " ("+esc(b.year)+")" : ""}
+    </a>`).join("");
+  window._pslookup = r.results;
+}
+function pickProjBook(i) {
+  const b = (window._pslookup || [])[i]; if (!b) return;
+  const set = (id, v) => { if (v) $(id).value = v; };
+  set("ps-title", b.title); set("ps-author", b.author);
+  set("ps-pages", b.pages); set("ps-isbn", b.isbn);
+  set("ps-publisher", b.publisher); set("ps-year", b.year);
+  $("ps-lookres").innerHTML = "<span style='color:#166534'>✓ filled from “"
+    + esc(b.title) + "” — click Save</span>";
+}
+
 function toggleProjSettings() {
   const el = $("proj-settings");
-  el.style.display = el.style.display === "none" ? "flex" : "none";
+  el.style.display = el.style.display === "none" ? "block" : "none";
 }
 
 async function saveProjSettings() {
@@ -496,7 +523,16 @@ async function openProject(name, tab) {
       <button class="danger" style="padding:.15rem .6rem;font-size:.75rem"
               title="delete this entire project" onclick="deleteProject('${esc(name)}')">
         🗑 delete</button></h2>
-    <div id="proj-settings" class="row" style="display:none;margin-bottom:.8rem">
+    <div id="proj-settings" style="display:none;margin-bottom:.8rem">
+      <div class="row" style="margin-bottom:.5rem">
+        <label style="margin:0">🔍 look up</label>
+        <input id="ps-lookup" placeholder="ISBN, title, or author — auto-fills below"
+               style="flex:1;min-width:12rem;margin:0"
+               onkeydown="if(event.key==='Enter')lookupProjSettings()">
+        <button class="secondary" onclick="lookupProjSettings()">Look up</button>
+      </div>
+      <div id="ps-lookres" class="meta" style="margin-bottom:.4rem"></div>
+      <div class="row">
       <label style="margin:0">title</label>
       <input id="ps-title" value="${esc(p.book.title || "")}"
              style="width:14rem;margin:0">
@@ -514,6 +550,7 @@ async function openProject(name, tab) {
       <label style="margin:0">year</label>
       <input id="ps-year" value="${esc(p.book.year || "")}" style="width:4.5rem;margin:0">
       <button onclick="saveProjSettings()">Save</button>
+      </div>
     </div>
     ${p.detected_isbn ? `<div style="border:2px solid var(--accent);
          background:#f0fdfa;border-radius:8px;padding:.6rem .9rem;margin:.2rem 0 .8rem">
