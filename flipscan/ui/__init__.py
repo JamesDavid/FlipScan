@@ -1651,6 +1651,21 @@ def create_app(root: Path) -> FastAPI:
         except Exception as e:
             raise HTTPException(502, f"re-read failed: {e}")
 
+    @app.post("/api/projects/{name}/proof/{idx}/reread-stuck")
+    async def proof_reread_stuck(name: str, idx: int):
+        """Re-read every stuck page-anchored finding in this chapter."""
+        from ..proofread import reread_chapter_stuck
+        ws = ws_for(name)
+        cfg = load_config(ws.root)
+        try:
+            return await asyncio.to_thread(reread_chapter_stuck, ws, cfg, idx)
+        except (FileNotFoundError, IndexError) as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except Exception as e:
+            raise HTTPException(502, f"re-read failed: {e}")
+
     @app.post("/api/projects/{name}/proof/{idx}/review")
     def proof_review(name: str, idx: int, accept: bool):
         from ..proofread import load_proof, save_proof

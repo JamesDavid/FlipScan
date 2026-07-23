@@ -971,6 +971,9 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
           press <b>Accept</b> on the chapter.</div>
         <div class="row">
           <button onclick="proofAll()">Proofread all pending</button>
+          <button class="secondary" onclick="rereadAllStuck()"
+            title="re-read every stuck page-anchored finding from its page image;
+safe fixes auto-apply so you can focus on what's left">🔎 Re-read all stuck pages</button>
           <span class="meta" id="proofall-status" style="margin:0"></span>
         </div></div>` + chs.map((c, i) => chCard(c, details[i])).join("");
     }).catch(e => body.innerHTML =
@@ -1498,6 +1501,31 @@ async function proofAll() {
       break;
     }
   }
+  renderTab("proof", window._proj);
+}
+
+async function rereadAllStuck() {
+  const r = await api(`/projects/${current}/proof`);
+  // only proofed chapters that aren't stale can be re-read
+  const chs = r.chapters.filter(c => c.findings != null && c.status !== "stale"
+                                     && c.status !== "unproofed");
+  if (!chs.length) { alert("No proofed chapters to re-read."); return; }
+  let rescued = 0, manual = 0, attempted = 0;
+  for (let i = 0; i < chs.length; i++) {
+    const st = $("proofall-status");
+    if (st) st.textContent = `re-reading pages ${i + 1}/${chs.length}: ${chs[i].title}… `
+      + `(${rescued} auto-fixed so far)`;
+    try {
+      const d = await api(`/projects/${current}/proof/${chs[i].idx}/reread-stuck`,
+                          {method: "POST"});
+      rescued += d.rescued; manual += d.still_manual; attempted += d.attempted;
+    } catch (e) { /* skip a chapter that errored; keep going */ }
+  }
+  const st = $("proofall-status");
+  if (st) st.textContent = "";
+  alert(`Re-read ${attempted} stuck findings across ${chs.length} chapters:\n`
+    + `• ${rescued} auto-fixed from the page image\n`
+    + `• ${manual} still need you (use ✎ or 👁 view page)`);
   renderTab("proof", window._proj);
 }
 

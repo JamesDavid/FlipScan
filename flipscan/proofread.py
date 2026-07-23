@@ -530,6 +530,62 @@ def _squashed(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
+def _finding_is_stuck(f: dict) -> bool:
+    """A page-anchored finding worth a page re-read: not already applied, not
+    rejected, not reference matter, and either a plain note or held back
+    (unsafe/quote-not-found). Ambiguous ones are a one-click apply-to-all, not
+    a re-read problem, so they're left alone."""
+    if f.get("applied") or f.get("rejected") or f.get("reference"):
+        return False
+    if not f.get("page"):
+        return False
+    sr = f.get("skip_reason") or ""
+    return (f.get("replacement") is None or sr.startswith("unsafe")
+            or sr == "not_found")
+
+
+def reread_chapter_stuck(ws: Workspace, cfg: dict, idx: int) -> dict:
+    """Re-read every stuck page-anchored finding in one chapter from its page
+    image, so safe results auto-apply and only the truly-manual ones remain."""
+    d = load_proof(ws, idx)
+    if d is None:
+        raise FileNotFoundError("chapter not proofread yet")
+    _title, md = chapters(ws)[idx]
+    if chapter_hash(md) != d.get("base_hash"):
+        raise ValueError("chapter text changed since this proof — re-run it")
+
+    touched = []
+    attempted = 0
+    for i, f in enumerate(d["findings"]):
+        if not _finding_is_stuck(f):
+            continue
+        page = ws.page(f.get("page") or "")
+        if page is None or not page.get("llm_image"):
+            continue
+        attempted += 1
+        try:
+            corrected = reread_from_image(cfg, ws.root / page["llm_image"],
+                                          f["quote"])
+        except Exception:
+            corrected = None
+        if corrected and _squashed(corrected) != _squashed(f["quote"]):
+            f["replacement"] = corrected
+            f["note"] = (f.get("note", "") + " [re-read from the page image]").strip()
+            f.pop("rejected", None)
+            touched.append(i)
+
+    for x in d["findings"]:
+        x["applied"] = False
+        x.pop("skip_reason", None)
+    proofed, applied = apply_edits(
+        md, [x for x in d["findings"] if not x.get("rejected")])
+    d["proofed_md"], d["applied"] = proofed, applied
+    save_proof(ws, idx, d)
+    rescued = sum(1 for i in touched if d["findings"][i].get("applied"))
+    return {"attempted": attempted, "rescued": rescued,
+            "still_manual": attempted - rescued}
+
+
 def proof_status(ws: Workspace) -> list[dict]:
     """One row per chapter for the UI: proof state vs the current text."""
     rows = []
