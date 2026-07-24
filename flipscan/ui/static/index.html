@@ -221,16 +221,11 @@ function showNew() {
     <label>Expected pages <span class="meta">(optional)</span></label>
     <input id="np-pages" type="number">
     <div class="meta" id="np-extra" style="margin-bottom:.6rem"></div>
-    <div id="np-videos"></div>
-    <div class="row" style="margin:.5rem 0">
-      <button class="secondary" onclick="addVideoRow()">+ add video</button>
-      <span class="meta">or leave empty and add videos / a PDF / photos after creating</span>
-    </div>
     <button onclick="createProject()">Create project</button>
-    <div class="meta" style="margin-top:.5rem">The project's folder name is generated
-      automatically from the title — you only ever deal with the title.</div>
+    <div class="meta" style="margin-top:.5rem">Add videos, a PDF, or photos after
+      creating — that's the next step. The project's folder name is generated
+      automatically from the title, so you only ever deal with the title.</div>
   </div>`;
-  addVideoRow();
 }
 
 async function lookupBook() {
@@ -334,18 +329,6 @@ async function saveSettings() {
   setTimeout(() => $("settings-status").textContent = "", 2500);
 }
 
-let vrows = 0;
-function addVideoRow() {
-  const d = document.createElement("div");
-  d.className = "vrow";
-  d.innerHTML = `
-    <label>Video (upload or server path)</label>
-    <input type="file" accept="video/*" class="np-vfile" onchange="uploadVideo(this)">
-    <input class="np-vpath" placeholder="…or path, e.g. /data/flip1.mov">`;
-  $("np-videos").appendChild(d);
-  vrows++;
-}
-
 function uploadXHR(url, fd, onProgress) {
   // fetch() has no upload progress; phone videos are GB-scale, so show one
   return new Promise((resolve, reject) => {
@@ -363,24 +346,7 @@ function uploadXHR(url, fd, onProgress) {
   });
 }
 
-async function uploadVideo(input) {
-  if (!input.files.length) return;
-  const pathBox = input.parentElement.querySelector(".np-vpath");
-  pathBox.disabled = true;
-  const fd = new FormData();
-  fd.append("file", input.files[0]);
-  try {
-    const r = await uploadXHR("/api/upload", fd,
-                              pct => pathBox.value = `uploading… ${pct}%`);
-    pathBox.value = r.path;
-  } catch (e) { pathBox.value = ""; alert(e.message); }
-  pathBox.disabled = false;
-}
-
 async function createProject() {
-  const videos = [...document.querySelectorAll("#np-videos .vrow")].map(r => ({
-    path: r.querySelector(".np-vpath").value,
-  })).filter(v => v.path);
   const title = $("np-title").value.trim();
   if (!title) { alert("Give the book a title."); return; }
   try {
@@ -389,9 +355,9 @@ async function createProject() {
         title, author: $("np-author").value || null,
         expected_pages: $("np-pages").value ? +$("np-pages").value : null,
         isbn: npMeta.isbn || null, publisher: npMeta.publisher || null,
-        year: npMeta.year || null, videos })});
+        year: npMeta.year || null, videos: [] })});
     await refreshProjects();
-    openProject(r.name);   // server returns the generated slug
+    openProject(r.name);   // server returns the generated slug; add media next
   } catch (e) { alert(e.message); }
 }
 
