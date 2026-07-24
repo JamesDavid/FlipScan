@@ -749,20 +749,28 @@ function renderTab(tab, p) {
     // assign every page to a chapter: printed-TOC ranges for numbered pages,
     // manual section marks always win, unnumbered pages inherit from the
     // previous page (book order)
+    // prefer the backend-computed chapter (matches the built book, cover
+    // included); fall back to printed-TOC ranges when the book hasn't
+    // assembled yet
+    const haveCh = p.pages.some(pg => pg.chapter);
     const toc = (p.toc || []).slice().sort((a, b) => a.start - b.start);
     const chapterOfNum = (n) => {
-      let c = "(front matter)";
+      let c = "Front matter";
       for (const e of toc) { if (n >= e.start) c = e.title; else break; }
       return c;
     };
-    let curCh = "(front matter)";
-    const chapters = ["(front matter)"];
+    let curCh = "Front matter";
+    const chapters = [];
     p.pages.forEach(pg => {
-      if (pg.section) curCh = pg.section;
-      else if (toc.length && pg.printed_number != null && pg.printed_number >= 1
-               && pg.status !== "duplicate" && pg.status !== "deleted")
-        curCh = chapterOfNum(pg.printed_number);
-      pg._chapter = pg.role === "cover" ? "(front matter)" : curCh;
+      if (haveCh) {
+        pg._chapter = pg.chapter || "Front matter";
+      } else {
+        if (pg.section) curCh = pg.section;
+        else if (toc.length && pg.printed_number != null && pg.printed_number >= 1
+                 && pg.status !== "duplicate" && pg.status !== "deleted")
+          curCh = chapterOfNum(pg.printed_number);
+        pg._chapter = pg.role === "cover" ? "Cover" : curCh;
+      }
       if (!chapters.includes(pg._chapter)) chapters.push(pg._chapter);
     });
     const flt = pageFilters;
@@ -845,6 +853,9 @@ function renderTab(tab, p) {
       const header = `
         <div class="row" style="padding:.15rem 0">
           ${badge}
+          ${pg.role === "cover" ? `<span class="badge patched"
+             title="this page is the book's cover image (used as the EPUB cover)"
+             style="font-weight:600">📕 COVER</span>` : ""}
           <b>${pg.id}</b>
           ${pg.section ? `<span class="badge ok" style="cursor:pointer"
              title="this page starts a chapter (click to edit)"

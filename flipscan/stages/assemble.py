@@ -360,6 +360,21 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
     texts = [heal_hyphenation(t) for t in texts]
+
+    # record each page's chapter (matches the built book's # chapter splits) so
+    # the pages tab can filter by the real chapter structure, cover included
+    cur_chapter = "Front matter"
+    for page, text in zip(kept, texts):
+        if page.get("role") == "cover":
+            page["chapter"] = "Cover"
+            continue
+        for ln in text.splitlines():
+            if ln.strip():
+                if ln.startswith("# "):
+                    cur_chapter = ln[2:].strip()
+                break
+        page["chapter"] = cur_chapter
+
     book = _join_pages(_with_gap_markers(kept, texts))
     missing_nums = ws.manifest.get("missing_pages") or []
     if missing_nums:
