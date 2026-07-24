@@ -915,6 +915,9 @@ function renderTab(tab, p) {
               ${pg.needs_reshoot ? "Unmark re-acquire" : "Mark for re-acquisition"}</button>
             <button class="secondary" title="make this page open a chapter/section"
               onclick="setSection('${pg.id}')">${pg.section ? "Edit section" : "§ Section heading"}</button>
+            <button class="secondary" title="use this page's image as the book's cover"
+              onclick="setCover('${pg.id}', ${pg.role !== "cover"})">${
+              pg.role === "cover" ? "📕 Unset cover" : "📕 Set as cover"}</button>
             <button class="secondary" title="draw a crop for artwork the model
 missed on this page" onclick="openCrop('${pg.id}',
               ${(pg.regions || []).length}, 'pages', true)">＋ Add figure</button>
@@ -1816,6 +1819,16 @@ async function setSection(pageId) {
       body: JSON.stringify({section: v})});
   } catch (e) { alert("failed: " + e.message); return; }
   gotoPage(pageId);
+}
+
+async function setCover(pageId, on) {
+  if (on && !confirm("Use this page as the book's cover image?\n\n"
+                   + "It will be pinned to the front, kept out of the body text, "
+                   + "and used as the EPUB cover. Any current cover is unset.")) return;
+  try {
+    await api(`/projects/${current}/pages/${pageId}/cover?on=${on}`, {method: "POST"});
+  } catch (e) { alert("failed: " + e.message); return; }
+  openProject(current, "pages");
 }
 
 function openPageCrop(pageId) {

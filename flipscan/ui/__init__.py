@@ -617,6 +617,39 @@ def create_app(root: Path) -> FastAPI:
         return {"ok": True, "id": page["id"],
                 "transcription": "deferred — run the pipeline"}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/cover")
+    def set_cover(name: str, page_id: str, on: bool = True):
+        """Designate an existing captured page as the book's cover image (or
+        clear that designation). A cover is pinned to the front and excluded
+        from the body text; its color image becomes the EPUB cover. Only one
+        page can be the cover, so promoting one demotes any previous cover."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        if on:
+            for p in ws.manifest["pages"]:
+                if p is not page and p.get("role") == "cover":
+                    p.pop("role", None)
+                    if p.get("pinned") == "start":
+                        p.pop("pinned", None)
+            page["role"] = "cover"
+            page["pinned"] = "start"      # sorts ahead of page 1
+            # move to the front explicitly — PDF-sourced books keep their own
+            # page order and skip the reconcile reorder, so pinning alone
+            # wouldn't float the cover up
+            pages = ws.manifest["pages"]
+            pages.remove(page)
+            pages.insert(0, page)
+        else:
+            page.pop("role", None)
+            if page.get("pinned") == "start":
+                page.pop("pinned", None)
+        _reconcile(ws)
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True, "role": page.get("role")}
+
     # ---------------- pages / patch / review
 
     @app.put("/api/projects/{name}/pages/{page_id}/md")
