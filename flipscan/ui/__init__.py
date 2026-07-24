@@ -765,6 +765,44 @@ def create_app(root: Path) -> FastAPI:
                 pass
         return {"ok": True, "page": ws.page(page_id)}
 
+    @app.post("/api/projects/{name}/contents/autodetect")
+    def contents_autodetect(name: str, replace: bool = False):
+        """Seed the chapter structure from the printed contents page: for each
+        parsed entry, set that title as the section heading on the page whose
+        printed number matches. Fills only pages without a heading unless
+        `replace` is set. Then reconcile + reassemble so it shows immediately."""
+        ws = ws_for(name)
+        toc = printed_toc(ws)
+        if not toc:
+            raise HTTPException(400, "no printed contents page detected in this book")
+        pages = ws.manifest["pages"]
+        applied, skipped, unplaced = 0, 0, []
+        for entry in toc:
+            pg = next((p for p in pages
+                       if p.get("printed_number") == entry["start"]
+                       and not p.get("role")
+                       and p.get("status") not in ("duplicate", "deleted")), None)
+            if pg is None:
+                unplaced.append(entry["title"])
+                continue
+            if pg.get("section") and not replace:
+                skipped += 1
+                continue
+            pg["section"] = entry["title"]
+            if pg.get("status") == "suspect":
+                pg["status"] = "ok"
+            applied += 1
+        ws.stage_reset("assemble")
+        _reconcile(ws)
+        try:   # rebuild book.md now so chapters show in every tab immediately
+            from ..stages.assemble import run as assemble_run
+            assemble_run(ws, load_config(ws.root), log=lambda m: None)
+        except Exception:
+            pass
+        ws.save()
+        return {"ok": True, "applied": applied, "skipped": skipped,
+                "unplaced": unplaced, "total": len(toc)}
+
     def _figure(ws, page_id: str, fig_idx: int):
         """Resolve (page, figure path, its region). fig_idx indexes
         page['figures']; the region is recovered from the filename letter."""

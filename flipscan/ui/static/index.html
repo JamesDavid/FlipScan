@@ -546,7 +546,7 @@ async function openProject(name, tab) {
     <div id="log"></div>
   </div>
   <div class="tabs">
-    ${["pipeline","media","frames","pages","figures","proof","output"].map(t =>
+    ${["pipeline","media","frames","pages","contents","figures","proof","output"].map(t =>
       `<div class="tab ${t === (tab||"pipeline") ? "active" : ""}"
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
@@ -971,6 +971,83 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
       ${p.contact_sheet
         ? `<img style="max-width:100%" src="/api/projects/${name}/file/work/contact_sheet.jpg">`
         : "<div class='meta'>run the pipeline first</div>"}</div>`;
+  } else if (tab === "contents") {
+    // the effective chapter list the built book uses: one entry per distinct
+    // chapter title (a manual section heading, else the heading assemble
+    // detected), at the first page it appears on
+    const chapters = [];
+    const seenCh = new Set();
+    for (const pg of (p.pages || [])) {
+      if (pg.role) continue;
+      const ch = ((pg.section || pg.chapter) || "").trim();
+      if (!ch || ch === "Front matter" || ch === "Cover" || seenCh.has(ch)) continue;
+      seenCh.add(ch);
+      chapters.push({id: pg.id, title: ch, printed_number: pg.printed_number,
+                     fromSection: !!pg.section});
+    }
+    const toc = p.toc || [];
+    // first open with no chapters but a printed contents page → seed it once
+    if (!chapters.length && toc.length && !contentsAutodetected[name]) {
+      contentsAutodetected[name] = true;
+      body.innerHTML = `<div class="card"><div class="meta">detecting chapters from
+        the printed contents page…</div></div>`;
+      contentsAutodetect(false, false);
+      return;
+    }
+    const pageOpts = (p.pages || [])
+      .filter(pg => !pg.role && pg.status !== "duplicate" && pg.status !== "deleted")
+      .map(pg => `<option value="${pg.id}">${pg.id}${
+        pg.printed_number != null ? ` — printed ${pg.printed_number}` : ""}</option>`).join("");
+    body.innerHTML = `
+      <div class="card">
+        <div class="row" style="margin-bottom:.4rem">
+          <h2 style="margin:0">Contents</h2>
+          ${toc.length ? `<button class="secondary" style="margin-left:auto"
+              onclick="contentsAutodetect(false, true)"
+              title="fill any chapters not yet set from the printed contents page"
+              >↻ detect from printed contents</button>
+            <button class="secondary" onclick="contentsAutodetect(true, true)"
+              title="overwrite existing chapter starts too">replace all</button>` : ""}
+        </div>
+        <div class="meta" style="margin-bottom:.7rem">The book's chapters, in order.
+          Each is a <b>section heading on its starting page</b> — edit a title here and
+          it updates that page. This is the same structure the Pages filter, Proof tab,
+          and EPUB use, so a chapter's position follows its start page.</div>
+        ${chapters.length ? `<ol style="padding-left:1.3rem;margin:.2rem 0">
+          ${chapters.map(ch => `<li style="margin:.4rem 0">
+            <div class="row" style="gap:.5rem;align-items:center">
+              <input value="${esc(ch.title)}" style="flex:1;margin:0"
+                onchange="renameChapter('${ch.id}', this.value)">
+              ${ch.fromSection
+                ? `<span class="badge ok" title="you set this heading">manual</span>`
+                : `<span class="meta" title="detected from the page's own heading">heading</span>`}
+              <a href="javascript:void(0)" class="meta" style="white-space:nowrap"
+                onclick="gotoPage('${ch.id}')" title="go to this page"
+                >${ch.printed_number != null ? `p. ${ch.printed_number}` : ch.id} ↗</a>
+              ${ch.fromSection ? `<button class="secondary" style="padding:.2rem .55rem"
+                onclick="removeChapter('${ch.id}')"
+                title="clear this manual heading (the page stays)">✕</button>` : ""}
+            </div></li>`).join("")}
+        </ol>` : `<div class="meta">No chapters yet.${toc.length ? ""
+          : " No printed contents page was detected — add chapters below, or assign"
+            + " section headings on the Pages tab."}</div>`}
+      </div>
+      <div class="card">
+        <h2>Add a chapter</h2>
+        <div class="meta" style="margin-bottom:.5rem">Pick the page a chapter starts on
+          and give it a title.</div>
+        <div class="row" style="gap:.5rem">
+          <select id="addch-page" style="margin:0">${pageOpts}</select>
+          <input id="addch-title" placeholder="chapter title" style="flex:1;margin:0"
+            onkeydown="if(event.key==='Enter')addChapter()">
+          <button onclick="addChapter()">Add</button>
+        </div>
+      </div>
+      ${toc.length ? `<div class="card">
+        <h2>Printed contents page <span class="meta">— as OCR'd, for reference</span></h2>
+        <ul class="meta" style="columns:2;column-gap:2rem">${toc.map(t =>
+          `<li>${esc(t.title)} — ${t.start}</li>`).join("")}</ul>
+      </div>` : ""}`;
   } else if (tab === "figures") {
     // real duplicates (same image captured twice) are told from distinct
     // figures on one page by perceptual hash — not by page number
@@ -1856,6 +1933,53 @@ async function setCover(pageId, on) {
     await api(`/projects/${current}/pages/${pageId}/cover?on=${on}`, {method: "POST"});
   } catch (e) { alert("failed: " + e.message); return; }
   openProject(current, "pages");
+}
+
+// ---- Contents tab: chapter structure as an editor over per-page sections
+let contentsAutodetected = {};
+async function patchSection(pageId, section) {
+  await api(`/projects/${current}/pages/${pageId}`, {method: "PATCH",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify({section})});
+}
+async function renameChapter(pageId, title) {
+  try { await patchSection(pageId, title.trim()); }
+  catch (e) { alert("failed: " + e.message); }
+  openProject(current, "contents");
+}
+async function removeChapter(pageId) {
+  if (!confirm("Remove this chapter heading? The page stays — it just no longer "
+             + "starts a chapter.")) return;
+  try { await patchSection(pageId, ""); }
+  catch (e) { alert("failed: " + e.message); return; }
+  openProject(current, "contents");
+}
+async function addChapter() {
+  const pid = $("addch-page").value, title = $("addch-title").value.trim();
+  if (!pid || !title) { alert("Pick a page and enter a chapter title."); return; }
+  try { await patchSection(pid, title); }
+  catch (e) { alert("failed: " + e.message); return; }
+  openProject(current, "contents");
+}
+async function contentsAutodetect(replace, manual) {
+  if (manual && !confirm(replace
+      ? "Replace every chapter start with the printed contents page? This overwrites "
+        + "headings you set by hand."
+      : "Detect chapters from the printed contents page and fill in any that aren't "
+        + "set yet?")) return;
+  try {
+    const r = await api(`/projects/${current}/contents/autodetect`
+                        + (replace ? "?replace=true" : ""), {method: "POST"});
+    if (manual) {
+      let msg = `Applied ${r.applied} of ${r.total} chapters from the printed contents page.`;
+      if (r.skipped) msg += `\n${r.skipped} already had a heading (kept).`;
+      if (r.unplaced && r.unplaced.length)
+        msg += `\nCouldn't place (page not captured/numbered): ${r.unplaced.join(", ")}.`;
+      alert(msg);
+    }
+  } catch (e) {
+    if (manual) alert(e.message); else console.warn("auto-detect contents:", e.message);
+  }
+  openProject(current, "contents");
 }
 
 function openPageCrop(pageId) {
