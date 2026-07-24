@@ -12,8 +12,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..config import load_config, save_global_config
-from ..jobs import CANCELED, DONE, ERROR, JobCanceled, JobQueue
-from ..project import create_project, run_pipeline
+from ..jobs import CANCELED, DONE, ERROR, JobQueue
+from ..jobs_handlers import register_handlers
+from ..project import create_project, retry_ocr_page
 from ..workspace import STAGES, Workspace
 
 _TERMINAL = {DONE, ERROR, CANCELED}
@@ -657,48 +658,6 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True}
 
-    def _do_retry_ocr(ws, page_id: str) -> None:
-        """Retry OCR for one page (model hiccup / repetition loop). Persists
-        the result and reconciles. Raises RuntimeError if it still fails.
-        Synchronous — callers run it on the worker or a threadpool thread."""
-        page = ws.page(page_id)
-        if page is None:
-            raise LookupError("no such page")
-        if not page.get("llm_image"):
-            raise RuntimeError("page has no processed image yet — run the pipeline first")
-        cfg = load_config(ws.root)
-        if cfg["provider"]["name"] == "hybrid":  # one page: local is plenty
-            cfg = {**cfg, "provider": {**cfg["provider"], "name": "ollama"}}
-        from ..backends import get_backend
-        from ..stages.transcribe import _cache_page, _write_result
-        backend = get_backend(cfg)
-        src = ws.root / page["llm_image"]
-        r = backend.transcribe([(page_id, src)], log=lambda m: None)[page_id]
-        if "error" in r:
-            # repetition loops are usually triggered by the neighboring page's
-            # curled text at the frame edge — retry with each vertical edge
-            # shaved off (p0093 taught us this)
-            import cv2
-            img = cv2.imread(str(src))
-            if img is not None:
-                w = img.shape[1]
-                for sl in (slice(0, int(w * 0.86)), slice(int(w * 0.14), w)):
-                    tmp = ws.work_file(f"_retry_{page_id}.jpg")
-                    cv2.imwrite(str(tmp), img[:, sl], [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    r2 = backend.transcribe([(page_id, tmp)], log=lambda m: None)[page_id]
-                    tmp.unlink(missing_ok=True)
-                    if "error" not in r2:
-                        r = r2
-                        break
-        _write_result(ws, page, r, backend.name)
-        _cache_page(ws, page)
-        if "error" in r:
-            ws.save()
-            raise RuntimeError(f"failed again: {r['error']}")
-        _reconcile(ws)  # the retry may have brought a page number with it
-        ws.stage_reset("figures")
-        ws.save()
-
     @app.post("/api/projects/{name}/pages/{page_id}/retranscribe")
     async def retranscribe_page(name: str, page_id: str):
         """Retry OCR for one page right now — heavy work off the event loop."""
@@ -709,7 +668,7 @@ def create_app(root: Path) -> FastAPI:
         if not page.get("llm_image"):
             raise HTTPException(400, "page has no processed image yet — run the pipeline first")
         try:
-            await asyncio.to_thread(_do_retry_ocr, ws, page_id)
+            await asyncio.to_thread(retry_ocr_page, ws, page_id)
         except RuntimeError as e:
             raise HTTPException(502, str(e))
         return {"ok": True}
@@ -2001,60 +1960,16 @@ def create_app(root: Path) -> FastAPI:
                  else "no-cache")
         return FileResponse(target, headers={"Cache-Control": cache})
 
-    # ---------------- job handlers + worker startup
+    # ---------------- job worker startup
 
-    def _job_pipeline(project, params, log, should_cancel):
-        ws = ws_for(project)
-        cfg = load_config(ws.root)
-        if params.get("provider"):
-            cfg["provider"]["name"] = params["provider"]
-
-        def cb(m):
-            if should_cancel():
-                raise JobCanceled()
-            log(str(m))
-
-        run_pipeline(ws, cfg, force=params.get("force", False), log=cb)
-        log("[pipeline] finished")
-
-    def _job_proof_chapter(project, params, log, should_cancel):
-        from ..proofread import proofread_chapter
-        ws = ws_for(project)
-        cfg = load_config(ws.root)
-        d = proofread_chapter(ws, cfg, int(params["idx"]))
-        log(f"chapter {params['idx']}: proofread complete "
-            f"({len(d.get('findings', []))} findings)")
-
-    def _job_proof_resolve(project, params, log, should_cancel):
-        from ..proofread import resolve_finding
-        ws = ws_for(project)
-        cfg = load_config(ws.root)
-        d = resolve_finding(ws, cfg, int(params["idx"]), int(params["fi"]))
-        log("re-read complete")
-        return d
-
-    def _job_proof_reread_stuck(project, params, log, should_cancel):
-        from ..proofread import reread_chapter_stuck
-        ws = ws_for(project)
-        cfg = load_config(ws.root)
-        d = reread_chapter_stuck(ws, cfg, int(params["idx"]))
-        log(f"re-read stuck findings: {d.get('rescued', 0)} auto-fixed, "
-            f"{d.get('still_manual', 0)} still need you")
-        return d
-
-    def _job_retry_ocr(project, params, log, should_cancel):
-        ws = ws_for(project)
-        _do_retry_ocr(ws, params["page_id"])
-        log(f"retry OCR complete for {params['page_id']}")
-
-    jobq.register("pipeline", _job_pipeline)
-    jobq.register("proof-chapter", _job_proof_chapter)
-    jobq.register("proof-resolve", _job_proof_resolve)
-    jobq.register("proof-reread-stuck", _job_proof_reread_stuck)
-    jobq.register("retry-ocr", _job_retry_ocr)
-
-    jobq.requeue_orphans()   # pick up anything a crash/restart left mid-run
-    jobq.start_worker()
+    register_handlers(jobq, root)
+    # Run the worker in-process by default so a single `flipscan ui` is fully
+    # self-contained. When a dedicated worker process runs it (docker-compose's
+    # `worker` service sets FLIPSCAN_EXTERNAL_WORKER=1), the web process only
+    # enqueues/queries — so web restarts never interrupt a running job.
+    if not os.environ.get("FLIPSCAN_EXTERNAL_WORKER"):
+        jobq.requeue_orphans()   # pick up anything a crash/restart left mid-run
+        jobq.start_worker()
     return app
 
 

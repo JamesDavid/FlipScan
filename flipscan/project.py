@@ -179,6 +179,53 @@ def add_page_from_photo(ws: Workspace, cfg: dict, image: Path,
     return page
 
 
+def retry_ocr_page(ws: Workspace, page_id: str) -> None:
+    """Retry OCR for one page (model hiccup / repetition loop). Persists the
+    result and reconciles page order. Raises LookupError if the page is unknown,
+    RuntimeError if OCR still fails. Synchronous — callers run it on the job
+    worker or a threadpool thread."""
+    import cv2
+
+    from .backends import get_backend
+    from .config import load_config
+    from .stages.transcribe import _cache_page, _write_result, reconcile
+
+    page = ws.page(page_id)
+    if page is None:
+        raise LookupError("no such page")
+    if not page.get("llm_image"):
+        raise RuntimeError("page has no processed image yet — run the pipeline first")
+    cfg = load_config(ws.root)
+    if cfg["provider"]["name"] == "hybrid":  # one page: local is plenty
+        cfg = {**cfg, "provider": {**cfg["provider"], "name": "ollama"}}
+    backend = get_backend(cfg)
+    src = ws.root / page["llm_image"]
+    r = backend.transcribe([(page_id, src)], log=lambda m: None)[page_id]
+    if "error" in r:
+        # repetition loops are usually triggered by the neighboring page's
+        # curled text at the frame edge — retry with each vertical edge shaved
+        # off (p0093 taught us this)
+        img = cv2.imread(str(src))
+        if img is not None:
+            w = img.shape[1]
+            for sl in (slice(0, int(w * 0.86)), slice(int(w * 0.14), w)):
+                tmp = ws.work_file(f"_retry_{page_id}.jpg")
+                cv2.imwrite(str(tmp), img[:, sl], [cv2.IMWRITE_JPEG_QUALITY, 85])
+                r2 = backend.transcribe([(page_id, tmp)], log=lambda m: None)[page_id]
+                tmp.unlink(missing_ok=True)
+                if "error" not in r2:
+                    r = r2
+                    break
+    _write_result(ws, page, r, backend.name)
+    _cache_page(ws, page)
+    if "error" in r:
+        ws.save()
+        raise RuntimeError(f"failed again: {r['error']}")
+    reconcile(ws, ws.manifest["pages"], log=lambda m: None)
+    ws.stage_reset("figures")   # figures/assemble/build are downstream
+    ws.save()
+
+
 def set_video_rotation(ws: Workspace, vid: str, rotate: int,
                        log: Callable[[str], None] = print) -> None:
     """Change a video's orientation and invalidate everything derived from it."""

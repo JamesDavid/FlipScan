@@ -1,3 +1,12 @@
+# Shared provider config for both services (same Ollama/Anthropic settings).
+x-flipscan-env: &flipscan-env
+  # your Ollama server's LAN IP works directly from the container;
+  # use host.docker.internal if Ollama runs on the Docker host itself
+  FLIPSCAN_OLLAMA_URL: ${FLIPSCAN_OLLAMA_URL:-http://host.docker.internal:11434}
+  FLIPSCAN_PROVIDER: ${FLIPSCAN_PROVIDER:-ollama}
+  FLIPSCAN_OLLAMA_MODEL: ${FLIPSCAN_OLLAMA_MODEL:-gemma4}
+  FLIPSCAN_ANTHROPIC_API_KEY: ${FLIPSCAN_ANTHROPIC_API_KEY:-}
+
 services:
   flipscan:
     build: .
@@ -7,9 +16,22 @@ services:
       # workspaces live here: videos in, EPUB/PDF out — everything persists on the host
       - ./books:/data
     environment:
-      # your Ollama server's LAN IP works directly from the container;
-      # use host.docker.internal if Ollama runs on the Docker host itself
-      - FLIPSCAN_OLLAMA_URL=${FLIPSCAN_OLLAMA_URL:-http://host.docker.internal:11434}
-      - FLIPSCAN_PROVIDER=${FLIPSCAN_PROVIDER:-ollama}
-      - FLIPSCAN_OLLAMA_MODEL=${FLIPSCAN_OLLAMA_MODEL:-gemma4}
-      - FLIPSCAN_ANTHROPIC_API_KEY=${FLIPSCAN_ANTHROPIC_API_KEY:-}
+      <<: *flipscan-env
+      # the worker service below runs the jobs, so the web server only enqueues —
+      # restarting/redeploying the web container never interrupts a running job
+      FLIPSCAN_EXTERNAL_WORKER: "1"
+    depends_on:
+      - worker
+
+  # Durable job worker: runs the pipeline, chapter proofreads, and page
+  # re-reads pulled from the SQLite queue (jobs.db in the shared /data volume).
+  # Keep it running and long jobs survive web restarts, deploys, and crashes;
+  # a job interrupted mid-run is automatically requeued and resumes.
+  worker:
+    build: .
+    command: ["worker"]
+    volumes:
+      - ./books:/data
+    environment:
+      <<: *flipscan-env
+    restart: unless-stopped

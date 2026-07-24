@@ -283,5 +283,42 @@ def ui(root, host, port):
     serve(root, host=host, port=port)
 
 
+# ---------------------------------------------------------------- worker
+
+@main.command()
+@click.option("--root", type=click.Path(path_type=Path), default=None,
+              help="Directory containing project workspaces (default: FLIPSCAN_ROOT or cwd)")
+def worker(root):
+    """Run the durable background job worker as its own process.
+
+    The pipeline, proofreads, and page re-reads run as durable jobs in a
+    SQLite queue (`jobs.db` in the projects root). `flipscan ui` already runs
+    an in-process worker, so you only need this to run the worker separately —
+    e.g. a second docker-compose service — so restarting the web server never
+    interrupts a running job. Point it at the SAME root as the web server and
+    set FLIPSCAN_EXTERNAL_WORKER=1 on the web server so it doesn't double up.
+    """
+    import os
+    import time
+
+    from .jobs import JobQueue
+    from .jobs_handlers import register_handlers
+
+    root = root or Path(os.environ.get("FLIPSCAN_ROOT", "."))
+    root.mkdir(parents=True, exist_ok=True)
+    jobq = JobQueue(root / "jobs.db")
+    register_handlers(jobq, root)
+    resumed = jobq.requeue_orphans()
+    click.echo(f"FlipScan worker  (projects root: {root.resolve()})")
+    click.echo(f"  resumed {resumed} orphaned job(s); waiting for work…")
+    jobq.start_worker()
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        jobq.stop()
+        click.echo("worker stopped")
+
+
 if __name__ == "__main__":
     main()
