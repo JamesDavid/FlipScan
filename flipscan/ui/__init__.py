@@ -1554,8 +1554,30 @@ def create_app(root: Path) -> FastAPI:
             page["status"] = "patched"
             page["md"] = None
             page.pop("needs_reshoot", None)
-            page.pop("regions", None)   # described the old image
-            page.pop("figures", None)
+            # The old auto-detected regions described the old page image, so
+            # drop them. But a re-acquired close-up (own_image) is a standalone
+            # photo, independent of the page image — keep it, pinned at its
+            # original index so its figure file (pXXXX_<letter>.png) stays
+            # valid. Tombstone the dropped slots so indices don't shift.
+            old_regions = page.get("regions") or []
+            kept_regions, kept_figs = [], []
+            for i, r in enumerate(old_regions):
+                if r.get("own_image"):
+                    kept_regions.append(r)
+                    rel = f"figures/{page_id}_{chr(97 + i % 26)}.png"
+                    if rel in (page.get("figures") or []):
+                        kept_figs.append(rel)
+                else:
+                    kept_regions.append({"type": "figure", "deleted": True,
+                                         "bbox_norm": [0, 0, 1, 1], "caption": ""})
+            while kept_regions and kept_regions[-1].get("deleted"):
+                kept_regions.pop()
+            if kept_regions:
+                page["regions"] = kept_regions
+                page["figures"] = kept_figs
+            else:
+                page.pop("regions", None)
+                page.pop("figures", None)
             # the wizard told the user "photograph page N" and they did —
             # that's a human confirmation of the number, even if the printed
             # folio isn't visible on the page (full-page plates often have

@@ -34,6 +34,27 @@ def save_cache(ws: Workspace, cache: dict) -> None:
         json.dump(cache, f)
 
 
+def _merge_regions(old: list | None, fresh: list) -> list:
+    """A fresh transcription re-detects figure regions from the page image, but
+    a user's own close-up (own_image) or hand-placed crop (user_crop) is NOT
+    something the model can reproduce — it's a separate photo or a deliberate
+    box. Preserve those at their original index (the index is baked into the
+    figure filename, e.g. pXXXX_b.png) and only take the model's regions for
+    the slots the user never touched. Without this, a retry-OCR or any
+    re-transcribe silently destroys re-acquired figure close-ups."""
+    old = old or []
+    if not any(r.get("own_image") or r.get("user_crop") for r in old):
+        return fresh
+    merged = list(fresh or [])
+    for i, r in enumerate(old):
+        if r.get("own_image") or r.get("user_crop"):
+            while len(merged) <= i:
+                merged.append({"type": "figure", "bbox_norm": [0, 0, 1, 1],
+                               "caption": "", "deleted": True})
+            merged[i] = r
+    return merged
+
+
 def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) -> None:
     if "error" in result:
         page["status"] = "suspect"
@@ -45,7 +66,7 @@ def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) ->
     if not page.get("number_manual"):  # a user-entered number outranks the model
         page["printed_number"] = result["page_number_printed"]
     page["confidence"] = result["confidence"]
-    page["regions"] = result["regions"]
+    page["regions"] = _merge_regions(page.get("regions"), result["regions"])
     page["flags"] = result["flags"]
     page["transcribed_by"] = backend_name
     page.pop("transcribe_error", None)

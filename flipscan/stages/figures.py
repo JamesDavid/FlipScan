@@ -108,6 +108,11 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
                 # image is the one the crop was drawn on; regenerating against
                 # a reframed image cuts out the wrong part of the page
                 if not (fig_dir / name).exists():
+                    # a re-acquired close-up is a standalone photo; it cannot be
+                    # re-derived from the page image, so never try to crop one
+                    if region.get("own_image"):
+                        region["stale_crop"] = True
+                        continue
                     ref = region.get("color_ref")
                     if not ref or ref != file_ref(ws.root / page["color"]):
                         region["stale_crop"] = True
