@@ -133,15 +133,28 @@ rendition.on("relocated", updatePos);
 // maps straight back to its page and crop slot in FlipScan
 rendition.hooks.content.register(contents => {
   const doc = contents.document;
-  // internal links (the book's contents page!) must navigate — bind them
-  // explicitly; the sandboxed iframe drops epub.js's default handling
+  // Internal links (the book's own contents page!) must navigate via the
+  // rendition; the sandboxed iframe drops epub.js's default handling. epub.js
+  // REWRITES each link's href to an absolute in-book URL (e.g.
+  // http://host/EPUB/ch004.xhtml), so the old "href starts with a scheme =
+  // external" test wrongly skipped every contents link — the raw click then
+  // navigated the whole tab to /EPUB/… which the server 404s as JSON. Instead,
+  // resolve each link and, when it points at a spine item (a page in this
+  // book), route it through the rendition; only truly external links (a
+  // different origin) keep their default behaviour.
+  const spineItems = (book.spine && book.spine.spineItems) || [];
   doc.querySelectorAll("a[href]").forEach(a => {
-    const href = a.getAttribute("href");
-    if (!href || /^[a-z]+:/i.test(href)) return;   // external links untouched
     a.addEventListener("click", (e) => {
+      let url;
+      try { url = new URL(a.href, doc.baseURI); } catch { return; }
+      if (url.origin !== location.origin) return;   // real external site — leave it
+      const path = url.pathname, frag = url.hash || "";
+      const item = spineItems.find(s =>
+        path === s.canonical || path.endsWith("/" + s.href) || path.endsWith(s.href));
+      if (!item) return;                             // not a book page — leave default
       e.preventDefault();
       e.stopPropagation();
-      rendition.display(href.replace(/^\.\//, ""));
+      rendition.display(item.href + frag);
     });
   });
   // tap zones live INSIDE the content so links and buttons always win —
