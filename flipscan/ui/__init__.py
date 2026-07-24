@@ -15,8 +15,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..config import load_config, save_global_config
+from ..jobs import CANCELED, DONE, ERROR, JobCanceled, JobQueue
 from ..project import create_project, run_pipeline
 from ..workspace import STAGES, Workspace
+
+_TERMINAL = {DONE, ERROR, CANCELED}
 
 # workspace files the browser may fetch, by top-level directory
 SERVABLE = {"frames", "work", "figures", "review", "out", "pages", "videos", "patches"}
@@ -137,7 +140,10 @@ def create_app(root: Path) -> FastAPI:
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)   # projects folder made on demand
     app = FastAPI(title="FlipScan")
-    runs: dict[str, dict] = {}  # project name -> {queue, thread}
+    # durable job queue: heavy work (pipeline, proofread, re-reads) runs here,
+    # in a background worker, as SQLite rows — so it survives restarts and
+    # dropped requests instead of dying with the process or the browser tab.
+    jobq = JobQueue(root / "jobs.db")
 
     def ws_for(name: str) -> Workspace:
         target = (root / name).resolve()
@@ -366,43 +372,13 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/run")
     def run_project(name: str, provider: str | None = None, force: bool = False):
-        ws = ws_for(name)
-        if name in runs and runs[name]["thread"].is_alive():
+        ws_for(name)  # 404 if unknown
+        if jobq.active(name, ("pipeline",)):
             raise HTTPException(409, "already running")
-        cfg = load_config(ws.root)
-        if provider:
-            cfg["provider"]["name"] = provider
-
-        # fan-out log: every SSE stream gets its own queue, and ALL of them
-        # receive the final None terminator. A single shared queue meant only
-        # one stream ever saw the end-of-run marker — the others kept a
-        # threadpool thread parked forever (which eventually starved every
-        # sync endpoint in the app: the "server froze at end of run" bug).
-        run = {"subs": [], "history": deque(maxlen=1000),
-               "lock": threading.Lock(), "done": False}
-
-        def put(msg):
-            with run["lock"]:
-                run["history"].append(msg)
-                if msg is None:
-                    run["done"] = True
-                for sub in run["subs"]:
-                    sub.put(msg)
-
-        def work():
-            try:
-                run_pipeline(ws, cfg, force=force, log=lambda m: put(str(m)))
-                put("[pipeline] finished")
-            except Exception as e:  # surface errors into the log stream
-                put(f"[pipeline] ERROR: {e}")
-            finally:
-                put(None)
-
-        t = threading.Thread(target=work, daemon=True)
-        run["thread"] = t
-        runs[name] = run
-        t.start()
-        return {"ok": True}
+        job_id = jobq.enqueue(name, "pipeline",
+                              {"provider": provider, "force": force},
+                              label="pipeline")
+        return {"ok": True, "job_id": job_id}
 
     rate_samples: dict[str, list] = {}  # project -> [(t, stage, done)] for ETA
 
@@ -441,7 +417,7 @@ def create_app(root: Path) -> FastAPI:
                 if rate > 0:
                     eta = int((detail["total"] - detail["done"]) / rate)
         return {
-            "running": name in runs and runs[name]["thread"].is_alive(),
+            "running": jobq.active(name, ("pipeline",)) is not None,
             "stages": stages_status,
             "current": current,
             "detail": detail,
@@ -450,42 +426,62 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/projects/{name}/events")
     async def events(name: str):
-        if name not in runs:
+        # tail the latest pipeline job's log rows from the DB — this survives
+        # server restarts and lets a reconnecting client replay from the start
+        job = jobq.latest(name, "pipeline")
+        if job is None:
             raise HTTPException(404, "no active run")
-        run = runs[name]
-        sub: queue.Queue = queue.Queue()
-        with run["lock"]:
-            for msg in run["history"]:  # replay what this stream missed
-                sub.put(msg)
-            if not run["done"]:
-                run["subs"].append(sub)
+        jid = job["id"]
 
         async def stream():
-            # non-blocking poll — an SSE reader must never park a threadpool
-            # thread; it may stay open (quietly) for hours
-            idle = 0.0
-            try:
-                while True:
-                    try:
-                        msg = sub.get_nowait()
-                    except queue.Empty:
-                        await asyncio.sleep(0.4)
-                        idle += 0.4
-                        if idle >= 20:
-                            idle = 0.0
-                            yield ": keepalive\n\n"
-                        continue
+            cursor, idle = 0, 0.0
+            while True:
+                rows = await asyncio.to_thread(jobq.logs, jid, cursor)
+                if rows:
                     idle = 0.0
-                    if msg is None:
-                        yield "event: done\ndata: done\n\n"
-                        break
-                    yield f"data: {json.dumps(msg)}\n\n"
-            finally:
-                with run["lock"]:
-                    if sub in run["subs"]:
-                        run["subs"].remove(sub)
+                    for r in rows:
+                        cursor = r["id"]
+                        yield f"data: {json.dumps(r['line'])}\n\n"
+                    continue
+                status = (await asyncio.to_thread(jobq.job, jid))["status"]
+                if status in _TERMINAL:
+                    drain = await asyncio.to_thread(jobq.logs, jid, cursor)
+                    for r in drain:
+                        yield f"data: {json.dumps(r['line'])}\n\n"
+                    yield "event: done\ndata: done\n\n"
+                    break
+                await asyncio.sleep(0.4)
+                idle += 0.4
+                if idle >= 20:
+                    idle = 0.0
+                    yield ": keepalive\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    # ---------------- jobs (durable background work)
+
+    @app.get("/api/jobs/{job_id}")
+    def job_status(job_id: int):
+        j = jobq.job(job_id)
+        if j is None:
+            raise HTTPException(404, "no such job")
+        return j
+
+    @app.get("/api/jobs/{job_id}/logs")
+    def job_logs(job_id: int, after: int = 0):
+        if jobq.job(job_id) is None:
+            raise HTTPException(404, "no such job")
+        return {"logs": jobq.logs(job_id, after)}
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def job_cancel(job_id: int):
+        if not jobq.request_cancel(job_id):
+            raise HTTPException(409, "job already finished")
+        return {"ok": True}
+
+    @app.get("/api/projects/{name}/jobs")
+    def project_jobs(name: str):
+        return {"jobs": jobq.list(name, limit=30)}
 
     # ---------------- settings (global: applies to every project)
 
@@ -665,55 +661,61 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True}
 
-    @app.post("/api/projects/{name}/pages/{page_id}/retranscribe")
-    async def retranscribe_page(name: str, page_id: str):
-        """Retry OCR for one page right now (e.g. after a model hiccup) —
-        heavy work off the event loop; other requests keep flowing."""
-        ws = ws_for(name)
+    def _do_retry_ocr(ws, page_id: str) -> None:
+        """Retry OCR for one page (model hiccup / repetition loop). Persists
+        the result and reconciles. Raises RuntimeError if it still fails.
+        Synchronous — callers run it on the worker or a threadpool thread."""
         page = ws.page(page_id)
         if page is None:
-            raise HTTPException(404, "no such page")
+            raise LookupError("no such page")
         if not page.get("llm_image"):
-            raise HTTPException(400, "page has no processed image yet — run the pipeline first")
+            raise RuntimeError("page has no processed image yet — run the pipeline first")
         cfg = load_config(ws.root)
         if cfg["provider"]["name"] == "hybrid":  # one page: local is plenty
             cfg = {**cfg, "provider": {**cfg["provider"], "name": "ollama"}}
         from ..backends import get_backend
         from ..stages.transcribe import _cache_page, _write_result
         backend = get_backend(cfg)
-
-        def work():
-            src = ws.root / page["llm_image"]
-            r = backend.transcribe([(page_id, src)], log=lambda m: None)[page_id]
-            if "error" in r:
-                # repetition loops are usually triggered by the neighboring
-                # page's curled text at the frame edge — retry with each
-                # vertical edge shaved off (p0093 taught us this)
-                import cv2
-                img = cv2.imread(str(src))
-                if img is not None:
-                    w = img.shape[1]
-                    for sl in (slice(0, int(w * 0.86)), slice(int(w * 0.14), w)):
-                        tmp = ws.work_file(f"_retry_{page_id}.jpg")
-                        cv2.imwrite(str(tmp), img[:, sl],
-                                    [cv2.IMWRITE_JPEG_QUALITY, 85])
-                        r2 = backend.transcribe([(page_id, tmp)],
-                                                log=lambda m: None)[page_id]
-                        tmp.unlink(missing_ok=True)
-                        if "error" not in r2:
-                            r = r2
-                            break
-            _write_result(ws, page, r, backend.name)
-            _cache_page(ws, page)
-            return r
-
-        r = await asyncio.to_thread(work)
+        src = ws.root / page["llm_image"]
+        r = backend.transcribe([(page_id, src)], log=lambda m: None)[page_id]
+        if "error" in r:
+            # repetition loops are usually triggered by the neighboring page's
+            # curled text at the frame edge — retry with each vertical edge
+            # shaved off (p0093 taught us this)
+            import cv2
+            img = cv2.imread(str(src))
+            if img is not None:
+                w = img.shape[1]
+                for sl in (slice(0, int(w * 0.86)), slice(int(w * 0.14), w)):
+                    tmp = ws.work_file(f"_retry_{page_id}.jpg")
+                    cv2.imwrite(str(tmp), img[:, sl], [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    r2 = backend.transcribe([(page_id, tmp)], log=lambda m: None)[page_id]
+                    tmp.unlink(missing_ok=True)
+                    if "error" not in r2:
+                        r = r2
+                        break
+        _write_result(ws, page, r, backend.name)
+        _cache_page(ws, page)
         if "error" in r:
             ws.save()
-            raise HTTPException(502, f"failed again: {r['error']}")
+            raise RuntimeError(f"failed again: {r['error']}")
         _reconcile(ws)  # the retry may have brought a page number with it
         ws.stage_reset("figures")
         ws.save()
+
+    @app.post("/api/projects/{name}/pages/{page_id}/retranscribe")
+    async def retranscribe_page(name: str, page_id: str):
+        """Retry OCR for one page right now — heavy work off the event loop."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        if not page.get("llm_image"):
+            raise HTTPException(400, "page has no processed image yet — run the pipeline first")
+        try:
+            await asyncio.to_thread(_do_retry_ocr, ws, page_id)
+        except RuntimeError as e:
+            raise HTTPException(502, str(e))
         return {"ok": True}
 
     @app.post("/api/projects/{name}/pages/{page_id}/patch")
@@ -2022,6 +2024,57 @@ def create_app(root: Path) -> FastAPI:
                  else "no-cache")
         return FileResponse(target, headers={"Cache-Control": cache})
 
+    # ---------------- job handlers + worker startup
+
+    def _job_pipeline(project, params, log, should_cancel):
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        if params.get("provider"):
+            cfg["provider"]["name"] = params["provider"]
+
+        def cb(m):
+            if should_cancel():
+                raise JobCanceled()
+            log(str(m))
+
+        run_pipeline(ws, cfg, force=params.get("force", False), log=cb)
+        log("[pipeline] finished")
+
+    def _job_proof_chapter(project, params, log, should_cancel):
+        from ..proofread import proofread_chapter
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        d = proofread_chapter(ws, cfg, int(params["idx"]))
+        log(f"chapter {params['idx']}: proofread complete "
+            f"({len(d.get('findings', []))} findings)")
+
+    def _job_proof_resolve(project, params, log, should_cancel):
+        from ..proofread import resolve_finding
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        resolve_finding(ws, cfg, int(params["idx"]), int(params["fi"]))
+        log("re-read complete")
+
+    def _job_proof_reread_stuck(project, params, log, should_cancel):
+        from ..proofread import reread_chapter_stuck
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        reread_chapter_stuck(ws, cfg, int(params["idx"]))
+        log("re-read of stuck findings complete")
+
+    def _job_retry_ocr(project, params, log, should_cancel):
+        ws = ws_for(project)
+        _do_retry_ocr(ws, params["page_id"])
+        log(f"retry OCR complete for {params['page_id']}")
+
+    jobq.register("pipeline", _job_pipeline)
+    jobq.register("proof-chapter", _job_proof_chapter)
+    jobq.register("proof-resolve", _job_proof_resolve)
+    jobq.register("proof-reread-stuck", _job_proof_reread_stuck)
+    jobq.register("retry-ocr", _job_retry_ocr)
+
+    jobq.requeue_orphans()   # pick up anything a crash/restart left mid-run
+    jobq.start_worker()
     return app
 
 
