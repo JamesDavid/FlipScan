@@ -2158,6 +2158,12 @@ async function delFigure(pageId, figIdx) {
   openProject(current, "figures");
 }
 
+async function rotateFigure(pageId, figIdx, dir) {
+  await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}/rotate?dir=${dir}`,
+            {method:"POST"});
+  openProject(current, "figures");
+}
+
 async function setCaption(pageId, figIdx, caption) {
   try { await api(`/projects/${current}/pages/${pageId}/figures/${figIdx}/caption`,
     {method:"POST", headers:{"Content-Type":"application/json"},
@@ -2222,6 +2228,10 @@ function renderFiguresTab(p, clusters) {
           </div>
         </div>
         <span class="row">
+          <button class="secondary" title="rotate 90° counter-clockwise"
+                  onclick="rotateFigure('${r.pg.id}', ${r.i}, 'ccw')">⟲</button>
+          <button class="secondary" title="rotate 90° clockwise"
+                  onclick="rotateFigure('${r.pg.id}', ${r.i}, 'cw')">⟳</button>
           <button class="secondary" onclick="openCrop('${r.pg.id}', ${r.i})">Re-crop</button>
           <input type="file" accept="image/*" id="figup-${r.pg.id}-${r.i}"
                  style="display:none" onchange="uploadFigure('${r.pg.id}', ${r.i})">

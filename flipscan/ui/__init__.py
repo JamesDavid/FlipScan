@@ -969,6 +969,31 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True, "figure": rel}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/figures/{fig_idx}/rotate")
+    def rotate_figure(name: str, page_id: str, fig_idx: int, dir: str = "cw"):
+        """Rotate a figure image 90 degrees clockwise or counter-clockwise.
+        The rotation is baked into the figure file itself and the figure is
+        pinned (user_crop) so the figures stage won't regenerate over it."""
+        import cv2
+
+        ws = ws_for(name)
+        page, rel, region = _figure(ws, page_id, fig_idx)
+        path = ws.root / rel
+        if not path.exists():
+            raise HTTPException(404, "figure image missing")
+        img = cv2.imread(str(path))
+        if img is None:
+            raise HTTPException(422, "could not read figure image")
+        code = (cv2.ROTATE_90_COUNTERCLOCKWISE if dir == "ccw"
+                else cv2.ROTATE_90_CLOCKWISE)
+        cv2.imwrite(str(path), cv2.rotate(img, code))
+        if region is not None:
+            region["user_crop"] = True   # keep the figures stage off it
+            region.pop("stale_crop", None)
+        ws.stage_reset("assemble")
+        ws.save()
+        return {"ok": True, "figure": rel}
+
     @app.post("/api/projects/{name}/pages/{page_id}/regions/{ridx}/crop")
     def crop_region(name: str, page_id: str, ridx: int, edit: CropEdit):
         """Create the figure for a region that has none (its [[region-N]]
