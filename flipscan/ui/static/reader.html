@@ -129,34 +129,45 @@ function updatePos(loc) {
 }
 rendition.on("relocated", updatePos);
 
+// Internal links (the book's own contents page!) must navigate via the
+// rendition. epub.js gives each content doc a <base> of <origin>/EPUB/, so a
+// link like "ch004.xhtml" natively resolves to <origin>/EPUB/ch004.xhtml — a
+// URL the server 404s as JSON. We intercept clicks in the CAPTURE phase (so we
+// beat the native navigation and epub.js's own link handler), resolve the
+// target to a spine item, and drive the rendition instead. Only genuinely
+// external links (a different origin) keep their default. Installed from BOTH
+// the content hook and the core "rendered" event so it binds no matter which
+// path epub.js takes; the guard flag prevents a double bind.
+function bindInternalLinks(doc) {
+  if (!doc || doc.__flipLinksBound) return;
+  doc.__flipLinksBound = true;
+  doc.addEventListener("click", (e) => {
+    const a = e.target && e.target.closest && e.target.closest("a[href]");
+    if (!a) return;
+    let url;
+    try { url = new URL(a.href, doc.baseURI); } catch { return; }
+    if (url.origin !== location.origin) return;    // real external site — leave it
+    const path = url.pathname, frag = url.hash || "";
+    const spineItems = (book.spine && book.spine.spineItems) || [];
+    const item = spineItems.find(s =>
+      path === s.canonical || path.endsWith("/" + s.href) || path.endsWith(s.href));
+    if (!item) return;                             // not a book page — leave default
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    rendition.display(item.href + frag);
+  }, true);   // capture phase — runs before epub.js's own handlers
+}
+rendition.on("rendered", (section, view) => {
+  try { bindInternalLinks((view && view.document)
+    || (view && view.contents && view.contents.document)); } catch (e) {}
+});
+
 // ---- per-figure controls: every figure is images/p0123_a.jpg — the name
 // maps straight back to its page and crop slot in FlipScan
 rendition.hooks.content.register(contents => {
   const doc = contents.document;
-  // Internal links (the book's own contents page!) must navigate via the
-  // rendition; the sandboxed iframe drops epub.js's default handling. epub.js
-  // REWRITES each link's href to an absolute in-book URL (e.g.
-  // http://host/EPUB/ch004.xhtml), so the old "href starts with a scheme =
-  // external" test wrongly skipped every contents link — the raw click then
-  // navigated the whole tab to /EPUB/… which the server 404s as JSON. Instead,
-  // resolve each link and, when it points at a spine item (a page in this
-  // book), route it through the rendition; only truly external links (a
-  // different origin) keep their default behaviour.
-  const spineItems = (book.spine && book.spine.spineItems) || [];
-  doc.querySelectorAll("a[href]").forEach(a => {
-    a.addEventListener("click", (e) => {
-      let url;
-      try { url = new URL(a.href, doc.baseURI); } catch { return; }
-      if (url.origin !== location.origin) return;   // real external site — leave it
-      const path = url.pathname, frag = url.hash || "";
-      const item = spineItems.find(s =>
-        path === s.canonical || path.endsWith("/" + s.href) || path.endsWith(s.href));
-      if (!item) return;                             // not a book page — leave default
-      e.preventDefault();
-      e.stopPropagation();
-      rendition.display(item.href + frag);
-    });
-  });
+  // internal links (the book's contents page!) — see bindInternalLinks
+  bindInternalLinks(doc);
   // tap zones live INSIDE the content so links and buttons always win —
   // the old invisible overlays sat on top and ate the TOC's clicks
   doc.addEventListener("click", (e) => {
