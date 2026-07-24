@@ -167,26 +167,42 @@ def _salvage_findings(raw: str) -> list[dict]:
     return out[:MAX_FINDINGS]
 
 
-def _ollama_review(cfg: dict, chapter_md: str, extra: dict | None = None) -> str:
+def _ollama_post(cfg: dict, payload: dict, timeout: float, attempts: int = 3) -> str:
+    """POST to Ollama's /api/chat with a hard timeout and bounded retries. The
+    timeout guarantees a hung backend raises rather than wedging a job forever;
+    transient network / 5xx errors are retried with a short backoff so a blip
+    doesn't fail the whole chapter."""
+    import time
+
     import httpx
     p = cfg["provider"]
-    resp = httpx.post(
-        f"{p['ollama_url'].rstrip('/')}/api/chat",
-        json={
-            "model": p["ollama_model"],
-            "stream": False,
-            "format": "json",
-            "think": p.get("ollama_think", False),
-            # long chapters need a big context window; findings stay small
-            "options": {"num_predict": 4096, "temperature": 0,
-                        "num_ctx": int(p.get("proof_num_ctx", 32768)),
-                        **(extra or {})},
-            "messages": [{"role": "user", "content": PROOF_PROMPT + chapter_md}],
-        },
-        timeout=900.0,
-    )
-    resp.raise_for_status()
-    return resp.json()["message"]["content"]
+    url = f"{p['ollama_url'].rstrip('/')}/api/chat"
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            resp = httpx.post(url, json=payload, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]
+        except (httpx.HTTPError, KeyError) as e:
+            last = e
+            if i + 1 < attempts:
+                time.sleep(2.0 * (i + 1))
+    raise last  # type: ignore[misc]
+
+
+def _ollama_review(cfg: dict, chapter_md: str, extra: dict | None = None) -> str:
+    p = cfg["provider"]
+    return _ollama_post(cfg, {
+        "model": p["ollama_model"],
+        "stream": False,
+        "format": "json",
+        "think": p.get("ollama_think", False),
+        # long chapters need a big context window; findings stay small
+        "options": {"num_predict": 4096, "temperature": 0,
+                    "num_ctx": int(p.get("proof_num_ctx", 32768)),
+                    **(extra or {})},
+        "messages": [{"role": "user", "content": PROOF_PROMPT + chapter_md}],
+    }, timeout=900.0)
 
 
 def _anthropic_review(cfg: dict, chapter_md: str) -> str:
@@ -473,18 +489,14 @@ def reread_from_image(cfg: dict, image_path: Path, quote: str) -> str | None:
                 {"type": "text", "text": prompt}]}])
         raw = "".join(b.text for b in msg.content if b.type == "text")
     else:
-        import httpx
-        resp = httpx.post(
-            f"{p['ollama_url'].rstrip('/')}/api/chat",
-            json={"model": p["ollama_model"], "stream": False, "format": "json",
-                  "think": p.get("ollama_think", False),
-                  "options": {"num_predict": 800, "temperature": 0},
-                  "messages": [{"role": "user", "content": prompt,
-                                "images": [base64.standard_b64encode(
-                                    image_path.read_bytes()).decode()]}]},
+        raw = _ollama_post(cfg, {
+            "model": p["ollama_model"], "stream": False, "format": "json",
+            "think": p.get("ollama_think", False),
+            "options": {"num_predict": 800, "temperature": 0},
+            "messages": [{"role": "user", "content": prompt,
+                          "images": [base64.standard_b64encode(
+                              image_path.read_bytes()).decode()]}]},
             timeout=600.0)
-        resp.raise_for_status()
-        raw = resp.json()["message"]["content"]
     start, end = raw.find("{"), raw.rfind("}")
     if start == -1 or end <= start:
         return None

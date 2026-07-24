@@ -5,9 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import queue
-import threading
-from collections import deque
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
@@ -166,7 +163,7 @@ def create_app(root: Path) -> FastAPI:
                     "pages": len(pages),
                     "suspects": sum(1 for x in pages if x["status"] == "suspect"),
                     "stages": {s: ws.stage_status(s) for s in STAGES},
-                    "running": p.name in runs and runs[p.name]["thread"].is_alive(),
+                    "running": jobq.active(p.name, ("pipeline",)) is not None,
                 })
         return out
 
@@ -329,7 +326,7 @@ def create_app(root: Path) -> FastAPI:
             "videos": m["videos"],
             "stages": {s: ws.stage_status(s) for s in STAGES},
             "pages": [{**p, "reasons": page_reasons(p)} for p in m["pages"]],
-            "running": name in runs and runs[name]["thread"].is_alive(),
+            "running": jobq.active(name, ("pipeline",)) is not None,
             "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
                         for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
@@ -362,9 +359,8 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)   # 404s if the project doesn't exist
         if confirm != name:
             raise HTTPException(400, "type the exact project name to confirm")
-        if name in runs and runs[name]["thread"].is_alive():
+        if jobq.active(name, ("pipeline",)) is not None:
             raise HTTPException(409, "pipeline is running — stop it first")
-        runs.pop(name, None)
         shutil.rmtree(ws.root, ignore_errors=True)
         return {"ok": True}
 
@@ -543,7 +539,7 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/projects/{name}/videos")
     async def add_video_endpoint(name: str, video: UploadFile):
         ws = ws_for(name)
-        if name in runs and runs[name]["thread"].is_alive():
+        if jobq.active(name, ("pipeline",)) is not None:
             raise HTTPException(409, "pipeline is running — wait for it to finish")
         uploads = root / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
@@ -572,7 +568,7 @@ def create_app(root: Path) -> FastAPI:
     async def add_pdf(name: str, pdf: UploadFile):
         """Import a whole book from a PDF — the alternative to filming it."""
         ws = ws_for(name)
-        if name in runs and runs[name]["thread"].is_alive():
+        if jobq.active(name, ("pipeline",)) is not None:
             raise HTTPException(409, "pipeline is running — wait for it to finish")
         cfg = load_config(ws.root)
         uploads = ws.root / "uploads"
