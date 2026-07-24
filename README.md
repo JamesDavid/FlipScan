@@ -10,7 +10,7 @@ See [SPEC.md](SPEC.md) for the full architecture.
 
 ## Starting a project
 
-You give the book a **title** (or look it up) — the folder name is a unique slug generated for you, so you never type or manage an internal name. The **🔍 look up** field searches Google Books / Open Library by ISBN, title, or author and auto-fills title, author, page count, publisher, and year. Metadata is editable later (✎), flows into the EPUB's Dublin Core, and — once a book is transcribed — FlipScan reads the ISBN off the copyright page and offers to fill the rest in one click.
+You give the book a **title** (or look it up) — the folder name is a unique slug generated for you, so you never type or manage an internal name. The **🔍 look up** field searches Google Books / Open Library by ISBN, title, or author and auto-fills title, author, page count, publisher, and year. Creating a project only collects this metadata; you add the videos, PDF, or photos on the project page as the next step. Metadata is editable later (✎), flows into the EPUB's Dublin Core, and — once a book is transcribed — FlipScan reads the ISBN off the copyright page and offers to fill the rest in one click.
 
 ## Three ways to get pages in
 
@@ -33,6 +33,8 @@ You can mix all three in one project; page order is reconciled from printed page
 ### Pipeline — run, status, reshoot list, capture wizard
 Run/resume the pipeline, watch live per-stage progress, and see the **reshoot list** and **missing-pages** gaps. The **capture wizard** steps you through weak or missing pages one at a time; **🔍 Review these** flips through flagged pages so you can agree or dismiss before capturing.
 
+Long work — the pipeline itself, and every chapter proofread and page re-read — runs as a **durable background job**, not inside the request. Close the tab, sleep the phone, or restart the server and the work keeps going; a run interrupted mid-way is automatically requeued and resumes on the next start. Progress and logs are replayed on reconnect, and a hung model call times out and retries instead of wedging the run forever.
+
 ![Pipeline tab](docs/tabs/pipeline.png)
 
 ### Media — sources & storage
@@ -46,17 +48,17 @@ One thumbnail per detected page (red borders on suspects). Check this after the 
 ![Frames tab](docs/tabs/frames.png)
 
 ### Pages — the heart of it
-Every page as a three-row cell: source frame, editable Markdown transcription, and action buttons. Assign/correct the printed page number (manual always wins), mark for re-acquisition, replace the photo, add a figure, rotate, mark duplicate, or hide. **Section heading** makes a page open a chapter — assigning one restructures the book immediately (the printed contents page also seeds chapter titles automatically, normalized to the book's own style). Filter by **chapter** or "no page number only," with a next-section button to work through the book section by section. Missing-page markers appear inline between non-consecutive pages.
+Every page as a three-row cell: source frame, editable Markdown transcription, and action buttons. Assign/correct the printed page number (manual always wins), mark for re-acquisition, replace the photo, add a figure, rotate, **designate the page as the book cover** (pinned to the front, kept out of the body, used as the EPUB cover), mark duplicate, or hide. **Section heading** makes a page open a chapter — assigning one restructures the book immediately (the printed contents page also seeds chapter titles automatically, normalized to the book's own style). Filter by **chapter** or "no page number only," with a next-section button to work through the book section by section. Missing-page markers appear inline between non-consecutive pages.
 
 ![Pages tab](docs/tabs/pages.png)
 
 ### Figures — captions, crops, real-duplicate detection
-Every figure in book order, each with an **editable caption** and re-crop / re-upload / re-acquire / delete. A perspective-correcting **corner crop tool** (with a magnifier loupe and an edge-detection "magic crop"; optional Claude-vision refinement) fixes bounding boxes. Pages with several figures each keep their own caption — a **⇅ swap** fixes transposed captions — and only genuinely identical images (matched by perceptual hash) are flagged as duplicates.
+Every figure in book order, each with an **editable caption** and re-crop / re-upload / **rotate** (90° CW/CCW) / re-acquire / delete. A perspective-correcting **corner crop tool** — corner handles plus **edge-midpoint handles** that slide a whole side of the box in or out, a magnifier loupe, and an edge-detection "magic crop" (optional Claude-vision refinement) — fixes bounding boxes. A figure you **re-acquire** by shooting a dedicated close-up is kept as its own standalone image (re-cropping trims the close-up, not the page) and survives later re-transcribes. Pages with several figures each keep their own caption — a **⇅ swap** fixes transposed captions — and only genuinely identical images (matched by perceptual hash) are flagged as duplicates.
 
 ![Figures tab](docs/tabs/figures.png)
 
 ### Proof — chapter-by-chapter proofread
-A distinct, non-destructive layer: each chapter is checked and comes back as a list of small fixes (OCR misreads, hyphenation, garbled passages). Safe fixes auto-apply to a *proofed copy*; ambiguous ones wait for a click; notes you resolve yourself with **✎ write a fix**, **👁 view page** (a movable pane of the source image beside the quote), or **🔎 re-read page** (the vision model re-reads the passage from the page image). **Re-read all stuck pages** does that in bulk so you focus only on what's left. The page OCR text is never touched, and nothing reaches the built book until you **Accept** a chapter.
+A distinct, non-destructive layer: each chapter is checked and comes back as a list of small fixes (OCR misreads, hyphenation, garbled passages). Safe fixes auto-apply to a *proofed copy*; ambiguous ones wait for a click; notes you resolve yourself with **✎ write a fix**, **👁 view page** (a movable pane of the source image beside the quote), or **🔎 re-read page** (the vision model re-reads the passage from the page image). **Re-read all stuck pages** does that in bulk so you focus only on what's left. Each proofread and re-read runs as a **durable background job**, so closing the tab or a dropped connection won't lose the minutes of model work. The page OCR text is never touched, and nothing reaches the built book until you **Accept** a chapter.
 
 ![Proof tab](docs/tabs/proof.png)
 
@@ -74,7 +76,7 @@ docker compose up --build
 # drop videos/PDFs into ./books, open http://localhost:8321
 ```
 
-`./books` is mounted as `/data`: sources go in, outputs come out, every workspace persists on the host. Set `FLIPSCAN_OLLAMA_URL` (your Ollama server's LAN IP works from the container) and `FLIPSCAN_PROVIDER` via environment or a `.env` next to `docker-compose.yml`.
+Compose brings up **two services** sharing the `./books` volume: the **web** GUI and a dedicated **worker** that runs the durable job queue (pipeline, proofreads, re-reads). Because the worker is its own container, restarting or redeploying the web server never interrupts a running job. `./books` is mounted as `/data`: sources go in, outputs come out, every workspace persists on the host — including `jobs.db`, the shared queue. Set `FLIPSCAN_OLLAMA_URL` (your Ollama server's LAN IP works from the container) and `FLIPSCAN_PROVIDER` via environment or a `.env` next to `docker-compose.yml`.
 
 ### Dev install (no Docker)
 
@@ -108,7 +110,7 @@ Set globally in Settings (⚙) or per-workspace `config.toml`.
 ingest → extract → score → cluster → select → preprocess → transcribe → figures → assemble → build
 ```
 
-Every stage is idempotent and resumable; state lives in the workspace's `manifest.json` (page-by-page, so an interrupted run resumes where it stopped).
+Every stage is idempotent and resumable; state lives in the workspace's `manifest.json` (page-by-page, so an interrupted run resumes where it stopped). Runs, proofreads, and page re-reads execute in a **durable SQLite job queue** (`jobs.db` in the projects root) worked by a background thread — or, under Docker, a dedicated worker process. A job survives a server restart or a dropped browser connection: anything left mid-flight is automatically requeued and resumes on the next start, and a hung model call times out and retries rather than wedging the run. `flipscan ui` runs the worker in-process (self-contained); `flipscan worker` runs it standalone.
 
 | Stage | What it does | Writes |
 |---|---|---|
@@ -167,8 +169,11 @@ flipscan review DIR                                static HTML review page + res
 flipscan patch DIR --page ID IMG                   replace a badly-captured page
 flipscan addpage DIR IMG [--position start|end|N] [--cover]
 flipscan build DIR [--format epub|pdf|pdf-facsimile] [--title T] [--author A]
-flipscan ui [--root DIR] [--host H] [--port 8321]  local web GUI
+flipscan ui [--root DIR] [--host H] [--port 8321]  local web GUI (in-process job worker)
+flipscan worker [--root DIR]                       run the job worker as its own process
 ```
+
+`flipscan worker` is only needed to run the background worker separately from the web server (e.g. the docker-compose `worker` service); a plain `flipscan ui` already runs one in-process. Point both at the same `--root`/`FLIPSCAN_ROOT` and set `FLIPSCAN_EXTERNAL_WORKER=1` on the web server so it enqueues without doubling up.
 
 ## Troubleshooting
 
