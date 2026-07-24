@@ -1826,19 +1826,14 @@ def create_app(root: Path) -> FastAPI:
         return d
 
     @app.post("/api/projects/{name}/proof/{idx}/run")
-    async def proof_run(name: str, idx: int):
-        """Proofread one chapter (lint + LLM edit list). Heavy work off the
-        event loop; the frontend runs chapters sequentially for 'proof all'."""
-        from ..proofread import proofread_chapter
-        ws = ws_for(name)
-        cfg = load_config(ws.root)
-        try:
-            d = await asyncio.to_thread(proofread_chapter, ws, cfg, idx)
-        except FileNotFoundError as e:
-            raise HTTPException(400, str(e))
-        except Exception as e:
-            raise HTTPException(502, f"proofread failed: {e}")
-        return d
+    def proof_run(name: str, idx: int):
+        """Enqueue a durable chapter-proofread job (minutes of LLM calls that
+        used to die if the browser tab or network dropped). Poll the returned
+        job id for completion."""
+        ws_for(name)
+        job_id = jobq.enqueue(name, "proof-chapter", {"idx": idx},
+                              label=f"proofread ch{idx}")
+        return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}")
     def proof_finding(name: str, idx: int, fi: int, enabled: bool,
@@ -1858,34 +1853,20 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(409, str(e))
 
     @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}/resolve")
-    async def proof_resolve(name: str, idx: int, fi: int):
-        """Re-read a garbled passage from its source page image."""
-        from ..proofread import resolve_finding
-        ws = ws_for(name)
-        cfg = load_config(ws.root)
-        try:
-            return await asyncio.to_thread(resolve_finding, ws, cfg, idx, fi)
-        except (FileNotFoundError, IndexError, LookupError) as e:
-            raise HTTPException(404, str(e))
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-        except Exception as e:
-            raise HTTPException(502, f"re-read failed: {e}")
+    def proof_resolve(name: str, idx: int, fi: int):
+        """Re-read a garbled passage from its source page image (durable job)."""
+        ws_for(name)
+        job_id = jobq.enqueue(name, "proof-resolve", {"idx": idx, "fi": fi},
+                              label=f"re-read ch{idx} #{fi}")
+        return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/proof/{idx}/reread-stuck")
-    async def proof_reread_stuck(name: str, idx: int):
-        """Re-read every stuck page-anchored finding in this chapter."""
-        from ..proofread import reread_chapter_stuck
-        ws = ws_for(name)
-        cfg = load_config(ws.root)
-        try:
-            return await asyncio.to_thread(reread_chapter_stuck, ws, cfg, idx)
-        except (FileNotFoundError, IndexError) as e:
-            raise HTTPException(404, str(e))
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-        except Exception as e:
-            raise HTTPException(502, f"re-read failed: {e}")
+    def proof_reread_stuck(name: str, idx: int):
+        """Re-read every stuck page-anchored finding in this chapter (job)."""
+        ws_for(name)
+        job_id = jobq.enqueue(name, "proof-reread-stuck", {"idx": idx},
+                              label=f"re-read stuck ch{idx}")
+        return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/proof/{idx}/review")
     def proof_review(name: str, idx: int, accept: bool):
@@ -2052,15 +2033,18 @@ def create_app(root: Path) -> FastAPI:
         from ..proofread import resolve_finding
         ws = ws_for(project)
         cfg = load_config(ws.root)
-        resolve_finding(ws, cfg, int(params["idx"]), int(params["fi"]))
+        d = resolve_finding(ws, cfg, int(params["idx"]), int(params["fi"]))
         log("re-read complete")
+        return d
 
     def _job_proof_reread_stuck(project, params, log, should_cancel):
         from ..proofread import reread_chapter_stuck
         ws = ws_for(project)
         cfg = load_config(ws.root)
-        reread_chapter_stuck(ws, cfg, int(params["idx"]))
-        log("re-read of stuck findings complete")
+        d = reread_chapter_stuck(ws, cfg, int(params["idx"]))
+        log(f"re-read stuck findings: {d.get('rescued', 0)} auto-fixed, "
+            f"{d.get('still_manual', 0)} still need you")
+        return d
 
     def _job_retry_ocr(project, params, log, should_cancel):
         ws = ws_for(project)

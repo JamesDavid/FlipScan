@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   started_at  REAL,
   finished_at REAL,
   error       TEXT,
+  result      TEXT,
   cancel      INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS job_logs(
@@ -71,6 +72,14 @@ class JobQueue:
         self._stopping = threading.Event()
         self._worker: threading.Thread | None = None
         self._conn().executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a DB was first created."""
+        c = self._conn()
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "result" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN result TEXT")
 
     # -- connection ---------------------------------------------------------
 
@@ -127,6 +136,11 @@ class JobQueue:
                 r["params"] = json.loads(r["params"])
             except Exception:
                 r["params"] = {}
+            if r.get("result"):
+                try:
+                    r["result"] = json.loads(r["result"])
+                except Exception:
+                    pass
         return r
 
     def list(self, project: str | None = None, limit: int = 50) -> list[dict]:
@@ -220,10 +234,18 @@ class JobQueue:
                                  (job_id,)).fetchone()
         return bool(r and r["cancel"])
 
-    def _finish(self, job_id: int, status: str, error: str | None = None) -> None:
+    def _finish(self, job_id: int, status: str, error: str | None = None,
+                result: Any = None) -> None:
+        import json
+        res = None
+        if result is not None:
+            try:
+                res = json.dumps(result)
+            except (TypeError, ValueError):
+                res = None
         self._conn().execute(
-            "UPDATE jobs SET status=?, finished_at=?, error=? WHERE id=?",
-            (status, time.time(), error, job_id))
+            "UPDATE jobs SET status=?, finished_at=?, error=?, result=? WHERE id=?",
+            (status, time.time(), error, res, job_id))
 
     def _loop(self) -> None:
         import json
@@ -247,8 +269,9 @@ class JobQueue:
             try:
                 if should_cancel():
                     raise JobCanceled()
-                handler(job["project"], params, log, should_cancel)
-                self._finish(jid, CANCELED if should_cancel() else DONE)
+                ret = handler(job["project"], params, log, should_cancel)
+                self._finish(jid, CANCELED if should_cancel() else DONE,
+                             result=ret)
             except JobCanceled:
                 self._log(jid, "[queue] canceled")
                 self._finish(jid, CANCELED)

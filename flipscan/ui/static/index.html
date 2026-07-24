@@ -1492,10 +1492,32 @@ function thumbW() {
   return Math.min(760, Math.max(320, Math.ceil(px / 20) * 20));
 }
 
+// Poll a durable background job to completion. The work runs on the server
+// worker, so closing the tab or a network blip no longer kills it — reopening
+// and calling waitForJob again just resumes watching. Returns the job (with
+// its .result); throws on error/cancel.
+async function waitForJob(jobId, onLine) {
+  let after = 0;
+  while (true) {
+    let j, ls;
+    try {
+      j = await api(`/jobs/${jobId}`);
+      ls = (await api(`/jobs/${jobId}/logs?after=${after}`)).logs;
+    } catch (e) { await new Promise(r => setTimeout(r, 1500)); continue; }
+    for (const l of ls) { after = l.id; if (onLine) onLine(l.line); }
+    if (j.status === "done") return j;
+    if (j.status === "error") throw new Error(j.error || "job failed");
+    if (j.status === "canceled") throw new Error("canceled");
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
 async function runProof(idx, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "proofreading…"; }
-  try { await api(`/projects/${current}/proof/${idx}/run`, {method: "POST"}); }
-  catch (e) { alert(e.message); }
+  try {
+    const { job_id } = await api(`/projects/${current}/proof/${idx}/run`, {method: "POST"});
+    await waitForJob(job_id);
+  } catch (e) { alert(e.message); }
   renderTab("proof", window._proj);
 }
 
@@ -1583,8 +1605,9 @@ async function resolveFinding(ci, fi, btn) {
   btn.disabled = true;
   btn.textContent = "re-reading…";
   try {
-    await api(`/projects/${current}/proof/${ci}/finding/${fi}/resolve`,
+    const { job_id } = await api(`/projects/${current}/proof/${ci}/finding/${fi}/resolve`,
               {method: "POST"});
+    await waitForJob(job_id);
   } catch (e) {
     btn.disabled = false;
     btn.textContent = "🔎 re-read page";
@@ -1615,8 +1638,10 @@ async function proofAll() {
   for (let i = 0; i < todo.length; i++) {
     const st = $("proofall-status");
     if (st) st.textContent = `proofreading ${i + 1}/${todo.length}: ${todo[i].title}…`;
-    try { await api(`/projects/${current}/proof/${todo[i].idx}/run`, {method: "POST"}); }
-    catch (e) {
+    try {
+      const { job_id } = await api(`/projects/${current}/proof/${todo[i].idx}/run`, {method: "POST"});
+      await waitForJob(job_id);
+    } catch (e) {
       if ($("proofall-status"))
         $("proofall-status").textContent = `failed on ${todo[i].title}: ${e.message}`;
       break;
@@ -1637,9 +1662,11 @@ async function rereadAllStuck() {
     if (st) st.textContent = `re-reading pages ${i + 1}/${chs.length}: ${chs[i].title}… `
       + `(${rescued} auto-fixed so far)`;
     try {
-      const d = await api(`/projects/${current}/proof/${chs[i].idx}/reread-stuck`,
+      const { job_id } = await api(`/projects/${current}/proof/${chs[i].idx}/reread-stuck`,
                           {method: "POST"});
-      rescued += d.rescued; manual += d.still_manual; attempted += d.attempted;
+      const j = await waitForJob(job_id);
+      const d = j.result || {};
+      rescued += d.rescued || 0; manual += d.still_manual || 0; attempted += d.attempted || 0;
     } catch (e) { /* skip a chapter that errored; keep going */ }
   }
   const st = $("proofall-status");
