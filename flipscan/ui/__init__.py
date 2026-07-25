@@ -170,8 +170,22 @@ def create_app(root: Path) -> FastAPI:
                     "suspects": sum(1 for x in pages if x["status"] == "suspect"),
                     "stages": {s: ws.stage_status(s) for s in STAGES},
                     "running": jobq.active(p.name, ("pipeline",)) is not None,
+                    "archived": bool(ws.manifest.get("archived")),
                 })
         return out
+
+    @app.post("/api/projects/{name}/archive")
+    def set_archived(name: str, on: bool = True):
+        """Archive a finalized/dormant project (or restore it). Archived
+        projects drop into a collapsed group in the sidebar; nothing on disk
+        moves and every workspace file is untouched."""
+        ws = ws_for(name)
+        if on:
+            ws.manifest["archived"] = True
+        else:
+            ws.manifest.pop("archived", None)
+        ws.save()
+        return {"ok": True, "archived": bool(ws.manifest.get("archived"))}
 
     @app.get("/api/lookup")
     def book_lookup(q: str):
@@ -333,6 +347,7 @@ def create_app(root: Path) -> FastAPI:
             "stages": {s: ws.stage_status(s) for s in STAGES},
             "pages": [{**p, "reasons": page_reasons(p)} for p in m["pages"]],
             "running": jobq.active(name, ("pipeline",)) is not None,
+            "archived": bool(m.get("archived")),
             "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
                         for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),

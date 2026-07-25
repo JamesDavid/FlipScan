@@ -204,20 +204,40 @@ const api = async (path, opts) => {
 };
 const esc = (s) => (s || "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+let archivedOpen = false;
+function toggleArchived() {
+  archivedOpen = !archivedOpen;
+  const l = $("arch-list"), c = $("arch-caret");
+  if (l) l.style.display = archivedOpen ? "block" : "none";
+  if (c) c.textContent = archivedOpen ? "▾" : "▸";
+}
 async function refreshProjects() {
   const list = await api("/projects");
-  $("projects").innerHTML = list.map(p => `
+  const active = list.filter(p => !p.archived), archived = list.filter(p => p.archived);
+  const row = (p) => `
     <div class="proj ${p.name === current ? "active" : ""}" onclick="openProject('${p.name}')">
       <div>${esc(p.title || p.name)} ${p.running ? "⏳" : ""}</div>
       <div class="sub">${p.pages} pages · ${p.suspects} suspect</div>
-    </div>`).join("") || '<div class="sub" style="color:#a8a29e">no projects yet</div>';
+    </div>`;
+  let html = active.map(row).join("")
+    || '<div class="sub" style="color:#a8a29e">no active projects</div>';
+  if (archived.length) {
+    html += `<div onclick="toggleArchived()" style="cursor:pointer;font-size:.72rem;
+        color:#a8a29e;margin-top:.9rem;padding:.35rem 0;border-top:1px solid #44403c">
+        <span id="arch-caret">${archivedOpen ? "▾" : "▸"}</span> Archived (${archived.length})</div>
+      <div id="arch-list" style="display:${archivedOpen ? "block" : "none"};opacity:.75">
+        ${archived.map(row).join("")}</div>`;
+  }
+  $("projects").innerHTML = html;
   if (!current && list.length) {
     const h = location.hash.slice(1).split("/").map(decodeURIComponent);  // #project/tab
     let saved = {};                       // last project survives new visits
     try { saved = JSON.parse(localStorage.getItem("flipscan-last") || "{}"); } catch {}
+    // prefer an explicit hash/saved project (even if archived), else the first
+    // ACTIVE project so a finalized book never steals focus on load
     const name = list.some(p => p.name === h[0]) ? h[0]
                : list.some(p => p.name === saved.name) ? saved.name
-               : list[0].name;
+               : (active[0] || list[0]).name;
     const tab = (h[0] === name && h[1]) || (saved.name === name && saved.tab) || undefined;
     openProject(name, tab || undefined);
   }
@@ -506,6 +526,15 @@ async function deleteProject(name) {
   $("main").innerHTML = `<div class="card">Project "${esc(name)}" deleted.</div>`;
 }
 
+async function archiveProject(name, on) {
+  try {
+    await api(`/projects/${encodeURIComponent(name)}/archive?on=${on}`, {method: "POST"});
+  } catch (e) { alert("failed: " + e.message); return; }
+  if (on) archivedOpen = true;   // reveal the group so the move is visible
+  await refreshProjects();
+  openProject(name);             // re-render the header with the new state
+}
+
 async function fillFromIsbn(isbn, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "looking up…"; }
   let r;
@@ -612,6 +641,12 @@ async function openProject(name, tab) {
       <button class="secondary" style="padding:.15rem .6rem;font-size:.75rem"
               title="edit title / author / page count"
               onclick="toggleProjSettings()">✎</button>
+      <button class="secondary" style="padding:.15rem .6rem;font-size:.75rem"
+              title="${p.archived ? "move back to active projects"
+                : "archive this finalized/dormant book — it drops into the "
+                  + "collapsed Archived group in the sidebar"}"
+              onclick="archiveProject('${esc(name)}', ${!p.archived})">
+        ${p.archived ? "📤 unarchive" : "📥 archive"}</button>
       <button class="danger" style="padding:.15rem .6rem;font-size:.75rem"
               title="delete this entire project" onclick="deleteProject('${esc(name)}')">
         🗑 delete</button></h2>
