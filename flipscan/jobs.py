@@ -64,15 +64,27 @@ Handler = Callable[[str, dict, Callable[[str], None], Callable[[], bool]], Any]
 
 
 class JobQueue:
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path,
+                 concurrency: dict[str, int] | None = None) -> None:
         self.db_path = str(db_path)
         self._local = threading.local()          # one sqlite conn per thread
         self._handlers: dict[str, Handler] = {}
-        self._wake = threading.Event()           # enqueue -> wake the worker
+        self._wake = threading.Event()           # enqueue -> wake a worker
         self._stopping = threading.Event()
-        self._worker: threading.Thread | None = None
+        self._workers: list[threading.Thread] = []
+        # per-kind max simultaneous jobs (default 1 = serial). Only kinds that
+        # don't mutate the shared manifest are safe above 1 — e.g. chapter
+        # proofreads write their own per-chapter file. The worker pool has one
+        # thread per unit of the largest cap so the concurrency is real.
+        self.concurrency = dict(concurrency or {})
+        self.default_cap = 1
+        self.pool_size = max([1, *self.concurrency.values()])
+        self._claim_lock = threading.Lock()      # serialize claim decisions
         self._conn().executescript(_SCHEMA)
         self._migrate()
+
+    def _cap(self, kind: str) -> int:
+        return self.concurrency.get(kind, self.default_cap)
 
     def _migrate(self) -> None:
         """Add columns introduced after a DB was first created."""
@@ -102,11 +114,14 @@ class JobQueue:
         self._handlers[kind] = handler
 
     def start_worker(self) -> None:
-        if self._worker and self._worker.is_alive():
+        if any(w.is_alive() for w in self._workers):
             return
-        self._worker = threading.Thread(target=self._loop, name="flipscan-jobs",
-                                        daemon=True)
-        self._worker.start()
+        self._workers = []
+        for i in range(self.pool_size):
+            t = threading.Thread(target=self._loop, name=f"flipscan-jobs-{i}",
+                                 daemon=True)
+            t.start()
+            self._workers.append(t)
 
     def stop(self) -> None:
         self._stopping.set()
@@ -218,16 +233,24 @@ class JobQueue:
             (job_id, time.time(), line))
 
     def _claim(self) -> dict | None:
-        c = self._conn()
-        r = c.execute("SELECT * FROM jobs WHERE status='queued' "
-                      "ORDER BY id LIMIT 1").fetchone()
-        if not r:
+        # Serialize claim decisions across the worker pool so the per-kind
+        # running counts stay consistent: claim the oldest queued job whose
+        # kind is below its concurrency cap.
+        with self._claim_lock:
+            c = self._conn()
+            running = {row["kind"]: row["n"] for row in c.execute(
+                "SELECT kind, count(*) n FROM jobs WHERE status='running' "
+                "GROUP BY kind")}
+            for r in c.execute("SELECT * FROM jobs WHERE status='queued' "
+                               "ORDER BY id"):
+                if running.get(r["kind"], 0) >= self._cap(r["kind"]):
+                    continue                      # this kind is at capacity
+                upd = c.execute(
+                    "UPDATE jobs SET status='running', started_at=?, cancel=0 "
+                    "WHERE id=? AND status='queued'", (time.time(), r["id"]))
+                if upd.rowcount == 1:
+                    return dict(r)
             return None
-        upd = c.execute("UPDATE jobs SET status='running', started_at=?, cancel=0 "
-                        "WHERE id=? AND status='queued'", (time.time(), r["id"]))
-        if upd.rowcount != 1:      # someone else grabbed it (shouldn't happen)
-            return None
-        return dict(r)
 
     def _canceled(self, job_id: int) -> bool:
         r = self._conn().execute("SELECT cancel FROM jobs WHERE id=?",

@@ -302,11 +302,11 @@ def worker(root):
     import time
 
     from .jobs import JobQueue
-    from .jobs_handlers import register_handlers
+    from .jobs_handlers import default_concurrency, register_handlers
 
     root = root or Path(os.environ.get("FLIPSCAN_ROOT", "."))
     root.mkdir(parents=True, exist_ok=True)
-    jobq = JobQueue(root / "jobs.db")
+    jobq = JobQueue(root / "jobs.db", concurrency=default_concurrency())
     register_handlers(jobq, root)
     resumed = jobq.requeue_orphans()
     click.echo(f"FlipScan worker  (projects root: {root.resolve()})")

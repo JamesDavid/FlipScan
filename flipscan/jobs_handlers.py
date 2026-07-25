@@ -9,12 +9,26 @@ dedicated `worker` service so web restarts never interrupt a running job.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .config import load_config
 from .jobs import JobCanceled, JobQueue
 from .project import retry_ocr_page, run_pipeline
 from .workspace import Workspace
+
+
+def default_concurrency() -> dict[str, int]:
+    """How many jobs of each kind may run at once. Only kinds that don't touch
+    the shared manifest are safe above 1: a chapter proofread writes its own
+    per-chapter file, so several run in parallel (default 3, override with
+    FLIPSCAN_PROOF_CONCURRENCY). Everything else — the pipeline, page re-reads,
+    retry-OCR — mutates the manifest and stays serial (cap 1)."""
+    try:
+        n = int(os.environ.get("FLIPSCAN_PROOF_CONCURRENCY", "3"))
+    except ValueError:
+        n = 3
+    return {"proof-chapter": max(1, n)}
 
 
 def register_handlers(jobq: JobQueue, root: Path) -> None:

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from ..config import load_config, save_global_config
 from ..jobs import CANCELED, DONE, ERROR, JobQueue
-from ..jobs_handlers import register_handlers
+from ..jobs_handlers import default_concurrency, register_handlers
 from ..project import create_project, retry_ocr_page
 from ..workspace import STAGES, Workspace
 
@@ -141,7 +141,7 @@ def create_app(root: Path) -> FastAPI:
     # durable job queue: heavy work (pipeline, proofread, re-reads) runs here,
     # in a background worker, as SQLite rows — so it survives restarts and
     # dropped requests instead of dying with the process or the browser tab.
-    jobq = JobQueue(root / "jobs.db")
+    jobq = JobQueue(root / "jobs.db", concurrency=default_concurrency())
 
     def ws_for(name: str) -> Workspace:
         target = (root / name).resolve()
