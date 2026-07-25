@@ -15,6 +15,20 @@ from pathlib import Path
 
 from .workspace import Workspace
 
+# Page geometry (mm) for the reflowed PDF, keyed by device. The reMarkable 2
+# canvas and the e-ink typography choices below are adapted from reCompose
+# (MIT-licensed, github.com/mrodger/reCompose): the RM2 viewer won't crop
+# margins, so the page must be pre-sized to the exact panel; on e-ink you also
+# want darker "grayscale" tones (light grays wash out), generous line spacing
+# so lines don't blend, and no widows/orphans on the small page.
+PAGE_GEOMETRY_MM: dict[str, dict] = {
+    "remarkable-2": {"w": 157.8, "h": 210.4, "margin": 10.0, "eink": True},
+    "eink-6in":     {"w": 90.0,  "h": 122.0, "margin": 7.0,  "eink": True},
+    "xteink-x3":    {"w": 61.0,  "h": 101.0, "margin": 5.0,  "eink": True},
+    "xteink-x4":    {"w": 61.0,  "h": 101.0, "margin": 5.0,  "eink": True},
+    "tablet":       {"w": 148.0, "h": 210.0, "margin": 14.0, "eink": False},
+}
+
 
 def build_pdf_facsimile(ws: Workspace, out_path: Path, title: str | None = None,
                         device: str = "none", log=print) -> Path:
@@ -92,9 +106,11 @@ def _pdf_sized(ws: Workspace, src: Path, long_edge: int = 1400) -> Path:
 
 
 def build_pdf_reflowed(ws: Workspace, out_path: Path, title: str | None = None,
-                       log=print) -> Path:
+                       device: str = "none", log=print) -> Path:
     """Reflowed text PDF straight from book.md via reportlab — no weasyprint/
-    GTK/pandoc needed (they were never installed on a normal setup)."""
+    GTK/pandoc needed. A device preset (e.g. remarkable-2) sizes the page to
+    that panel and switches to an e-ink-optimised palette/spacing; e-ink
+    geometry and typography adapted from reCompose (MIT, github.com/mrodger)."""
     import re
     from xml.sax.saxutils import escape
 
@@ -110,17 +126,33 @@ def build_pdf_reflowed(ws: Workspace, out_path: Path, title: str | None = None,
         raise RuntimeError("work/book.md missing — run the pipeline (assemble) first")
     text = book_md.read_text(encoding="utf-8")
 
+    geo = PAGE_GEOMETRY_MM.get(device)
+    if geo:
+        page_size = (geo["w"] * mm, geo["h"] * mm)
+        margin = geo["margin"] * mm
+        eink = geo["eink"]
+    else:
+        page_size, margin, eink = A5, 15 * mm, False
+
+    # e-ink washes out light grays and blends tight lines, so darken the
+    # secondary tones and open up the leading; on the small page suppress
+    # widows/orphans. Print/tablet keeps the softer greys.
+    quote_col = "#333333" if eink else "#555555"
+    cap_col = "#333333" if eink else "#444444"
+    lead = 16.5 if eink else 15.5
+    nowid = {"allowWidows": 0, "allowOrphans": 0} if eink else {}
+
     body = ParagraphStyle("body", fontName="Times-Roman", fontSize=11,
-                          leading=15.5, spaceAfter=6)
-    quote = ParagraphStyle("quote", parent=body, leftIndent=10 * mm,
-                           textColor="#555555")
+                          leading=lead, spaceAfter=6, **nowid)
+    quote = ParagraphStyle("quote", parent=body, leftIndent=8 * mm,
+                           textColor=quote_col)
     h1 = ParagraphStyle("h1", fontName="Times-Bold", fontSize=20,
-                        leading=24, spaceAfter=12)
+                        leading=24, spaceAfter=12, **nowid)
     h2 = ParagraphStyle("h2", fontName="Times-Bold", fontSize=14,
-                        leading=18, spaceBefore=8, spaceAfter=6)
+                        leading=18, spaceBefore=8, spaceAfter=6, **nowid)
     cap = ParagraphStyle("cap", parent=body, fontName="Times-Italic",
                          fontSize=9.5, leading=12, spaceBefore=2,
-                         alignment=1, textColor="#444444")
+                         alignment=1, textColor=cap_col)
 
     def inline(s: str) -> str:
         s = escape(s)
@@ -128,7 +160,7 @@ def build_pdf_reflowed(ws: Workspace, out_path: Path, title: str | None = None,
         s = re.sub(r"\*([^*]+)\*", r"<i>\1</i>", s)
         return s
 
-    page_w = A5[0] - 30 * mm  # usable width inside margins
+    page_w = page_size[0] - 2 * margin  # usable width inside margins
 
     story, first_h1 = [], True
     img_re = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
@@ -143,7 +175,8 @@ def build_pdf_reflowed(ws: Workspace, out_path: Path, title: str | None = None,
                 try:
                     src = _pdf_sized(ws, src)
                     iw, ih = ImageReader(str(src)).getSize()
-                    max_h = 440  # fit the A5 frame with caption headroom
+                    # fit the text frame, leaving ~1/4 page for caption headroom
+                    max_h = (page_size[1] - 2 * margin) * 0.72
                     w = min(page_w, iw)
                     if ih * w / iw > max_h:
                         w = max_h * iw / ih
@@ -172,11 +205,12 @@ def build_pdf_reflowed(ws: Workspace, out_path: Path, title: str | None = None,
         else:
             story.append(Paragraph(inline(" ".join(block.splitlines())), body))
 
-    doc = SimpleDocTemplate(str(out_path), pagesize=A5,
-                            leftMargin=15 * mm, rightMargin=15 * mm,
-                            topMargin=15 * mm, bottomMargin=15 * mm,
+    doc = SimpleDocTemplate(str(out_path), pagesize=page_size,
+                            leftMargin=margin, rightMargin=margin,
+                            topMargin=margin, bottomMargin=margin,
                             title=title or ws.manifest["book"].get("title")
                             or ws.root.name)
     doc.build(story)
-    log(f"reflowed PDF written: {out_path}")
+    log(f"reflowed PDF written: {out_path}"
+        + (f" ({device})" if geo else ""))
     return out_path

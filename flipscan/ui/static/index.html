@@ -1343,10 +1343,11 @@ safe fixes auto-apply so you can focus on what's left">🔎 Re-read all stuck pa
       <div class="row" style="margin-bottom:.6rem">
         <label style="margin:0">Target device</label>
         <select id="build-device" style="width:auto">
-          ${["none","xteink-x3","xteink-x4","eink-6in","tablet"].map(d =>
+          ${["none","xteink-x3","xteink-x4","eink-6in","remarkable-2","tablet"].map(d =>
             `<option>${d}</option>`).join("")}
         </select>
-        <span class="meta">images resized/grayscaled for small e-ink readers</span>
+        <span class="meta">images resized/grayscaled for e-ink; the reflowed PDF
+          is also page-sized &amp; e-ink-typeset to the device</span>
       </div>
       <div class="row">
         ${["epub","pdf-facsimile","pdf","markdown"].map(f =>

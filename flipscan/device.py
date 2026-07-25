@@ -15,6 +15,9 @@ PROFILES: dict[str, dict] = {
     "xteink-x3": {"max_w": 480, "max_h": 800, "grayscale": True, "jpeg_q": 85},
     "xteink-x4": {"max_w": 480, "max_h": 800, "grayscale": True, "jpeg_q": 85},
     "eink-6in": {"max_w": 758, "max_h": 1024, "grayscale": True, "jpeg_q": 85},
+    # reMarkable 2: 1404x1872 grayscale panel (canvas geometry from reCompose,
+    # MIT-licensed, github.com/mrodger/reCompose)
+    "remarkable-2": {"max_w": 1404, "max_h": 1872, "grayscale": True, "jpeg_q": 85},
     "tablet": {"max_w": 1200, "max_h": 1600, "grayscale": False, "jpeg_q": 88},
 }
 

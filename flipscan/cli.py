@@ -230,7 +230,7 @@ def build(directory: Path, output, formats, title, author, device):
             build_pdf_facsimile(ws, out, title=title, device=device, log=click.echo)
         else:
             from .build_pdf import build_pdf_reflowed
-            build_pdf_reflowed(ws, out, title=title, log=click.echo)
+            build_pdf_reflowed(ws, out, title=title, device=device, log=click.echo)
 
 
 # ---------------------------------------------------------------- status

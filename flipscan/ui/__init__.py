@@ -1905,7 +1905,9 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)
         ext = {"epub": "epub", "markdown": "zip"}.get(format, "pdf")
         suffix = {"pdf-facsimile": "-facsimile", "markdown": "-markdown"}.get(format, "")
-        if device != "none" and format not in ("pdf", "markdown"):
+        # the reflowed PDF is now device-aware too (page geometry + e-ink
+        # typography); only the markdown zip ignores the device
+        if device != "none" and format != "markdown":
             suffix += f"-{device}"
         out = ws.dir("out") / f"{ws.root.name}{suffix}.{ext}"
         try:
@@ -1918,7 +1920,7 @@ def create_app(root: Path) -> FastAPI:
                 build_pdf_facsimile(ws, out, device=device, log=lambda m: None)
             elif format == "pdf":
                 from ..build_pdf import build_pdf_reflowed
-                build_pdf_reflowed(ws, out, log=lambda m: None)
+                build_pdf_reflowed(ws, out, device=device, log=lambda m: None)
             elif format == "markdown":
                 from ..build_markdown import build_markdown_zip
                 build_markdown_zip(ws, out,

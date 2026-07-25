@@ -68,7 +68,7 @@ A distinct, non-destructive layer: each chapter is checked and comes back as a l
 ![Proof tab](docs/tabs/proof.png)
 
 ### Output — build & read
-Build **EPUB**, **PDF facsimile**, **reflowed PDF**, or a **Markdown zip** (Markdown + `images/`, YAML frontmatter — portable to Obsidian/Typora/Pandoc), optionally sized for a target e-ink device. Outputs are marked **stale** the moment any page, figure, or proof changes. EPUBs get a **read-in-browser** link — a built-in reader with chapter navigation, light/dark, font sizing, per-figure re-crop/re-capture, and flag-this-passage.
+Build **EPUB**, **PDF facsimile**, **reflowed PDF**, or a **Markdown zip** (Markdown + `images/`, YAML frontmatter — portable to Obsidian/Typora/Pandoc), optionally sized for a target e-ink device. Pick a **Target device** (e.g. **reMarkable 2**) and images are resized/grayscaled *and* the reflowed PDF is page-sized to the exact panel with e-ink-tuned typography (darker greys, open leading, no widows/orphans) so it's readable at native scale with no on-device zoom. Outputs are marked **stale** the moment any page, figure, or proof changes. EPUBs get a **read-in-browser** link — a built-in reader with chapter navigation, light/dark, font sizing, per-figure re-crop/re-capture, and flag-this-passage.
 
 ![Output tab](docs/tabs/output.png)
 
@@ -189,6 +189,10 @@ flipscan worker [--root DIR]                       run the job worker as its own
 - **Curled text bows near the spine** — set `[preprocess] dewarp = true` and re-run `--stage preprocess` (then transcribe onward with `--force`).
 - **ffmpeg not found** — install it (`winget install Gyan.FFmpeg` / `apt install ffmpeg`) or set `FLIPSCAN_FFMPEG`.
 - **Ollama unreachable from Docker** — use the Ollama box's LAN IP in `FLIPSCAN_OLLAMA_URL`.
+
+## Acknowledgments
+
+The reMarkable-2 / e-ink PDF preset — exact canvas geometry (157.8 × 210.4 mm, 10 mm margins) and the e-ink typography choices (darker greys, open leading, widow/orphan control) — is adapted from [**reCompose**](https://github.com/mrodger/reCompose) by [mrodger](https://github.com/mrodger), an MIT-licensed Markdown → reMarkable 2 PDF pipeline. Thanks!
 
 ## License
 
