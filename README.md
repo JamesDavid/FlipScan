@@ -188,4 +188,8 @@ flipscan worker [--root DIR]                       run the job worker as its own
 - **ffmpeg not found** — install it (`winget install Gyan.FFmpeg` / `apt install ffmpeg`) or set `FLIPSCAN_FFMPEG`.
 - **Ollama unreachable from Docker** — use the Ollama box's LAN IP in `FLIPSCAN_OLLAMA_URL`.
 
+## License
+
+FlipScan is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md) — free to use, modify, and share for any **noncommercial** purpose (personal use, research, education). Commercial use requires a separate license. Copyright © 2026 James Busch.
+
 Personal-use digitization of books you own; no DRM circumvention involved.

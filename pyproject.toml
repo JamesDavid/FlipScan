@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Turn an iPhone slow-motion video of thumbing through a book into a clean EPUB"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "PolyForm-Noncommercial-1.0.0" }
 dependencies = [
     "click>=8.1",
     "numpy>=1.26",
