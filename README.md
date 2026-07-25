@@ -55,6 +55,8 @@ Every page as a three-row cell: source frame, editable Markdown transcription, a
 ### Contents — the table of contents, editable
 One place to see and edit the whole chapter structure. It shows the effective chapter list the built book uses — one row per chapter at its start page, tagged **manual** (a heading you set) or **heading** (detected from the page). Edit a title inline, add a chapter (pick the page it starts on), or remove a manual one; every change writes a section heading on that page, so the Pages filter, Proof tab, and EPUB stay in sync. **Auto-detect from the printed contents page** matches each parsed entry to the page with that printed number and fills the headings in — and runs once automatically the first time you open the tab on a book that has a printed contents page but no chapters yet.
 
+![Contents tab](docs/tabs/contents.png)
+
 ### Figures — captions, crops, real-duplicate detection
 Every figure in book order, each with an **editable caption** and re-crop / re-upload / **rotate** (90° CW/CCW) / re-acquire / delete. A perspective-correcting **corner crop tool** — corner handles plus **edge-midpoint handles** that slide a whole side of the box in or out, a magnifier loupe, and an edge-detection "magic crop" (optional Claude-vision refinement) — fixes bounding boxes. A figure you **re-acquire** by shooting a dedicated close-up is kept as its own standalone image (re-cropping trims the close-up, not the page) and survives later re-transcribes. Pages with several figures each keep their own caption — a **⇅ swap** fixes transposed captions — and only genuinely identical images (matched by perceptual hash) are flagged as duplicates.
 
