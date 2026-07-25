@@ -16,7 +16,7 @@ You give the book a **title** (or look it up) — the folder name is a unique sl
 
 You can mix all three in one project; page order is reconciled from printed page numbers.
 
-- **Flip-through video** — the fastest for a whole book. Film yourself thumbing through it (any direction, any subset, as many videos as you like). Page turns split each video into page captures. Upside-down videos are auto-detected.
+- **Flip-through video** — the fastest for a whole book. **Film it in slow-motion mode** (e.g. 120/240 fps): the extra frames per page turn give FlipScan a sharp, flat frame to pick for every page, which makes the biggest difference to output quality. Thumb through the book (any direction, any subset, as many videos as you like); page turns split each video into page captures, and upside-down videos are auto-detected.
 - **Photos** — for the cover, inside-cover text, or any page a video missed. Deliberate photos are used exactly as framed (no warping/cropping). Orientation is auto-checked per shot.
 - **PDF** — the alternative to filming: every PDF page is rendered and imported as a page, in authoritative order. Great for scans or born-digital PDFs — including compilations where several works are concatenated and printed page numbers repeat (each restarting at page 1), which are kept in order rather than merged.
 
@@ -33,7 +33,7 @@ You can mix all three in one project; page order is reconciled from printed page
 ### Pipeline — run, status, reshoot list, capture wizard
 Run/resume the pipeline, watch live per-stage progress, and see the **reshoot list** and **missing-pages** gaps. The **capture wizard** steps you through weak or missing pages one at a time; **🔍 Review these** flips through flagged pages so you can agree or dismiss before capturing.
 
-Long work — the pipeline itself, and every chapter proofread and page re-read — runs as a **durable background job**, not inside the request. Close the tab, sleep the phone, or restart the server and the work keeps going; a run interrupted mid-way is automatically requeued and resumes on the next start. Progress and logs are replayed on reconnect, and a hung model call times out and retries instead of wedging the run forever.
+Long work — the pipeline itself, and every chapter proofread and page re-read — runs as a **durable background job**, not inside the request. Close the tab, sleep the phone, or restart the server and the work keeps going; a run interrupted mid-way is automatically requeued and resumes on the next start. Progress and logs are replayed on reconnect, and a hung model call times out and retries instead of wedging the run forever. A sidebar **job-queue chip** shows what's active (e.g. *proofread ch4 · +3 queued*) and opens a **Job queue** panel — the running job with its live log and a Cancel button, the queue in order, and recent results.
 
 ![Pipeline tab](docs/tabs/pipeline.png)
 
@@ -52,13 +52,16 @@ Every page as a three-row cell: source frame, editable Markdown transcription, a
 
 ![Pages tab](docs/tabs/pages.png)
 
+### Contents — the table of contents, editable
+One place to see and edit the whole chapter structure. It shows the effective chapter list the built book uses — one row per chapter at its start page, tagged **manual** (a heading you set) or **heading** (detected from the page). Edit a title inline, add a chapter (pick the page it starts on), or remove a manual one; every change writes a section heading on that page, so the Pages filter, Proof tab, and EPUB stay in sync. **Auto-detect from the printed contents page** matches each parsed entry to the page with that printed number and fills the headings in — and runs once automatically the first time you open the tab on a book that has a printed contents page but no chapters yet.
+
 ### Figures — captions, crops, real-duplicate detection
 Every figure in book order, each with an **editable caption** and re-crop / re-upload / **rotate** (90° CW/CCW) / re-acquire / delete. A perspective-correcting **corner crop tool** — corner handles plus **edge-midpoint handles** that slide a whole side of the box in or out, a magnifier loupe, and an edge-detection "magic crop" (optional Claude-vision refinement) — fixes bounding boxes. A figure you **re-acquire** by shooting a dedicated close-up is kept as its own standalone image (re-cropping trims the close-up, not the page) and survives later re-transcribes. Pages with several figures each keep their own caption — a **⇅ swap** fixes transposed captions — and only genuinely identical images (matched by perceptual hash) are flagged as duplicates.
 
 ![Figures tab](docs/tabs/figures.png)
 
 ### Proof — chapter-by-chapter proofread
-A distinct, non-destructive layer: each chapter is checked and comes back as a list of small fixes (OCR misreads, hyphenation, garbled passages). Safe fixes auto-apply to a *proofed copy*; ambiguous ones wait for a click; notes you resolve yourself with **✎ write a fix**, **👁 view page** (a movable pane of the source image beside the quote), or **🔎 re-read page** (the vision model re-reads the passage from the page image). **Re-read all stuck pages** does that in bulk so you focus only on what's left. Each proofread and re-read runs as a **durable background job**, so closing the tab or a dropped connection won't lose the minutes of model work. The page OCR text is never touched, and nothing reaches the built book until you **Accept** a chapter.
+A distinct, non-destructive layer: each chapter is checked and comes back as a list of small fixes (OCR misreads, hyphenation, garbled passages). Safe fixes auto-apply to a *proofed copy*; ambiguous ones wait for a click; notes you resolve yourself with **✎ write a fix**, **👁 view page** (a movable pane of the source image beside the quote), or **🔎 re-read page** (the vision model re-reads the passage from the page image). **Re-read all stuck pages** does that in bulk so you focus only on what's left. Each proofread and re-read runs as a **durable background job** — and several chapters proofread **in parallel** — so "proofread all" moves quickly and closing the tab or a dropped connection won't lose the minutes of model work. The page OCR text is never touched, and nothing reaches the built book until you **Accept** a chapter.
 
 ![Proof tab](docs/tabs/proof.png)
 
@@ -99,7 +102,7 @@ Use `--host 127.0.0.1` to keep the GUI private to this machine.
 
 Set globally in Settings (⚙) or per-workspace `config.toml`.
 
-- **Ollama** (default): your existing Ollama server. Free, private, slower and less accurate on dense text. Requests use `format: json` and a strict schema.
+- **Ollama** (default): your existing Ollama server. Free, private, slower and less accurate on dense text. Requests use `format: json` and a strict schema. Developed and tested with **`gemma4:31b`** (a vision model with a good accuracy/speed balance for page transcription) — `ollama pull gemma4:31b`, then set it in Settings (⚙) or as `ollama_model`.
 - **Anthropic**: higher accuracy, via the **Message Batches API** (50% discount; a 300-page book is one batch). A settings toggle disables all API calls while keeping your key saved, so you never spend by accident.
 - **Hybrid**: every page goes through Ollama first; only pages that come back low-confidence, malformed, or flagged are re-run through Anthropic. Tune via `escalate_on`.
 - **Mock**: placeholder text, no model calls — for testing the plumbing.
@@ -110,7 +113,7 @@ Set globally in Settings (⚙) or per-workspace `config.toml`.
 ingest → extract → score → cluster → select → preprocess → transcribe → figures → assemble → build
 ```
 
-Every stage is idempotent and resumable; state lives in the workspace's `manifest.json` (page-by-page, so an interrupted run resumes where it stopped). Runs, proofreads, and page re-reads execute in a **durable SQLite job queue** (`jobs.db` in the projects root) worked by a background thread — or, under Docker, a dedicated worker process. A job survives a server restart or a dropped browser connection: anything left mid-flight is automatically requeued and resumes on the next start, and a hung model call times out and retries rather than wedging the run. `flipscan ui` runs the worker in-process (self-contained); `flipscan worker` runs it standalone.
+Every stage is idempotent and resumable; state lives in the workspace's `manifest.json` (page-by-page, so an interrupted run resumes where it stopped). Runs, proofreads, and page re-reads execute in a **durable SQLite job queue** (`jobs.db` in the projects root) worked by a background thread — or, under Docker, a dedicated worker process. A job survives a server restart or a dropped browser connection: anything left mid-flight is automatically requeued and resumes on the next start, and a hung model call times out and retries rather than wedging the run. Chapter proofreads run several in parallel (`FLIPSCAN_PROOF_CONCURRENCY`, default 3); the pipeline and manifest-mutating jobs stay serial. `flipscan ui` runs the worker in-process (self-contained); `flipscan worker` runs it standalone.
 
 | Stage | What it does | Writes |
 |---|---|---|
@@ -154,7 +157,7 @@ dewarp = false                   # cylindrical curl correction
 max_retries = 1
 ```
 
-Environment overrides: `FLIPSCAN_PROVIDER`, `FLIPSCAN_OLLAMA_URL`, `FLIPSCAN_OLLAMA_MODEL`, `FLIPSCAN_ANTHROPIC_MODEL`, `FLIPSCAN_ANTHROPIC_API_KEY` (falls back to `ANTHROPIC_API_KEY`), `FLIPSCAN_ROOT` (GUI projects folder), `FLIPSCAN_FFMPEG`/`FLIPSCAN_FFPROBE`.
+Environment overrides: `FLIPSCAN_PROVIDER`, `FLIPSCAN_OLLAMA_URL`, `FLIPSCAN_OLLAMA_MODEL`, `FLIPSCAN_ANTHROPIC_MODEL`, `FLIPSCAN_ANTHROPIC_API_KEY` (falls back to `ANTHROPIC_API_KEY`), `FLIPSCAN_ROOT` (GUI projects folder), `FLIPSCAN_FFMPEG`/`FLIPSCAN_FFPROBE`, `FLIPSCAN_PROOF_CONCURRENCY` (chapters proofread in parallel, default 3), `FLIPSCAN_EXTERNAL_WORKER=1` (web only enqueues; a separate `flipscan worker` runs the jobs).
 
 ## CLI reference
 
