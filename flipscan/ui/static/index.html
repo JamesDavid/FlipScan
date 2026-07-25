@@ -134,6 +134,8 @@
                       font-size:.8rem; }
   #peek-body { max-height:74vh; overflow:auto; background:#0c0a09; }
   #peek-body img { display:block; }
+  @keyframes fs-spin { to { transform: rotate(360deg); } }
+  .spin { display:inline-block; animation: fs-spin 1.8s linear infinite; }
 </style>
 </head>
 <body>
@@ -142,6 +144,10 @@
   <h1>FlipScan</h1>
   <span id="nav-current"></span>
   <div id="global-status" style="display:none;background:#0d9488;color:#fff;
+       border-radius:999px;padding:.3rem .8rem;font-size:.75rem;margin-bottom:.8rem;
+       white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+  <div id="jobs-chip" onclick="openJobsModal()" title="show the job queue"
+       style="display:none;cursor:pointer;background:#1c1917;color:#fafaf9;
        border-radius:999px;padding:.3rem .8rem;font-size:.75rem;margin-bottom:.8rem;
        white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
   <div id="nav-drawer">
@@ -153,6 +159,22 @@
   </div>
 </aside>
 <main id="main"><div class="card">Select or create a project.</div></main>
+
+<div id="jobs-modal" style="display:none;position:fixed;inset:0;z-index:60;
+     background:rgba(0,0,0,.6);align-items:flex-start;justify-content:center;
+     padding:4vh 2vw" onclick="if(event.target===this)closeJobsModal()">
+  <div style="background:#fff;border-radius:10px;padding:1rem;max-width:640px;
+       width:100%;max-height:90vh;overflow:auto">
+    <div class="row" style="margin-bottom:.6rem">
+      <h2 style="margin:0">Job queue</h2>
+      <span class="meta" style="margin:0">background work — the pipeline, proofreads,
+        and re-reads run here and survive restarts</span>
+      <button class="secondary" style="margin-left:auto"
+              onclick="closeJobsModal()">Close</button>
+    </div>
+    <div id="jobs-body"><div class="meta">loading…</div></div>
+  </div>
+</div>
 
 <script>
 let current = null;
@@ -364,6 +386,109 @@ async function createProject() {
 function toggleNav() { $("nav-drawer").classList.toggle("open"); }
 function closeNav() { $("nav-drawer").classList.remove("open"); }
 
+// ---- job queue: live sidebar chip + modal (running item, progress, queue)
+let jobsBaseTimer = null, jobsModalTimer = null;
+function jobsModalOpen() {
+  const m = $("jobs-modal"); return m && m.style.display === "flex";
+}
+function prettyJob(j) {
+  return j.label || ({pipeline: "pipeline run", "proof-chapter": "proofread",
+    "proof-resolve": "re-read passage", "proof-reread-stuck": "re-read stuck",
+    "retry-ocr": "retry OCR"}[j.kind] || j.kind);
+}
+function jobElapsed(startedAt) {
+  if (!startedAt) return "";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - startedAt));
+  return s < 90 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+function updateJobsChip(jobs) {
+  const chip = $("jobs-chip"); if (!chip) return;
+  const running = jobs.filter(j => j.status === "running");
+  const queued = jobs.filter(j => j.status === "queued");
+  if (!running.length && !queued.length) { chip.style.display = "none"; return; }
+  chip.style.display = "block";
+  const r = running[0];
+  chip.innerHTML = `<span class="spin">⚙</span> `
+    + (r ? esc(prettyJob(r)) : "starting…")
+    + (queued.length ? ` · +${queued.length} queued` : "");
+}
+function startJobsPolling(name) {
+  clearInterval(jobsBaseTimer);
+  const tick = async () => {
+    if (name !== current) { clearInterval(jobsBaseTimer); return; }
+    let jobs;
+    try { jobs = (await api(`/projects/${name}/jobs`)).jobs || []; } catch { return; }
+    updateJobsChip(jobs);
+    if (jobsModalOpen()) renderJobsModal(jobs);
+  };
+  tick();
+  jobsBaseTimer = setInterval(tick, 2500);
+}
+function openJobsModal() {
+  $("jobs-modal").style.display = "flex";
+  clearInterval(jobsModalTimer);
+  const tick = async () => {
+    if (!current) return;
+    let jobs;
+    try { jobs = (await api(`/projects/${current}/jobs`)).jobs || []; } catch { return; }
+    renderJobsModal(jobs); updateJobsChip(jobs);
+  };
+  tick();
+  jobsModalTimer = setInterval(tick, 1200);
+}
+function closeJobsModal() {
+  $("jobs-modal").style.display = "none";
+  clearInterval(jobsModalTimer);
+}
+async function renderJobsModal(jobs) {
+  const box = $("jobs-body"); if (!box) return;
+  const running = jobs.filter(j => j.status === "running");
+  const queued = jobs.filter(j => j.status === "queued");
+  const recent = jobs.filter(j => ["done", "error", "canceled"].includes(j.status)).slice(0, 8);
+  const icon = {done: "✓", error: "✗", canceled: "⊘"};
+  let runHtml = "";
+  if (running.length) {
+    const j = running[0];
+    let tail = "working…";
+    try {
+      const { logs } = await api(`/jobs/${j.id}/logs`);
+      if (logs && logs.length) tail = logs.slice(-10).map(l => esc(l.line)).join("\n");
+    } catch {}
+    runHtml = `<div class="card" style="border:2px solid var(--accent)">
+      <div class="row" style="align-items:center">
+        <span class="spin">⚙</span> <b>${esc(prettyJob(j))}</b>
+        <span class="meta" style="margin:0">running ${jobElapsed(j.started_at)}</span>
+        <button class="secondary" style="margin-left:auto;padding:.2rem .6rem"
+          onclick="cancelJob(${j.id})">Cancel</button>
+      </div>
+      <pre style="max-height:200px;overflow:auto;background:#0c0a09;color:#d6d3d1;
+        padding:.5rem;border-radius:6px;font-size:.72rem;white-space:pre-wrap;
+        margin:.5rem 0 0">${tail}</pre></div>`;
+  }
+  const queuedHtml = queued.length ? `<div class="card">
+    <b>Queued (${queued.length})</b>
+    <ol style="margin:.3rem 0 0;padding-left:1.3rem">${queued.map(j =>
+      `<li style="margin:.2rem 0">${esc(prettyJob(j))}
+        <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+          onclick="cancelJob(${j.id})">✕</button></li>`).join("")}</ol></div>` : "";
+  const recentHtml = `<div class="card"><b>Recent</b>${recent.length
+    ? `<ul style="margin:.3rem 0 0;padding-left:1.1rem;list-style:none">${recent.map(j =>
+        `<li style="margin:.2rem 0">${icon[j.status] || ""} ${esc(prettyJob(j))}
+          <span class="meta" style="margin:0">— ${j.status}${
+            j.error ? ": " + esc(j.error.slice(0, 70)) : ""}</span></li>`).join("")}</ul>`
+    : `<div class="meta">no finished jobs yet</div>`}</div>`;
+  box.innerHTML = (runHtml || (queued.length ? ""
+    : `<div class="card"><div class="meta">Nothing running right now.</div></div>`))
+    + queuedHtml + recentHtml;
+}
+async function cancelJob(id) {
+  try { await api(`/jobs/${id}/cancel`, {method: "POST"}); }
+  catch (e) { /* already finished — ignore */ }
+  if (jobsModalOpen()) {
+    try { renderJobsModal((await api(`/projects/${current}/jobs`)).jobs || []); } catch {}
+  }
+}
+
 async function deleteProject(name) {
   if (!confirm(`Delete the project "${name}" and ALL its videos, frames, `
              + `pages, and outputs?\n\nThis cannot be undone.`)) return;
@@ -553,6 +678,7 @@ async function openProject(name, tab) {
   <div id="tabbody"></div>`;
   if (p.running) attachEvents(name);
   startProgress(name);
+  startJobsPolling(name);
   renderTab(tab || "pipeline", p);
 }
 
