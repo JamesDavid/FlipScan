@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from ..config import load_config, save_global_config
 from ..jobs import CANCELED, DONE, ERROR, JobQueue
-from ..jobs_handlers import default_concurrency, register_handlers
+from ..jobs_handlers import concurrency_config, register_handlers
 from ..project import create_project, retry_ocr_page
 from ..workspace import STAGES, Workspace
 
@@ -141,7 +141,12 @@ def create_app(root: Path) -> FastAPI:
     # durable job queue: heavy work (pipeline, proofread, re-reads) runs here,
     # in a background worker, as SQLite rows — so it survives restarts and
     # dropped requests instead of dying with the process or the browser tab.
-    jobq = JobQueue(root / "jobs.db", concurrency=default_concurrency())
+    _lane_caps, _kind_lanes = concurrency_config()
+    jobq = JobQueue(root / "jobs.db", lane_caps=_lane_caps, kind_lanes=_kind_lanes)
+    # jobs that mutate a project's manifest and must never overlap FOR THE SAME
+    # PROJECT — the pipeline and the ingest jobs. (Different projects are fine;
+    # the import lane is independent of the main lane.)
+    _EXCLUSIVE_KINDS = ("pipeline", "pdf-import", "video-import")
 
     def ws_for(name: str) -> Workspace:
         target = (root / name).resolve()
@@ -370,8 +375,8 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/projects/{name}/run")
     def run_project(name: str, provider: str | None = None, force: bool = False):
         ws_for(name)  # 404 if unknown
-        if jobq.active(name, ("pipeline",)):
-            raise HTTPException(409, "already running")
+        if jobq.active(name, _EXCLUSIVE_KINDS):
+            raise HTTPException(409, "already running (or an import is in progress)")
         job_id = jobq.enqueue(name, "pipeline",
                               {"provider": provider, "force": force},
                               label="pipeline")
@@ -539,18 +544,21 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/videos")
     async def add_video_endpoint(name: str, video: UploadFile):
+        """Upload a video and enqueue its import as a durable job (probing +
+        adding pages can take a while on a long clip)."""
         ws = ws_for(name)
-        if jobq.active(name, ("pipeline",)) is not None:
-            raise HTTPException(409, "pipeline is running — wait for it to finish")
-        uploads = root / "uploads"
+        if jobq.active(name, _EXCLUSIVE_KINDS) is not None:
+            raise HTTPException(409, "an import or pipeline run is already in "
+                                     "progress — wait for it to finish")
+        uploads = ws.root / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
         dest = uploads / Path(video.filename or "video.mov").name
         with open(dest, "wb") as f:
             while chunk := await video.read(1 << 22):
                 f.write(chunk)
-        from ..project import add_video
-        entry = await asyncio.to_thread(add_video, ws, dest, log=lambda m: None)
-        return {"ok": True, "id": entry["id"]}
+        job_id = jobq.enqueue(name, "video-import", {"path": str(dest)},
+                              label=f"import {dest.name}")
+        return {"ok": True, "job_id": job_id}
 
     @app.put("/api/projects/{name}/videos/{vid}")
     def set_video_rotation(name: str, vid: str, rotate: int):
@@ -567,30 +575,22 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/pdf")
     async def add_pdf(name: str, pdf: UploadFile):
-        """Import a whole book from a PDF — the alternative to filming it."""
+        """Upload a PDF and enqueue its import as a durable job — rendering
+        every page can take minutes, so it runs on the worker (survives a
+        closed tab or a restart) and shows up in the job queue."""
         ws = ws_for(name)
-        if jobq.active(name, ("pipeline",)) is not None:
-            raise HTTPException(409, "pipeline is running — wait for it to finish")
-        cfg = load_config(ws.root)
+        if jobq.active(name, _EXCLUSIVE_KINDS) is not None:
+            raise HTTPException(409, "an import or pipeline run is already in "
+                                     "progress — wait for it to finish")
         uploads = ws.root / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
         dest = uploads / Path(pdf.filename or "book.pdf").name
         with open(dest, "wb") as f:
             while chunk := await pdf.read(1 << 22):
                 f.write(chunk)
-        from ..project import add_pages_from_pdf
-        try:
-            n = await asyncio.to_thread(add_pages_from_pdf, ws, cfg, dest,
-                                        lambda m: None)
-        except Exception as e:
-            raise HTTPException(400, f"PDF import failed: {e}")
-        finally:
-            try:
-                dest.unlink(missing_ok=True)   # never let cleanup mask success
-            except OSError:
-                pass
-        return {"ok": True, "pages": n,
-                "next": "run the pipeline to transcribe them"}
+        job_id = jobq.enqueue(name, "pdf-import", {"path": str(dest)},
+                              label=f"import {dest.name}")
+        return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/pages/add")
     async def add_page(name: str, photo: UploadFile, position: str = "end",

@@ -65,26 +65,33 @@ Handler = Callable[[str, dict, Callable[[str], None], Callable[[], bool]], Any]
 
 class JobQueue:
     def __init__(self, db_path: str | Path,
-                 concurrency: dict[str, int] | None = None) -> None:
+                 lane_caps: dict[str, int] | None = None,
+                 kind_lanes: dict[str, str] | None = None) -> None:
         self.db_path = str(db_path)
         self._local = threading.local()          # one sqlite conn per thread
         self._handlers: dict[str, Handler] = {}
         self._wake = threading.Event()           # enqueue -> wake a worker
         self._stopping = threading.Event()
         self._workers: list[threading.Thread] = []
-        # per-kind max simultaneous jobs (default 1 = serial). Only kinds that
-        # don't mutate the shared manifest are safe above 1 — e.g. chapter
-        # proofreads write their own per-chapter file. The worker pool has one
-        # thread per unit of the largest cap so the concurrency is real.
-        self.concurrency = dict(concurrency or {})
-        self.default_cap = 1
-        self.pool_size = max([1, *self.concurrency.values()])
+        # Concurrency is per LANE, not per kind. Every kind that mutates the
+        # shared manifest belongs to the serial "main" lane (cap 1) so only one
+        # runs at a time and they never race on manifest.json. Manifest-safe
+        # kinds get their own parallel lane — chapter proofreads write their own
+        # per-chapter file, so they run several at once. The worker pool has one
+        # thread per unit of total lane capacity so the concurrency is real.
+        self.lane_caps = dict(lane_caps or {"main": 1})
+        self.kind_lanes = dict(kind_lanes or {})   # kind -> lane; default "main"
+        self.default_lane = "main"
+        self.pool_size = max(1, sum(self.lane_caps.values()))
         self._claim_lock = threading.Lock()      # serialize claim decisions
         self._conn().executescript(_SCHEMA)
         self._migrate()
 
-    def _cap(self, kind: str) -> int:
-        return self.concurrency.get(kind, self.default_cap)
+    def _lane(self, kind: str) -> str:
+        return self.kind_lanes.get(kind, self.default_lane)
+
+    def _lane_cap(self, lane: str) -> int:
+        return self.lane_caps.get(lane, 1)
 
     def _migrate(self) -> None:
         """Add columns introduced after a DB was first created."""
@@ -233,18 +240,21 @@ class JobQueue:
             (job_id, time.time(), line))
 
     def _claim(self) -> dict | None:
-        # Serialize claim decisions across the worker pool so the per-kind
+        # Serialize claim decisions across the worker pool so the per-lane
         # running counts stay consistent: claim the oldest queued job whose
-        # kind is below its concurrency cap.
+        # lane is below its concurrency cap.
         with self._claim_lock:
             c = self._conn()
-            running = {row["kind"]: row["n"] for row in c.execute(
-                "SELECT kind, count(*) n FROM jobs WHERE status='running' "
-                "GROUP BY kind")}
+            running: dict[str, int] = {}
+            for row in c.execute("SELECT kind, count(*) n FROM jobs "
+                                 "WHERE status='running' GROUP BY kind"):
+                lane = self._lane(row["kind"])
+                running[lane] = running.get(lane, 0) + row["n"]
             for r in c.execute("SELECT * FROM jobs WHERE status='queued' "
                                "ORDER BY id"):
-                if running.get(r["kind"], 0) >= self._cap(r["kind"]):
-                    continue                      # this kind is at capacity
+                lane = self._lane(r["kind"])
+                if running.get(lane, 0) >= self._lane_cap(lane):
+                    continue                      # this lane is at capacity
                 upd = c.execute(
                     "UPDATE jobs SET status='running', started_at=?, cancel=0 "
                     "WHERE id=? AND status='queued'", (time.time(), r["id"]))

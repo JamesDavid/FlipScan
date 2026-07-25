@@ -394,7 +394,8 @@ function jobsModalOpen() {
 function prettyJob(j) {
   return j.label || ({pipeline: "pipeline run", "proof-chapter": "proofread",
     "proof-resolve": "re-read passage", "proof-reread-stuck": "re-read stuck",
-    "retry-ocr": "retry OCR"}[j.kind] || j.kind);
+    "retry-ocr": "retry OCR", "pdf-import": "PDF import",
+    "video-import": "video import"}[j.kind] || j.kind);
 }
 function jobElapsed(startedAt) {
   if (!startedAt) return "";
@@ -1449,19 +1450,21 @@ async function addVideoToProject() {
   const fd = new FormData();
   fd.append("video", input.files[0]);
   try {
-    const r = await uploadXHR(`/api/projects/${current}/videos`, fd,
-                    pct => btn.textContent = `uploading ${pct}%`);
+    const up = await uploadXHR(`/api/projects/${current}/videos`, fd,
+                    pct => btn.textContent = pct < 100 ? `uploading ${pct}%` : "processing…");
+    const j = await waitForJob(up.job_id, line => btn.textContent = line.slice(0, 40));
+    const vid = j.result && j.result.id;
     // orientation: auto-detected during processing unless the user knows
     const o = prompt(
       "Video added.\n\nWas it shot upside down?\n" +
       "  a = auto-detect (recommended — checked during processing)\n" +
       "  y = yes, it's upside down\n" +
       "  n = no, normal orientation", "a");
-    if (o && r?.id) {
+    if (o && vid) {
       const v = o.trim().toLowerCase();
-      if (v === "y") await api(`/projects/${current}/videos/${r.id}?rotate=180`,
+      if (v === "y") await api(`/projects/${current}/videos/${vid}?rotate=180`,
                                {method: "PUT"});
-      else if (v === "n") await api(`/projects/${current}/videos/${r.id}?rotate=0`,
+      else if (v === "n") await api(`/projects/${current}/videos/${vid}?rotate=0`,
                                     {method: "PUT"});
       // "a" (or anything else): leave unset — preprocess auto-detects
     }
@@ -1480,11 +1483,15 @@ async function addPdfToProject() {
   const fd = new FormData();
   fd.append("pdf", input.files[0]);
   try {
-    btn.textContent = "importing…";
-    const r = await uploadXHR(`/api/projects/${current}/pdf`, fd,
+    btn.textContent = "uploading…";
+    const up = await uploadXHR(`/api/projects/${current}/pdf`, fd,
                     pct => btn.textContent = pct < 100
-                      ? `uploading ${pct}%` : "rendering pages…");
-    if (confirm(`${r.pages} pages imported from the PDF. Run the pipeline ` +
+                      ? `uploading ${pct}%` : "importing…");
+    // rendering every page runs on the worker now — poll it (survives a
+    // closed tab; also visible in the job-queue panel)
+    const j = await waitForJob(up.job_id, line => btn.textContent = line.slice(0, 40));
+    const pages = j.result && j.result.pages;
+    if (confirm(`${pages} pages imported from the PDF. Run the pipeline ` +
                 `now to transcribe them?`)) {
       await api(`/projects/${current}/run`, {method:"POST"});
     }

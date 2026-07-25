@@ -18,17 +18,32 @@ from .project import retry_ocr_page, run_pipeline
 from .workspace import Workspace
 
 
-def default_concurrency() -> dict[str, int]:
-    """How many jobs of each kind may run at once. Only kinds that don't touch
-    the shared manifest are safe above 1: a chapter proofread writes its own
-    per-chapter file, so several run in parallel (default 3, override with
-    FLIPSCAN_PROOF_CONCURRENCY). Everything else — the pipeline, page re-reads,
-    retry-OCR — mutates the manifest and stays serial (cap 1)."""
+# Lanes group jobs by how they may overlap:
+#   main   — LLM + manifest work (pipeline, page re-reads, retry-OCR). Serial:
+#            one at a time so they never race manifest.json or flood the model.
+#   proof  — chapter proofreads. Each writes its own per-chapter file, so they
+#            run several at once.
+#   import — PDF/video ingest. No LLM; a same-project import can't overlap that
+#            project's pipeline (blocked by the 409 gate), so this lane runs
+#            independently of `main` — an import never waits behind another
+#            book's pipeline.
+KIND_LANES = {
+    "proof-chapter": "proof",
+    "pdf-import": "import",
+    "video-import": "import",
+}
+
+
+def concurrency_config() -> tuple[dict[str, int], dict[str, str]]:
+    """(lane_caps, kind_lanes) for the JobQueue. 'proof' runs several chapter
+    proofreads at once (default 3, override with FLIPSCAN_PROOF_CONCURRENCY);
+    'main' and 'import' are serial within themselves but independent of each
+    other."""
     try:
         n = int(os.environ.get("FLIPSCAN_PROOF_CONCURRENCY", "3"))
     except ValueError:
         n = 3
-    return {"proof-chapter": max(1, n)}
+    return {"main": 1, "proof": max(1, n), "import": 1}, KIND_LANES
 
 
 def register_handlers(jobq: JobQueue, root: Path) -> None:
@@ -86,8 +101,32 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         retry_ocr_page(ws, params["page_id"])
         log(f"retry OCR complete for {params['page_id']}")
 
+    def pdf_import(project, params, log, should_cancel):
+        from .project import add_pages_from_pdf
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        dest = Path(params["path"])
+        try:
+            n = add_pages_from_pdf(ws, cfg, dest, log)
+        finally:
+            try:
+                dest.unlink(missing_ok=True)   # don't let cleanup mask success
+            except OSError:
+                pass
+        log(f"imported {n} pages from {dest.name}")
+        return {"pages": n}
+
+    def video_import(project, params, log, should_cancel):
+        from .project import add_video
+        ws = ws_for(project)
+        entry = add_video(ws, Path(params["path"]), log=log)
+        log(f"added video {entry['id']}")
+        return {"id": entry["id"]}
+
     jobq.register("pipeline", pipeline)
     jobq.register("proof-chapter", proof_chapter)
     jobq.register("proof-resolve", proof_resolve)
     jobq.register("proof-reread-stuck", proof_reread_stuck)
     jobq.register("retry-ocr", retry_ocr)
+    jobq.register("pdf-import", pdf_import)
+    jobq.register("video-import", video_import)
