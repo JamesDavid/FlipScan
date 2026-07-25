@@ -348,6 +348,7 @@ def create_app(root: Path) -> FastAPI:
             "pages": [{**p, "reasons": page_reasons(p)} for p in m["pages"]],
             "running": jobq.active(name, ("pipeline",)) is not None,
             "archived": bool(m.get("archived")),
+            "suppressed_headings": m.get("suppressed_headings") or {},
             "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
                         for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
@@ -817,6 +818,36 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True, "applied": applied, "skipped": skipped,
                 "unplaced": unplaced, "total": len(toc)}
+
+    @app.post("/api/projects/{name}/contents/suppress-heading")
+    def suppress_heading(name: str, page_id: str, title: str, on: bool = True):
+        """Delete (or restore) an auto-detected chapter heading that's a false
+        positive — OCR turned a line into a `# heading` that isn't a chapter.
+        Suppressing demotes it to plain text in the assembled book; the page's
+        own OCR file is never touched, and it's fully reversible."""
+        ws = ws_for(name)
+        sup = ws.manifest.setdefault("suppressed_headings", {})
+        titles = sup.get(page_id) or []
+        t = title.strip()
+        if on:
+            if t not in titles:
+                titles.append(t)
+            sup[page_id] = titles
+        else:
+            titles = [x for x in titles if x != t]
+            if titles:
+                sup[page_id] = titles
+            else:
+                sup.pop(page_id, None)
+        ws.stage_reset("assemble")
+        _reconcile(ws)
+        try:
+            from ..stages.assemble import run as assemble_run
+            assemble_run(ws, load_config(ws.root), log=lambda m: None)
+        except Exception:
+            pass
+        ws.save()
+        return {"ok": True, "suppressed": bool(on)}
 
     def _figure(ws, page_id: str, fig_idx: int):
         """Resolve (page, figure path, its region). fig_idx indexes

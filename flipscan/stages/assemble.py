@@ -234,6 +234,30 @@ def _insert_chapter_breaks(pages: list[dict], texts: list[str],
     return texts
 
 
+def _demote_suppressed_headings(pages: list[dict], texts: list[str],
+                                suppressed: dict) -> list[str]:
+    """The user flagged some auto-detected headings as false positives (OCR
+    turned a line into a `# heading` that isn't really a chapter). Demote those
+    to plain text in the assembled book so they stop opening a chapter and stop
+    rendering as a heading — the page's own OCR file is left untouched.
+    `suppressed` maps page_id -> list of heading titles to drop."""
+    if not suppressed:
+        return texts
+    for i, p in enumerate(pages):
+        titles = {t.strip() for t in (suppressed.get(p["id"]) or [])}
+        if not titles:
+            continue
+        lines = []
+        for ln in texts[i].splitlines():
+            m = re.match(r"^(#{1,6})\s+(.*)$", ln)
+            if m and m.group(2).strip() in titles:
+                lines.append(m.group(2))     # drop the leading #'s -> body text
+            else:
+                lines.append(ln)
+        texts[i] = "\n".join(lines)
+    return texts
+
+
 def _apply_manual_sections(pages: list[dict], texts: list[str]) -> list[str]:
     """A user-assigned section heading on a page outranks everything: that
     page opens a chapter with exactly that title."""
@@ -360,6 +384,8 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     # the book — the review/reshoot flow surfaces them instead
     texts = [re.sub(r"\[\[region-\d+\]\]\n?", "", t) for t in texts]
     texts = [heal_hyphenation(t) for t in texts]
+    texts = _demote_suppressed_headings(
+        kept, texts, ws.manifest.get("suppressed_headings") or {})
 
     # record each page's chapter (matches the built book's # chapter splits) so
     # the pages tab can filter by the real chapter structure, cover included

@@ -1147,6 +1147,10 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
       chapters.push({id: pg.id, title: ch, printed_number: pg.printed_number,
                      fromSection: !!pg.section});
     }
+    window._chapters = chapters;   // pass titles by index (avoids quote escaping)
+    const sup = p.suppressed_headings || {};
+    window._hiddenHeadings = Object.entries(sup)
+      .flatMap(([pid, titles]) => (titles || []).map(t => ({pageId: pid, title: t})));
     const toc = p.toc || [];
     // first open with no chapters but a printed contents page → seed it once
     if (!chapters.length && toc.length && !contentsAutodetected[name]) {
@@ -1176,7 +1180,7 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
           it updates that page. This is the same structure the Pages filter, Proof tab,
           and EPUB use, so a chapter's position follows its start page.</div>
         ${chapters.length ? `<ol style="padding-left:1.3rem;margin:.2rem 0">
-          ${chapters.map(ch => `<li style="margin:.4rem 0">
+          ${chapters.map((ch, ci) => `<li style="margin:.4rem 0">
             <div class="row" style="gap:.5rem;align-items:center">
               <input value="${esc(ch.title)}" style="flex:1;margin:0"
                 onchange="renameChapter('${ch.id}', this.value)">
@@ -1186,9 +1190,14 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
               <a href="javascript:void(0)" class="meta" style="white-space:nowrap"
                 onclick="gotoPage('${ch.id}')" title="go to this page"
                 >${ch.printed_number != null ? `p. ${ch.printed_number}` : ch.id} ↗</a>
-              ${ch.fromSection ? `<button class="secondary" style="padding:.2rem .55rem"
-                onclick="removeChapter('${ch.id}')"
-                title="clear this manual heading (the page stays)">✕</button>` : ""}
+              <button class="secondary" style="padding:.2rem .55rem"
+                onclick="${ch.fromSection
+                  ? `removeChapter('${ch.id}')`
+                  : `suppressHeadingIdx(${ci})`}"
+                title="${ch.fromSection ? "clear this manual heading (the page stays)"
+                  : "remove this auto-detected heading — an OCR false positive "
+                    + "(demoted to plain text in the book; your page OCR is kept; reversible)"}"
+                >✕</button>
             </div></li>`).join("")}
         </ol>` : `<div class="meta">No chapters yet.${toc.length ? ""
           : " No printed contents page was detected — add chapters below, or assign"
@@ -1205,6 +1214,16 @@ corner handles — covers especially" onclick="openPageCrop('${pg.id}')">
           <button onclick="addChapter()">Add</button>
         </div>
       </div>
+      ${window._hiddenHeadings.length ? `<div class="card">
+        <h2>Hidden headings <span class="meta">— auto-detected false positives you removed</span></h2>
+        <div class="meta" style="margin-bottom:.4rem">Demoted to plain text in the built
+          book; restore any that were actually chapters.</div>
+        <ul style="margin:.2rem 0;padding-left:1.2rem">${window._hiddenHeadings.map((h, hi) =>
+          `<li style="margin:.2rem 0">${esc(h.title)}
+            <span class="meta">(${h.pageId})</span>
+            <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+              onclick="restoreHeadingIdx(${hi})">restore</button></li>`).join("")}</ul>
+      </div>` : ""}
       ${toc.length ? `<div class="card">
         <h2>Printed contents page <span class="meta">— as OCR'd, for reference</span></h2>
         <ul class="meta" style="columns:2;column-gap:2rem">${toc.map(t =>
@@ -2149,6 +2168,27 @@ async function contentsAutodetect(replace, manual) {
     if (manual) alert(e.message); else console.warn("auto-detect contents:", e.message);
   }
   openProject(current, "contents");
+}
+
+async function suppressHeading(pageId, title, on) {
+  try {
+    await api(`/projects/${current}/contents/suppress-heading`
+      + `?page_id=${encodeURIComponent(pageId)}`
+      + `&title=${encodeURIComponent(title)}&on=${on}`, {method: "POST"});
+  } catch (e) { alert("failed: " + e.message); return; }
+  openProject(current, "contents");
+}
+function suppressHeadingIdx(ci) {
+  const ch = (window._chapters || [])[ci];
+  if (!ch) return;
+  if (!confirm(`Remove the auto-detected heading “${ch.title}”?\n\n`
+    + `It's demoted to plain text in the built book (your page OCR is untouched) `
+    + `and can be restored from "Hidden headings".`)) return;
+  suppressHeading(ch.id, ch.title, true);
+}
+function restoreHeadingIdx(hi) {
+  const h = (window._hiddenHeadings || [])[hi];
+  if (h) suppressHeading(h.pageId, h.title, false);
 }
 
 function openPageCrop(pageId) {
