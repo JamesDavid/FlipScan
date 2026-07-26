@@ -508,6 +508,12 @@ def create_app(root: Path) -> FastAPI:
     def project_jobs(name: str):
         return {"jobs": jobq.list(name, limit=30)}
 
+    @app.get("/api/jobs")
+    def all_jobs(limit: int = 40):
+        """The whole queue across every project — the worker is global, so the
+        UI's job panel is too."""
+        return {"jobs": jobq.list(None, limit=limit)}
+
     # ---------------- settings (global: applies to every project)
 
     @app.get("/api/settings")

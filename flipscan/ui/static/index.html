@@ -412,10 +412,12 @@ function jobsModalOpen() {
   const m = $("jobs-modal"); return m && m.style.display === "flex";
 }
 function prettyJob(j) {
-  return j.label || ({pipeline: "pipeline run", "proof-chapter": "proofread",
+  const base = j.label || ({pipeline: "pipeline run", "proof-chapter": "proofread",
     "proof-resolve": "re-read passage", "proof-reread-stuck": "re-read stuck",
     "retry-ocr": "retry OCR", "pdf-import": "PDF import",
     "video-import": "video import"}[j.kind] || j.kind);
+  // the queue is global (all books), so name the book
+  return j.project ? `${j.project} · ${base}` : base;
 }
 function jobElapsed(startedAt) {
   if (!startedAt) return "";
@@ -433,12 +435,12 @@ function updateJobsChip(jobs) {
     + (r ? esc(prettyJob(r)) : "starting…")
     + (queued.length ? ` · +${queued.length} queued` : "");
 }
-function startJobsPolling(name) {
-  clearInterval(jobsBaseTimer);
+// one global poller for the whole queue (all books) — never reset on switch
+function startJobsPolling() {
+  if (jobsBaseTimer) return;
   const tick = async () => {
-    if (name !== current) { clearInterval(jobsBaseTimer); return; }
     let jobs;
-    try { jobs = (await api(`/projects/${name}/jobs`)).jobs || []; } catch { return; }
+    try { jobs = (await api(`/jobs`)).jobs || []; } catch { return; }
     updateJobsChip(jobs);
     if (jobsModalOpen()) renderJobsModal(jobs);
   };
@@ -449,9 +451,8 @@ function openJobsModal() {
   $("jobs-modal").style.display = "flex";
   clearInterval(jobsModalTimer);
   const tick = async () => {
-    if (!current) return;
     let jobs;
-    try { jobs = (await api(`/projects/${current}/jobs`)).jobs || []; } catch { return; }
+    try { jobs = (await api(`/jobs`)).jobs || []; } catch { return; }
     renderJobsModal(jobs); updateJobsChip(jobs);
   };
   tick();
@@ -506,7 +507,7 @@ async function cancelJob(id) {
   try { await api(`/jobs/${id}/cancel`, {method: "POST"}); }
   catch (e) { /* already finished — ignore */ }
   if (jobsModalOpen()) {
-    try { renderJobsModal((await api(`/projects/${current}/jobs`)).jobs || []); } catch {}
+    try { renderJobsModal((await api(`/jobs`)).jobs || []); } catch {}
   }
 }
 
@@ -714,7 +715,7 @@ async function openProject(name, tab) {
   <div id="tabbody"></div>`;
   if (p.running) attachEvents(name);
   startProgress(name);
-  startJobsPolling(name);
+  startJobsPolling();
   renderTab(tab || "pipeline", p);
 }
 
@@ -2702,6 +2703,7 @@ async function restorePage(pageId) {
 }
 
 refreshProjects();
+startJobsPolling();   // global queue chip, independent of which book is open
 </script>
 </body>
 </html>
