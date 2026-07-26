@@ -19,7 +19,18 @@
   header button, header select {
     background:#44403c; color:#fafaf9; border:0; border-radius:6px;
     padding:.35rem .7rem; font-size:.85rem; cursor:pointer; max-width:9rem; }
-  #viewer { flex:1; min-height:0; background:#fff; position:relative; }
+  /* stage centres the reading surface; in "comfortable" mode the frame fills
+     it, in device mode the frame is a bezel scaled to the exact panel */
+  #stage { flex:1; min-height:0; display:flex; align-items:center;
+           justify-content:center; overflow:hidden; }
+  #stage.device { background:#c9c6c2; }
+  :root[data-theme="dark"] #stage.device { background:#000; }
+  #frame { position:relative; width:100%; height:100%; }
+  #frame.device { background:#111; border-radius:16px;
+                  box-shadow:0 8px 34px rgba(0,0,0,.45); }
+  #viewer { width:100%; height:100%; background:#fff; position:relative;
+            overflow:hidden; }
+  #viewer.eink { filter: grayscale(1) contrast(1.06) brightness(1.02); }
   footer { flex:none; padding:.3rem .8rem; font-size:.75rem; color:#78716c;
            text-align:center; background:#f5f5f4;
            padding-bottom: calc(.3rem + env(safe-area-inset-bottom)); }
@@ -41,16 +52,27 @@
   <a href="#" id="back">← back</a>
   <div class="title" id="title">loading…</div>
   <select id="toc" title="table of contents"><option>contents…</option></select>
+  <select id="device" title="read comfortably, or simulate a device's screen">
+    <option value="none">comfortable</option>
+    <option value="remarkable-2">reMarkable 2</option>
+    <option value="eink-6in">6″ e-ink</option>
+    <option value="xteink-x3">Xteink X3</option>
+    <option value="tablet">tablet</option>
+  </select>
   <button id="theme" title="light / dark">🌗</button>
   <button id="font-minus" title="smaller text">A−</button>
   <button id="font-plus" title="larger text">A+</button>
   <button id="flag" title="something is wrong with this page of the book —
 flag it for the reshoot list">⚑ flag</button>
 </header>
-<div id="viewer">
-  <div id="loading">loading book…</div>
-  <button class="pgbtn" id="pg-prev" title="previous page">‹</button>
-  <button class="pgbtn" id="pg-next" title="next page">›</button>
+<div id="stage">
+  <div id="frame">
+    <div id="viewer">
+      <div id="loading">loading book…</div>
+      <button class="pgbtn" id="pg-prev" title="previous page">‹</button>
+      <button class="pgbtn" id="pg-next" title="next page">›</button>
+    </div>
+  </div>
 </div>
 <footer id="pos"></footer>
 
@@ -95,6 +117,57 @@ let fontPct = +(localStorage.getItem("flipscan-reader-font") || 100);
 const applyFont = () => rendition.themes.fontSize(fontPct + "%");
 applyFont();
 
+// ---- device simulation: render at the panel's exact pixel size inside a
+// bezel so you can see how the book looks on the real device, or "comfortable"
+// to just read it filling the window. E-ink panels get a grayscale filter.
+const DEVICE_PX = {
+  "remarkable-2": {w: 1404, h: 1872, eink: true},
+  "eink-6in":     {w: 758,  h: 1024, eink: true},
+  "xteink-x3":    {w: 480,  h: 800,  eink: true},
+  "tablet":       {w: 1200, h: 1600, eink: false},
+};
+let deviceView = localStorage.getItem("flipscan-reader-device") || "none";
+function applyDeviceView() {
+  const stage = document.getElementById("stage");
+  const frame = document.getElementById("frame");
+  const viewer = document.getElementById("viewer");
+  const sel = document.getElementById("device");
+  if (sel) sel.value = deviceView;
+  const d = DEVICE_PX[deviceView];
+  if (!d) {                                   // comfortable — fill the window
+    stage.classList.remove("device");
+    frame.classList.remove("device");
+    frame.style.cssText = "";
+    viewer.classList.remove("eink");
+    viewer.style.cssText = "";
+    try { rendition.resize("100%", "100%"); } catch (e) {}
+    return;
+  }
+  const bez = 16;
+  const fw = d.w + 2 * bez, fh = d.h + 2 * bez;
+  const s = Math.max(0.05, Math.min((stage.clientWidth - 24) / fw,
+                                    (stage.clientHeight - 24) / fh));
+  stage.classList.add("device");
+  frame.classList.add("device");
+  frame.style.cssText = `width:${fw}px;height:${fh}px;padding:${bez}px;`
+    + `transform:scale(${s});transform-origin:center center`;
+  viewer.style.cssText = `width:${d.w}px;height:${d.h}px`;
+  viewer.classList.toggle("eink", !!d.eink);
+  try { rendition.resize(d.w, d.h); } catch (e) {}
+}
+document.getElementById("device").onchange = (e) => {
+  deviceView = e.target.value;
+  localStorage.setItem("flipscan-reader-device", deviceView);
+  applyDeviceView();
+};
+let _devResize;
+addEventListener("resize", () => {
+  if (DEVICE_PX[deviceView]) {
+    clearTimeout(_devResize);
+    _devResize = setTimeout(applyDeviceView, 150);
+  }
+});
+
 // resume where we left off (per book)
 const posKey = `flipscan-reader-pos:${project}/${file}`;
 rendition.display(localStorage.getItem(posKey) || undefined);
@@ -110,6 +183,7 @@ book.loaded.navigation.then(nav => {
 });
 book.ready.then(() => {
   document.getElementById("loading").style.display = "none";
+  if (deviceView !== "none") applyDeviceView();   // restore a device view
   return book.locations.generate(900);   // enables the % position readout
 }).then(() => updatePos(rendition.currentLocation()));
 
