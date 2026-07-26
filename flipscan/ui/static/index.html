@@ -2028,7 +2028,7 @@ let review = null;
 async function startReshootReview() {
   const r = await api(`/projects/${current}/reshoot`);
   if (!r.items?.length) { alert("Reshoot list is empty."); return; }
-  review = {items: r.items, i: 0, kept: 0, dismissed: 0};
+  review = {items: r.items, i: 0, kept: 0, dismissed: 0, skipped: 0};
   renderReview();
 }
 
@@ -2038,7 +2038,8 @@ function renderReview() {
   if (rv.i >= rv.items.length) {
     body.innerHTML = `<div class="card" style="text-align:center">
       <h2>Reshoot review done</h2>
-      <p>${rv.kept} agreed for reshoot · ${rv.dismissed} dismissed</p>
+      <p>${rv.kept} agreed for reshoot · ${rv.dismissed} dismissed${
+        rv.skipped ? ` · ${rv.skipped} skipped (still flagged)` : ""}</p>
       <div class="row" style="justify-content:center">
         <button style="font-size:1.05rem;padding:.7rem 1.4rem"
           onclick="startWizard()">📷 Start capture wizard</button>
@@ -2069,6 +2070,9 @@ function renderReview() {
         onclick="reviewKeep()">✔ Agree — reshoot it</button>
       <button class="secondary" style="font-size:1rem;padding:.65rem 1.3rem"
         onclick="reviewDismiss('${it.id}')">Looks fine — dismiss</button>
+      <button class="secondary" style="font-size:1rem;padding:.65rem 1.3rem"
+        title="decide later — leave it flagged and move on"
+        onclick="reviewSkip()">⏭ Skip for now</button>
       <button class="danger" style="margin-left:auto"
         title="junk capture — hide the page entirely"
         onclick="reviewHide('${it.id}')">Hide page</button>
@@ -2076,6 +2080,9 @@ function renderReview() {
 }
 
 function reviewKeep() { review.kept++; review.i++; renderReview(); }
+
+// leave the item exactly as it is (still flagged) and move on
+function reviewSkip() { review.skipped++; review.i++; renderReview(); }
 
 async function reviewDismiss(pageId) {
   const pg = (window._proj?.pages || []).find(x => x.id === pageId) || {};
