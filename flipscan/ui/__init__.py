@@ -688,19 +688,18 @@ def create_app(root: Path) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/projects/{name}/pages/{page_id}/retranscribe")
-    async def retranscribe_page(name: str, page_id: str):
-        """Retry OCR for one page right now — heavy work off the event loop."""
+    def retranscribe_page(name: str, page_id: str):
+        """Retry OCR for one page — enqueued as a durable job so it shows in the
+        queue, survives a restart, and doesn't tie up the request."""
         ws = ws_for(name)
         page = ws.page(page_id)
         if page is None:
             raise HTTPException(404, "no such page")
         if not page.get("llm_image"):
             raise HTTPException(400, "page has no processed image yet — run the pipeline first")
-        try:
-            await asyncio.to_thread(retry_ocr_page, ws, page_id)
-        except RuntimeError as e:
-            raise HTTPException(502, str(e))
-        return {"ok": True}
+        job_id = jobq.enqueue(name, "retry-ocr", {"page_id": page_id},
+                              label=f"retry OCR {page_id}")
+        return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/pages/{page_id}/patch")
     async def patch_page(name: str, page_id: str, photo: UploadFile):

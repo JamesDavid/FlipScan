@@ -2231,9 +2231,12 @@ async function rotatePage(pageId) {
 
 async function retryOcr(pageId, btn) {
   btn.disabled = true;
-  btn.textContent = "retrying…";
+  btn.textContent = "queued…";
   try {
-    await api(`/projects/${current}/pages/${pageId}/retranscribe`, {method: "POST"});
+    const { job_id } = await api(`/projects/${current}/pages/${pageId}/retranscribe`,
+                                 {method: "POST"});
+    btn.textContent = "retrying…";
+    await waitForJob(job_id);   // durable job — also visible in the queue panel
   } catch (e) {
     btn.disabled = false;
     btn.textContent = "↻ retry OCR";
