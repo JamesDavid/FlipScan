@@ -2288,8 +2288,9 @@ function cropModalHtml() {
          max-height:92vh;overflow:auto">
       <div class="row" style="margin-bottom:.5rem">
         <b>Re-crop figure</b>
-        <span class="meta">drag to draw a box, then drag corners to fine-tune —
-          skewed shapes are straightened back to a rectangle</span>
+        <span class="meta">drag to draw a box, then drag corners/edges to fine-tune
+          (hold <b>Shift</b> to keep a straight rectangle) — skewed shapes are
+          straightened back to a rectangle</span>
         <button class="secondary" style="margin-left:auto"
                 onclick="magicCrop()">✨ Magic crop</button>
         <button onclick="saveCrop()">Save crop</button>
@@ -2360,7 +2361,11 @@ function attachCropHandlers() {
       const px = (c) => [(c[0]-x) * r.width, (c[1]-y) * r.height];
       // grab a corner first (finger-sized threshold)
       const near = cropCtx.quad.findIndex(c => Math.hypot(...px(c)) < 22);
-      if (near >= 0) { cropCtx.mode = "corner"; cropCtx.corner = near; return; }
+      if (near >= 0) {
+        cropCtx.mode = "corner"; cropCtx.corner = near;
+        cropCtx.anchor = [...cropCtx.quad[(near + 2) % 4]];  // opposite corner (Shift pivot)
+        return;
+      }
       // else grab an edge midpoint → translate the whole edge as a unit
       const ei = EDGES.findIndex(([a,b]) => {
         const m = [(cropCtx.quad[a][0]+cropCtx.quad[b][0])/2,
@@ -2388,14 +2393,28 @@ function attachCropHandlers() {
             x1 = Math.max(sx,x), y1 = Math.max(sy,y);
       cropCtx.quad = [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
     } else if (cropCtx.mode === "edge") {
-      // move both endpoints of the edge by the same delta (translate the line)
-      const dx = x - cropCtx.dragStart[0], dy = y - cropCtx.dragStart[1];
+      // move both endpoints of the edge by the same delta (translate the line).
+      // Shift keeps the rectangle square: a horizontal edge moves only up/down,
+      // a vertical edge only left/right, so the corners stay at 90°.
+      let dx = x - cropCtx.dragStart[0], dy = y - cropCtx.dragStart[1];
+      if (e.shiftKey) {
+        if (cropCtx.edge === 0 || cropCtx.edge === 2) dx = 0;   // top/bottom
+        else dy = 0;                                            // left/right
+      }
       const [a, b] = EDGES[cropCtx.edge];
       const clamp = (v) => Math.max(0, Math.min(1, v));
       for (const c of [a, b]) {
         cropCtx.quad[c][0] = clamp(cropCtx.startQuad[c][0] + dx);
         cropCtx.quad[c][1] = clamp(cropCtx.startQuad[c][1] + dy);
       }
+    } else if (e.shiftKey && cropCtx.anchor) {
+      // Shift + corner: keep it an axis-aligned rectangle, pivoting on the
+      // opposite corner (like drawing a fresh box from that corner)
+      const [ox, oy] = cropCtx.anchor;
+      const x0 = Math.min(x, ox), y0 = Math.min(y, oy),
+            x1 = Math.max(x, ox), y1 = Math.max(y, oy);
+      cropCtx.quad = [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
+      cropCtx.corner = (x <= ox ? (y <= oy ? 0 : 3) : (y <= oy ? 1 : 2));
     } else {
       cropCtx.quad[cropCtx.corner] = [x, y];
     }
@@ -2404,6 +2423,7 @@ function attachCropHandlers() {
   };
   stage.onpointerup = () => {
     cropCtx.mode = null; cropCtx.corner = -1; cropCtx.edge = -1;
+    cropCtx.anchor = null;
     $("crop-loupe").style.display = "none";
   };
 }
