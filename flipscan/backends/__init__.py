@@ -34,6 +34,12 @@ Rules:
   that appear on the page. OMIT running headers, running footers, and the printed page
   number from the markdown. Keep paragraph breaks. If a word is hyphenated across the
   page boundary, keep the trailing hyphen.
+- If the page is laid out in MULTIPLE COLUMNS, read each column fully top-to-bottom in
+  reading order (the left column completely, then the next) and output the text linearly
+  in that order. Do NOT interleave lines across columns.
+- Mathematical expressions and equations: transcribe as LaTeX, not as prose descriptions
+  — $...$ for inline math, $$...$$ for a displayed equation on its own line. Reproduce
+  symbols, sub/superscripts, fractions, and Greek letters faithfully.
 - Simple, cleanly readable tables -> markdown tables inline. Complex tables -> add a
   region with type "table_as_image" and put a placeholder line [[region-N]] in the markdown.
 - For each figure, photo, or complex table on the page: add a region with a normalized
