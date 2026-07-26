@@ -1371,7 +1371,16 @@ safe fixes auto-apply so you can focus on what's left">🔎 Re-read all stuck pa
       <div class="row">
         ${["epub","pdf-facsimile","pdf","markdown"].map(f =>
           `<button onclick="buildFmt('${f}')">Build ${f}</button>`).join("")}
+        ${p.latex_available
+          ? `<button onclick="buildFmt('pdf-latex')"
+               title="high-quality typeset PDF via pandoc + XeLaTeX (honours the target device)"
+               >Build pdf (LaTeX ✨)</button>`
+          : `<button disabled style="opacity:.55"
+               title="optional high-quality PDF — install pandoc + XeLaTeX to enable (see README)"
+               >pdf (LaTeX) — needs pandoc+xelatex</button>`}
       </div>
+      <div class="meta" style="margin-top:.3rem">pdf (LaTeX) is an optional,
+        best-typography PDF; the plain <b>pdf</b> above needs no extra tools.</div>
       <h2 style="margin-top:1rem">Downloads</h2>
       <ul>${p.outputs.map(o =>
         `<li><a href="/api/projects/${name}/file/out/${o.name}">${o.name}</a>

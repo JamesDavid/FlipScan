@@ -1,9 +1,11 @@
 FROM python:3.11-slim
 
-# ffmpeg for frame extraction; pango/gdk-pixbuf for weasyprint (reflowed PDF)
+# ffmpeg for frame extraction; pango/gdk-pixbuf for weasyprint (reflowed PDF);
+# pandoc + xelatex (with TeX Gyre fonts) for the optional high-quality LaTeX PDF
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 shared-mime-info \
+        pandoc texlive-xetex texlive-fonts-recommended \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -68,7 +68,7 @@ A distinct, non-destructive layer: each chapter is checked and comes back as a l
 ![Proof tab](docs/tabs/proof.png)
 
 ### Output — build & read
-Build **EPUB**, **PDF facsimile**, **reflowed PDF**, or a **Markdown zip** (Markdown + `images/`, YAML frontmatter — portable to Obsidian/Typora/Pandoc), optionally sized for a target e-ink device. Pick a **Target device** (e.g. **reMarkable 2**) and images are resized/grayscaled *and* the reflowed PDF is page-sized to the exact panel with e-ink-tuned typography (darker greys, open leading, no widows/orphans) so it's readable at native scale with no on-device zoom. Outputs are marked **stale** the moment any page, figure, or proof changes. EPUBs get a **read-in-browser** link — a built-in reader with chapter navigation, light/dark, font sizing, per-figure re-crop/re-capture, and flag-this-passage.
+Build **EPUB**, **PDF facsimile**, **reflowed PDF**, an optional **high-quality LaTeX PDF**, or a **Markdown zip** (Markdown + `images/`, YAML frontmatter — portable to Obsidian/Typora/Pandoc), optionally sized for a target e-ink device. Pick a **Target device** (e.g. **reMarkable 2**) and images are resized/grayscaled *and* the reflowed PDF is page-sized to the exact panel with e-ink-tuned typography (darker greys, open leading, no widows/orphans) so it's readable at native scale with no on-device zoom. The **pdf (LaTeX ✨)** output runs pandoc + XeLaTeX for the best typography (same device page-sizing) — it needs those tools installed (the button is disabled until they're on your PATH); everything else needs nothing extra. Outputs are marked **stale** the moment any page, figure, or proof changes. EPUBs get a **read-in-browser** link — a built-in reader with chapter navigation, light/dark, font sizing, per-figure re-crop/re-capture, and flag-this-passage.
 
 ![Output tab](docs/tabs/output.png)
 
@@ -90,7 +90,18 @@ pip install -e ".[ui,dev]"       # requires ffmpeg on PATH
 flipscan ui                      # prints your LAN URL, e.g. http://192.168.x.x:8321
 ```
 
-All output formats (EPUB, both PDFs, Markdown zip) work from the base install — no weasyprint/GTK/pandoc needed. The projects folder is created for you on startup.
+All output formats (EPUB, reflowed & facsimile PDF, Markdown zip) work from the base install — no weasyprint/GTK/pandoc needed. The projects folder is created for you on startup.
+
+The one exception is the optional **pdf (LaTeX)** output, which needs `pandoc` + `xelatex` on your PATH (with the TeX Gyre fonts from `texlive-fonts-recommended` — no extra font install):
+
+```sh
+# Debian/Ubuntu
+sudo apt install pandoc texlive-xetex texlive-fonts-recommended
+# macOS:   brew install pandoc  +  MacTeX (https://tug.org/mactex/)
+# Windows: winget install JohnMacFarlane.Pandoc  +  winget install MiKTeX.MiKTeX
+```
+
+The Docker image already includes these, so the LaTeX PDF works there out of the box.
 
 ### From your phone
 
@@ -192,7 +203,7 @@ flipscan worker [--root DIR]                       run the job worker as its own
 
 ## Acknowledgments
 
-The reMarkable-2 / e-ink PDF preset — exact canvas geometry (157.8 × 210.4 mm, 10 mm margins) and the e-ink typography choices (darker greys, open leading, widow/orphan control) — is adapted from [**reCompose**](https://github.com/mrodger/reCompose) by [mrodger](https://github.com/mrodger), an MIT-licensed Markdown → reMarkable 2 PDF pipeline. Thanks!
+The reMarkable-2 / e-ink PDF work is adapted from [**reCompose**](https://github.com/mrodger/reCompose) by [mrodger](https://github.com/mrodger), an MIT-licensed Markdown → reMarkable 2 PDF pipeline: the exact canvas geometry (157.8 × 210.4 mm, 10 mm margins), the e-ink typography choices (darker greys, open leading, widow/orphan control), and the pandoc + XeLaTeX approach behind our optional high-quality PDF (its `rm2.latex` template pioneered the preset). We apply the same ideas in our own reportlab and pandoc paths — no code copied — and preserve the MIT notice. Thanks!
 
 ## License
 

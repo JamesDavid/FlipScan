@@ -201,15 +201,17 @@ def delpage(directory: Path, page_id: str, restore: bool):
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None,
               help="Output file (default: out/<workspace>.<ext>)")
 @click.option("--format", "formats", multiple=True,
-              type=click.Choice(["epub", "pdf", "pdf-facsimile"]),
-              help="Output format; repeatable (default: epub)")
+              type=click.Choice(["epub", "pdf", "pdf-latex", "pdf-facsimile"]),
+              help="Output format; repeatable (default: epub). pdf-latex is the "
+                   "high-quality pandoc+XeLaTeX PDF (needs those tools installed).")
 @click.option("--title", default=None)
 @click.option("--author", default=None)
 @click.option("--device", default="none",
-              type=click.Choice(["none", "xteink-x3", "xteink-x4", "eink-6in", "tablet"]),
-              help="Resize/grayscale images for a target reader (e.g. Xteink X3/X4).")
+              type=click.Choice(["none", "xteink-x3", "xteink-x4", "eink-6in",
+                                 "remarkable-2", "tablet"]),
+              help="Size for a target reader (images + reflowed/LaTeX PDF page).")
 def build(directory: Path, output, formats, title, author, device):
-    """Build the book (epub / pdf / pdf-facsimile) from the assembled markdown."""
+    """Build the book (epub / pdf / pdf-latex / pdf-facsimile) from markdown."""
     ws = Workspace.open(directory)
     formats = formats or ("epub",)
     for fmt in formats:
@@ -217,7 +219,7 @@ def build(directory: Path, output, formats, title, author, device):
         if output and len(formats) == 1:
             out = output
         else:
-            suffix = "" if fmt != "pdf-facsimile" else "-facsimile"
+            suffix = {"pdf-facsimile": "-facsimile", "pdf-latex": "-latex"}.get(fmt, "")
             if device != "none":
                 suffix += f"-{device}"
             out = ws.dir("out") / f"{ws.root.name}{suffix}.{ext}"
@@ -228,6 +230,10 @@ def build(directory: Path, output, formats, title, author, device):
         elif fmt == "pdf-facsimile":
             from .build_pdf import build_pdf_facsimile
             build_pdf_facsimile(ws, out, title=title, device=device, log=click.echo)
+        elif fmt == "pdf-latex":
+            from .build_pdf_latex import build_pdf_latex
+            build_pdf_latex(ws, out, title=title, author=author, device=device,
+                            log=click.echo)
         else:
             from .build_pdf import build_pdf_reflowed
             build_pdf_reflowed(ws, out, title=title, device=device, log=click.echo)

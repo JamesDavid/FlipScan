@@ -19,6 +19,12 @@ from ..workspace import STAGES, Workspace
 
 _TERMINAL = {DONE, ERROR, CANCELED}
 
+
+def _latex_tools_available() -> bool:
+    """Whether the optional high-quality PDF (pandoc + xelatex) can be built."""
+    import shutil
+    return bool(shutil.which("pandoc") and shutil.which("xelatex"))
+
 # workspace files the browser may fetch, by top-level directory
 SERVABLE = {"frames", "work", "figures", "review", "out", "pages", "videos", "patches"}
 
@@ -349,6 +355,7 @@ def create_app(root: Path) -> FastAPI:
             "running": jobq.active(name, ("pipeline",)) is not None,
             "archived": bool(m.get("archived")),
             "suppressed_headings": m.get("suppressed_headings") or {},
+            "latex_available": _latex_tools_available(),
             "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
                         for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
@@ -1935,7 +1942,8 @@ def create_app(root: Path) -> FastAPI:
     def build(name: str, format: str = "epub", device: str = "none"):
         ws = ws_for(name)
         ext = {"epub": "epub", "markdown": "zip"}.get(format, "pdf")
-        suffix = {"pdf-facsimile": "-facsimile", "markdown": "-markdown"}.get(format, "")
+        suffix = {"pdf-facsimile": "-facsimile", "markdown": "-markdown",
+                  "pdf-latex": "-latex"}.get(format, "")
         # the reflowed PDF is now device-aware too (page geometry + e-ink
         # typography); only the markdown zip ignores the device
         if device != "none" and format != "markdown":
@@ -1952,6 +1960,10 @@ def create_app(root: Path) -> FastAPI:
             elif format == "pdf":
                 from ..build_pdf import build_pdf_reflowed
                 build_pdf_reflowed(ws, out, device=device, log=lambda m: None)
+            elif format == "pdf-latex":
+                from ..build_pdf_latex import build_pdf_latex
+                build_pdf_latex(ws, out, author=ws.manifest["book"].get("author"),
+                                device=device, log=lambda m: None)
             elif format == "markdown":
                 from ..build_markdown import build_markdown_zip
                 build_markdown_zip(ws, out,
