@@ -707,7 +707,7 @@ async function openProject(name, tab) {
     <div id="log"></div>
   </div>
   <div class="tabs">
-    ${["pipeline","media","frames","pages","contents","figures","proof","output"].map(t =>
+    ${["pipeline","media","frames","contents","pages","figures","proof","output"].map(t =>
       `<div class="tab ${t === (tab||"pipeline") ? "active" : ""}"
         onclick="openProject('${name}','${t}')">${t}</div>`).join("")}
   </div>
@@ -1750,6 +1750,7 @@ function toggleCell(pageId) {
 }
 
 let pageFilters = {chapter: "", unnumbered: false};
+let figFilters = {chapter: ""};
 let figV = {};   // session bumps (fallback until the next detail fetch)
 const fv = (k) => {
   const sv = window._proj?.file_versions?.[k] || 0;
@@ -2560,16 +2561,22 @@ function renderFiguresTab(p, clusters) {
   const clusterOf = {};
   clusters.forEach((cl, ci) => cl.forEach(m => clusterOf[key(m.page_id, m.fig_idx)] = ci));
 
-  const rows = [];
+  const allRows = [];
   p.pages.forEach(pg => {
     if (pg.status === "duplicate" || pg.status === "deleted") return;
     (pg.figures || []).forEach((f, i) => {
       const letter = f.split("_").pop().split(".")[0];
       const ridx = letter.charCodeAt(0) - 97;
-      rows.push({pg, f, i, caption: (pg.regions?.[ridx]?.caption) || "",
+      allRows.push({pg, f, i, ch: pg.chapter || "Front matter",
+                 caption: (pg.regions?.[ridx]?.caption) || "",
                  reacq: !!(pg.regions?.[ridx]?.needs_reshoot)});
     });
   });
+  const figChapters = [];
+  allRows.forEach(r => { if (!figChapters.includes(r.ch)) figChapters.push(r.ch); });
+  if (figFilters.chapter && !figChapters.includes(figFilters.chapter))
+    figFilters.chapter = "";   // stale filter (e.g. after switching projects)
+  const rows = allRows.filter(r => !figFilters.chapter || r.ch === figFilters.chapter);
   const groups = [];
   rows.forEach(r => {
     const last = groups[groups.length - 1];
@@ -2643,11 +2650,23 @@ function renderFiguresTab(p, clusters) {
   body.innerHTML = `<div class="card"><h2>Figures <span class="meta">
     (book order — re-crop, caption, replace, or delete)</span></h2>
     <div class="row" style="margin-bottom:.6rem">
-      <button class="secondary" onclick="autoRefine()">✨ Auto-refine crops (edge detection)</button>
+      <label style="margin:0">chapter</label>
+      <select style="width:auto;margin:0"
+        onchange="figFilters.chapter=this.value;renderTab('figures',window._proj)">
+        <option value="">all</option>
+        ${figChapters.map(c => `<option ${figFilters.chapter === c ? "selected" : ""}
+           value="${esc(c)}">${esc(c)}</option>`).join("")}
+      </select>
+      ${figFilters.chapter ? `<span class="meta" style="margin:0">${rows.length} of
+        ${allRows.length} figures</span>` : ""}
+      <button class="secondary" style="margin-left:auto" onclick="autoRefine()">✨ Auto-refine crops (edge detection)</button>
       <button onclick="aiRefine(this)" title="Claude proposes each figure's corners
 from the page photo; current manual crops are never touched">🤖 AI refine crops (Claude)</button>
     </div>` +
-    (groups.map(groupHtml).join("") || "<div class='meta'>no figures yet</div>")
+    (groups.map(groupHtml).join("")
+      || (figFilters.chapter
+          ? "<div class='meta'>no figures in this chapter</div>"
+          : "<div class='meta'>no figures yet</div>"))
     + `</div>` + cropModalHtml();
 }
 
