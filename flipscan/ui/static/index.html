@@ -1022,6 +1022,10 @@ function renderTab(tab, p) {
       const figs = (pg.figures || []).map((f, i) => `
         <span style="display:inline-flex;flex-direction:column;align-items:center;
                      gap:2px;vertical-align:top">
+          <span class="meta" title="${esc(f)} — matches the caption for this figure
+on the Figures tab" style="margin:0;font-size:.62rem;font-family:monospace;
+                     max-width:92px;overflow:hidden;text-overflow:ellipsis;
+                     white-space:nowrap">${esc(f.split("/").pop())}</span>
           <img loading="lazy" decoding="async"
                src="/api/projects/${name}/thumb/${f}?w=260${fv(f)}"
                style="height:90px;border:1px solid var(--line);border-radius:4px;
