@@ -613,6 +613,26 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             backend = get_backend(cfg)
             _run_incremental(ws, backend, todo, by_id, log)
 
+        # second automatic pass: anything still failed gets one more shot. The
+        # backend re-tries with the split-and-recover path, so dense pages and
+        # transient failures usually clear here — new books rarely leave a
+        # failed page behind, and the rest land on the re-OCR list.
+        if provider != "mock":
+            retry_name = "ollama" if provider == "hybrid" else provider
+            failed = [(p["id"], ws.root / p["llm_image"]) for p in pages
+                      if p.get("transcribe_error") and p.get("llm_image")
+                      and p.get("status") != "deleted"]
+            if failed:
+                log(f"  retrying {len(failed)} failed page(s) with split-recover…")
+                rb = get_backend(
+                    {**cfg, "provider": {**cfg["provider"], "name": retry_name}})
+                for pid, r in rb.transcribe(failed, log).items():
+                    if "error" not in r:
+                        by_id[pid]["status"] = "ok"   # _write_result may re-suspect
+                        _write_result(ws, by_id[pid], r, rb.name)
+                        _cache_page(ws, by_id[pid])
+                ws.save()
+
     pages = reconcile(ws, pages, log)
     missing = ws.manifest["missing_pages"]
 

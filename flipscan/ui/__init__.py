@@ -1963,6 +1963,24 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)
         return {"items": crop_list(ws)}
 
+    @app.get("/api/projects/{name}/reocr-list")
+    def reocr_list_endpoint(name: str):
+        """Pages whose transcription failed — candidates for a re-OCR."""
+        from ..review import reocr_list
+        ws = ws_for(name)
+        return {"items": reocr_list(ws)}
+
+    @app.post("/api/projects/{name}/reocr-all")
+    def reocr_all(name: str):
+        """Enqueue a retry-OCR job for every failed page (durable queue jobs)."""
+        from ..review import reocr_list
+        ws = ws_for(name)
+        ids = [it["id"] for it in reocr_list(ws) if it["can_reocr"]]
+        for pid in ids:
+            jobq.enqueue(name, "retry-ocr", {"page_id": pid},
+                        label=f"retry OCR {pid}")
+        return {"ok": True, "enqueued": len(ids)}
+
     @app.post("/api/projects/{name}/pages/{page_id}/accept-crops")
     def accept_crops(name: str, page_id: str):
         """Called when the crop stepper finishes a page whose only other

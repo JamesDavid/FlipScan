@@ -812,9 +812,12 @@ function addPagePanel() {
 function renderTab(tab, p) {
   const name = p.name, body = $("tabbody");
   if (tab === "pipeline") {
-    Promise.all([api("/projects/" + name + "/reshoot"),
-                 api(`/projects/${name}/capture-queue`),
-                 api(`/projects/${name}/crop-list`)]).then(([r, q, cl]) => {
+    // each call degrades to an empty result so one failing/not-yet-deployed
+    // endpoint can never blank the whole pipeline tab
+    Promise.all([api("/projects/" + name + "/reshoot").catch(() => ({items: [], missing: []})),
+                 api(`/projects/${name}/capture-queue`).catch(() => ({items: []})),
+                 api(`/projects/${name}/crop-list`).catch(() => ({items: []})),
+                 api(`/projects/${name}/reocr-list`).catch(() => ({items: []}))]).then(([r, q, cl, ro]) => {
       const items = r.items || [];
       const anyPages = (p.pages || []).some(x => !x.role);
       const wizardCard = wizardCardHtml(q.items, anyPages);
@@ -843,7 +846,25 @@ function renderTab(tab, p) {
               it.suspect ? ` <span class="meta">· page also flagged</span>` : ""}</li>`).join("")
             + "</ul>"
           : "<div class='meta'>empty — every region has a crop</div>") + `</div>`;
-      body.innerHTML = wizardCard + missingCard + cropCard
+      const reocrItems = ro.items || [];
+      const reocrCard = reocrItems.length ? `<div class="card" style="border:2px solid #dc2626">
+        <div class="row" style="margin-bottom:.4rem">
+          <h2 style="margin:0">⚠ Re-OCR list — transcription failed</h2>
+          <button style="margin-left:auto" onclick="reocrAll()">↻ Re-OCR all (${reocrItems.length})</button>
+        </div>
+        <div class="meta">pages the model couldn't transcribe — re-OCR retries with the
+          split-and-recover pass (runs in the job queue). Pages that still fail after that
+          may genuinely need a reshoot.</div>
+        <ul>${reocrItems.map(it => `<li>
+          <a href="javascript:void(0)" onclick="gotoPage('${it.id}')"><b>${it.id}</b>${
+            it.printed_number ? ` (printed ${it.printed_number})` : ""}</a>
+          ${it.can_reocr
+            ? `<button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+                 onclick="reocrOne('${it.id}')">↻ re-OCR</button>`
+            : `<span class="meta">· run the pipeline first</span>`}
+          <span class="meta"> — ${esc(it.error)}</span></li>`).join("")}</ul>
+      </div>` : "";
+      body.innerHTML = wizardCard + missingCard + reocrCard + cropCard
         + `<div class="card"><div class="row" style="margin-bottom:.4rem">
             <h2 style="margin:0">Reshoot list — captured badly</h2>
             ${items.length ? `<button style="margin-left:auto"
@@ -2171,6 +2192,26 @@ async function reviewHide(pageId) {
   try { await api(`/projects/${current}/pages/${pageId}`, {method: "DELETE"}); }
   catch (e) { alert("failed: " + e.message); return; }
   review.dismissed++; review.i++; renderReview();
+}
+
+// ---- re-OCR list: pages whose transcription failed
+async function reocrAll() {
+  let n = 0;
+  try { n = ((await api(`/projects/${current}/reocr-list`)).items || [])
+              .filter(i => i.can_reocr).length; } catch {}
+  if (!n) { alert("No re-OCR-able failed pages."); return; }
+  if (!confirm(`Queue ${n} failed page${n > 1 ? "s" : ""} for re-OCR?\n\n`
+    + `They run in the job queue with the split-and-recover pass; watch the ⚙ queue.`)) return;
+  try {
+    const r = await api(`/projects/${current}/reocr-all`, {method: "POST"});
+    alert(`${r.enqueued} page${r.enqueued !== 1 ? "s" : ""} queued for re-OCR.`);
+  } catch (e) { alert(e.message); return; }
+  openProject(current, "pipeline");
+}
+async function reocrOne(pageId) {
+  try { await api(`/projects/${current}/pages/${pageId}/retranscribe`, {method: "POST"}); }
+  catch (e) { alert(e.message); return; }
+  openProject(current, "pipeline");
 }
 
 // ---- crop list: step through pages whose figure regions need a crop drawn

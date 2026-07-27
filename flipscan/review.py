@@ -127,13 +127,33 @@ def crop_list(ws: Workspace) -> list[dict]:
     return items
 
 
-def reshoot_list(ws: Workspace) -> list[dict]:
-    """Pages that should be re-photographed, with reasons. Pages whose only work
-    is a missing crop (see crop_list) are excluded, and the 'no crop' reason is
-    dropped from pages that remain for a genuine reshoot."""
+def reocr_list(ws: Workspace) -> list[dict]:
+    """Pages whose transcription outright failed — a re-OCR (which now uses the
+    split-and-recover pass) is the fix, not a reshoot."""
     items = []
     for p in ws.manifest["pages"]:
         if p["status"] in ("duplicate", "deleted"):
+            continue
+        if p.get("transcribe_error"):
+            items.append({
+                "id": p["id"], "printed_number": p.get("printed_number"),
+                "error": str(p["transcribe_error"])[:140],
+                "can_reocr": bool(p.get("llm_image")),
+            })
+    return items
+
+
+def reshoot_list(ws: Workspace) -> list[dict]:
+    """Pages that should be re-photographed, with reasons. Pages whose only work
+    is a missing crop (crop_list) or a failed transcription (reocr_list) are
+    excluded; the 'no crop' / 'transcription failed' reasons are dropped from
+    pages that remain for a genuine reshoot."""
+    items = []
+    for p in ws.manifest["pages"]:
+        if p["status"] in ("duplicate", "deleted"):
+            continue
+        # a failed transcription belongs to the re-OCR list, not here
+        if p.get("transcribe_error"):
             continue
         # a pure crop page belongs to the crop list, not here
         if uncropped_regions(p) and not _needs_reshoot_work(p):
