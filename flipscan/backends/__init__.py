@@ -58,6 +58,40 @@ class TranscriptionError(Exception):
     pass
 
 
+def salvage_result(raw: str | None) -> dict[str, Any] | None:
+    """Best-effort recovery when the model's JSON can't be parsed — almost
+    always because the output hit the token limit and got cut off before the
+    closing brace, losing the whole page. Pull the `markdown` string out of the
+    partial response so we keep the text we DID get, flagged low-confidence for
+    review, instead of dropping the page entirely. Returns None if nothing
+    usable is there."""
+    if not raw:
+        return None
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+    m = re.search(r'"markdown"\s*:\s*"', text)
+    if not m:
+        return None
+    i, out = m.end(), []
+    esc = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"}
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            out.append(esc.get(text[i + 1], text[i + 1]))
+            i += 2
+            continue
+        if ch == '"':          # closing quote of the markdown value
+            break
+        out.append(ch)
+        i += 1
+    md = "".join(out).strip()
+    if len(md) < 3:
+        return None
+    return {"markdown": md, "page_number_printed": None, "confidence": "low",
+            "regions": [], "flags": ["truncated"]}
+
+
 def parse_result(raw: str) -> dict[str, Any]:
     """Parse + validate the model's JSON. Raises TranscriptionError on garbage."""
     text = raw.strip()
