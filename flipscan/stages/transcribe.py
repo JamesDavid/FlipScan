@@ -7,6 +7,7 @@ import json
 import re
 
 from ..backends import get_backend, needs_escalation
+from ..textproc import reflow_wrapped
 from ..workspace import Workspace
 
 # transcription results cached by capture identity, so re-clustering (e.g. after
@@ -61,7 +62,9 @@ def _write_result(ws: Workspace, page: dict, result: dict, backend_name: str) ->
         page["transcribe_error"] = result["error"]
         return
     md_path = ws.dir("pages") / f"{page['id']}.md"
-    md_path.write_text(result["markdown"], encoding="utf-8")
+    # reflow hard-wrapped columns into flowing paragraphs (a split-recovered
+    # second column often comes back line-for-line); no-op on good pages
+    md_path.write_text(reflow_wrapped(result["markdown"]), encoding="utf-8")
     page["md"] = f"pages/{page['id']}.md"
     if not page.get("number_manual"):  # a user-entered number outranks the model
         page["printed_number"] = result["page_number_printed"]

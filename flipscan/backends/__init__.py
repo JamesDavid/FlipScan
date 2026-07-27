@@ -32,11 +32,18 @@ Return ONLY a JSON object, no code fences, no commentary, matching exactly this 
 Rules:
 - "markdown": transcribe the body text faithfully. Use # / ## for chapter/section headings
   that appear on the page. OMIT running headers, running footers, and the printed page
-  number from the markdown. Keep paragraph breaks. If a word is hyphenated across the
-  page boundary, keep the trailing hyphen.
+  number from the markdown.
+- REFLOW the text into flowing paragraphs. Within a paragraph, join the printed
+  line-wraps into ONE continuous line — do NOT preserve the physical line breaks of the
+  printed page. Start a new line only for a genuine paragraph break, heading, or list
+  item. When a word is split by a hyphen at the end of a wrapped line WITHIN the page,
+  rejoin it into a single word and drop the hyphen (e.g. "Archae-" + "ology" ->
+  "Archaeology"). The ONLY hyphen to keep is one on the very LAST word of the page that
+  continues onto the next page.
 - If the page is laid out in MULTIPLE COLUMNS, read each column fully top-to-bottom in
   reading order (the left column completely, then the next) and output the text linearly
-  in that order. Do NOT interleave lines across columns.
+  in that order — reflowed the same way. Do NOT interleave lines across columns, and do
+  NOT preserve a column's printed line breaks.
 - Mathematical expressions and equations: transcribe as LaTeX, not as prose descriptions
   — $...$ for inline math, $$...$$ for a displayed equation on its own line. Reproduce
   symbols, sub/superscripts, fractions, and Greek letters faithfully.

@@ -1147,8 +1147,12 @@ on the Figures tab" style="margin:0;font-size:.62rem;font-family:monospace;
                 oninput="this.dataset.dirty=1;
                          const b=$('mdsave-${pg.id}');
                          b.textContent='Save markdown *';b.disabled=false"></textarea>
-              <button style="margin-top:.4rem" id="mdsave-${pg.id}"
-                onclick="saveMd('${pg.id}')">Save markdown</button>
+              <div class="row" style="margin-top:.4rem">
+                <button id="mdsave-${pg.id}" onclick="saveMd('${pg.id}')">Save markdown</button>
+                <button class="secondary" title="join hard-wrapped lines into flowing
+paragraphs — fixes a column transcribed line-for-line (review, then Save)"
+                  onclick="reflowMd('${pg.id}')">⤸ Reflow</button>
+              </div>
             </div>
           </div>
           <div class="row" style="border-top:1px solid var(--line);margin-top:.8rem;
@@ -1552,6 +1556,30 @@ function attachEvents(name) {
   };
   es.addEventListener("done", () => { es.close(); openProject(name); refreshProjects(); });
   es.onerror = () => es.close();
+}
+
+// reflow hard-wrapped prose in the editor (a split-recovered second column
+// often comes back line-for-line) — fills the editor with the flowed text and
+// marks it dirty so the user reviews it, then hits Save markdown
+async function reflowMd(pageId) {
+  const el = $("md-" + pageId);
+  if (!el) return;
+  let r;
+  try {
+    r = await api(`/projects/${current}/pages/${pageId}/reflow`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({markdown: el.value})});
+  } catch (e) { alert("reflow failed: " + e.message); return; }
+  if (r.markdown === el.value) {
+    const b = $("mdsave-" + pageId);
+    if (b) { const t = b.textContent; b.textContent = "already flowing ✓";
+             setTimeout(() => b.textContent = t, 1400); }
+    return;
+  }
+  el.value = r.markdown;
+  el.dataset.dirty = 1;
+  const b = $("mdsave-" + pageId);
+  if (b) { b.textContent = "Save markdown *"; b.disabled = false; }
 }
 
 async function saveMd(pageId) {
@@ -2161,8 +2189,12 @@ function renderReview() {
           style="height:66vh;font-size:.82rem;line-height:1.4"
           oninput="this.dataset.dirty=1;const b=$('mdsave-${it.id}');
                    b.textContent='Save markdown *';b.disabled=false"></textarea>
-        <button style="margin-top:.4rem" id="mdsave-${it.id}"
-          onclick="saveMd('${it.id}')">Save markdown</button>
+        <div class="row" style="margin-top:.4rem">
+          <button id="mdsave-${it.id}" onclick="saveMd('${it.id}')">Save markdown</button>
+          <button class="secondary" title="join hard-wrapped lines into flowing
+paragraphs — fixes a column transcribed line-for-line (review, then Save)"
+            onclick="reflowMd('${it.id}')">⤸ Reflow</button>
+        </div>
       </div>
     </div>
     <div class="row" style="margin-top:.8rem">

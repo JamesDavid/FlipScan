@@ -702,6 +702,18 @@ def create_app(root: Path) -> FastAPI:
         ws.save()
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/pages/{page_id}/reflow")
+    def reflow_md(name: str, page_id: str, edit: MarkdownEdit):
+        """Reflow hard-wrapped prose — e.g. a split-recovered second column that
+        came back line-for-line — into flowing paragraphs that break only at real
+        paragraph boundaries. Returns the reflowed markdown WITHOUT saving, so the
+        editor can show it for review before the user commits it with Save."""
+        from ..textproc import reflow_wrapped
+        ws = ws_for(name)
+        if ws.page(page_id) is None:
+            raise HTTPException(404, "no such page")
+        return {"markdown": reflow_wrapped(edit.markdown)}
+
     @app.post("/api/projects/{name}/pages/{page_id}/retranscribe")
     def retranscribe_page(name: str, page_id: str):
         """Retry OCR for one page — enqueued as a durable job so it shows in the
