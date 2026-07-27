@@ -194,6 +194,9 @@ def get_backend(cfg: dict) -> TranscriptionBackend:
                                "enable it or switch the provider to ollama")
         from .anthropic_backend import AnthropicBackend
         return AnthropicBackend(cfg)
+    if name == "openai":
+        from .openai_compat import OpenAICompatBackend
+        return OpenAICompatBackend(cfg)
     if name == "mock":
         from .mock import MockBackend
         return MockBackend(cfg)

@@ -117,7 +117,8 @@ Set globally in Settings (⚙) or per-workspace `config.toml`.
 
 - **Ollama** (default): your existing Ollama server. Free, private, slower and less accurate on dense text. Requests use `format: json` and a strict schema. Developed and tested with **`gemma4:31b`** (a vision model with a good accuracy/speed balance for page transcription) — `ollama pull gemma4:31b`, then set it in Settings (⚙) or as `ollama_model`.
 - **Anthropic**: higher accuracy, via the **Message Batches API** (50% discount; a 300-page book is one batch). A settings toggle disables all API calls while keeping your key saved, so you never spend by accident.
-- **Hybrid**: every page goes through Ollama first; only pages that come back low-confidence, malformed, or flagged are re-run through Anthropic. Tune via `escalate_on`.
+- **OpenAI-compatible**: one provider for the many vendors that speak the OpenAI Chat Completions API with vision + JSON mode — set a **base URL + API key + model**. One-click presets for **OpenAI** (`gpt-4o`), **Google Gemini** (its OpenAI endpoint), and **OpenRouter** (dozens of vision models behind one key); also works with Groq, Together, Azure, or a local vLLM/LM Studio server. Note: this sends each page image to that provider (unlike local Ollama).
+- **Hybrid**: every page goes through Ollama first; only pages that come back low-confidence, malformed, or flagged are re-run through a cloud provider — Anthropic or the OpenAI-compatible one, chosen by `escalate_to`. Tune the triggers via `escalate_on`.
 - **Mock**: placeholder text, no model calls — for testing the plumbing.
 
 ## Pipeline
@@ -170,7 +171,7 @@ dewarp = false                   # cylindrical curl correction
 max_retries = 1
 ```
 
-Environment overrides: `FLIPSCAN_PROVIDER`, `FLIPSCAN_OLLAMA_URL`, `FLIPSCAN_OLLAMA_MODEL`, `FLIPSCAN_ANTHROPIC_MODEL`, `FLIPSCAN_ANTHROPIC_API_KEY` (falls back to `ANTHROPIC_API_KEY`), `FLIPSCAN_ROOT` (GUI projects folder), `FLIPSCAN_FFMPEG`/`FLIPSCAN_FFPROBE`, `FLIPSCAN_PROOF_CONCURRENCY` (chapters proofread in parallel, default 3), `FLIPSCAN_EXTERNAL_WORKER=1` (web only enqueues; a separate `flipscan worker` runs the jobs).
+Environment overrides: `FLIPSCAN_PROVIDER`, `FLIPSCAN_OLLAMA_URL`, `FLIPSCAN_OLLAMA_MODEL`, `FLIPSCAN_ANTHROPIC_MODEL`, `FLIPSCAN_ANTHROPIC_API_KEY` (falls back to `ANTHROPIC_API_KEY`), `FLIPSCAN_OPENAI_BASE_URL`/`FLIPSCAN_OPENAI_MODEL`/`FLIPSCAN_OPENAI_API_KEY` (falls back to `OPENAI_API_KEY`), `FLIPSCAN_ROOT` (GUI projects folder), `FLIPSCAN_FFMPEG`/`FLIPSCAN_FFPROBE`, `FLIPSCAN_PROOF_CONCURRENCY` (chapters proofread in parallel, default 3), `FLIPSCAN_EXTERNAL_WORKER=1` (web only enqueues; a separate `flipscan worker` runs the jobs).
 
 ## CLI reference
 

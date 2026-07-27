@@ -9,7 +9,7 @@ from typing import Any
 
 DEFAULTS: dict[str, Any] = {
     "provider": {
-        "name": "ollama",  # ollama | anthropic | hybrid
+        "name": "ollama",  # ollama | anthropic | openai | hybrid
         "ollama_url": "http://localhost:11434",
         "ollama_model": "gemma4",
         "ollama_num_predict": 4096,
@@ -17,10 +17,17 @@ DEFAULTS: dict[str, Any] = {
         "anthropic_model": "claude-sonnet-4-6",
         # master switch: False = never call the Anthropic API, key stays saved
         "anthropic_enabled": True,
+        # OpenAI-compatible providers (OpenAI, Gemini's OpenAI endpoint,
+        # OpenRouter, Groq, local vLLM/LM Studio…): set base URL + key + model
+        "openai_base_url": "https://api.openai.com/v1",
+        "openai_model": "gpt-4o",
+        "openai_api_key": "",
+        "openai_max_tokens": 4096,
         # >1 only helps when the Ollama server sets OLLAMA_NUM_PARALLEL >= N
         "ollama_concurrency": 1,
-        # hybrid: escalate to anthropic when local result matches any of these
+        # hybrid: escalate to this provider when a local result matches escalate_on
         "escalate_on": ["low_confidence", "malformed_json", "flags"],
+        "escalate_to": "anthropic",  # anthropic | openai
     },
     "extract": {
         "jpeg_quality": 2,  # ffmpeg -qscale:v
@@ -68,6 +75,9 @@ ENV_OVERRIDES = {
     "FLIPSCAN_OLLAMA_URL": ("provider", "ollama_url"),
     "FLIPSCAN_OLLAMA_MODEL": ("provider", "ollama_model"),
     "FLIPSCAN_ANTHROPIC_MODEL": ("provider", "anthropic_model"),
+    "FLIPSCAN_OPENAI_BASE_URL": ("provider", "openai_base_url"),
+    "FLIPSCAN_OPENAI_MODEL": ("provider", "openai_model"),
+    "FLIPSCAN_OPENAI_API_KEY": ("provider", "openai_api_key"),
 }
 
 

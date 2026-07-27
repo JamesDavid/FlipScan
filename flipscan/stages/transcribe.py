@@ -585,21 +585,22 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
             escalate_on = cfg["provider"]["escalate_on"]
             escalate = [pid for pid, r in results.items()
                         if needs_escalation(r, escalate_on)]
+            target = cfg["provider"].get("escalate_to", "anthropic")
             from ..backends import anthropic_enabled
-            if escalate and not anthropic_enabled(cfg):
+            if escalate and target == "anthropic" and not anthropic_enabled(cfg):
                 log(f"  hybrid: {len(escalate)} pages would escalate, but the "
                     f"Anthropic API is disabled in settings — keeping local results")
                 escalate = []
             if escalate:
-                log(f"  hybrid: escalating {len(escalate)} pages to anthropic")
+                log(f"  hybrid: escalating {len(escalate)} pages to {target}")
                 remote = get_backend(
-                    {**cfg, "provider": {**cfg["provider"], "name": "anthropic"}})
+                    {**cfg, "provider": {**cfg["provider"], "name": target}})
                 for pid, r in remote.transcribe(
                         [(pid, ws.root / by_id[pid]["llm_image"]) for pid in escalate],
                         log).items():
                     if "error" not in r:
                         by_id[pid]["status"] = "ok"
-                        _write_result(ws, by_id[pid], r, "anthropic")
+                        _write_result(ws, by_id[pid], r, target)
                         _cache_page(ws, by_id[pid])
                 ws.save()
         elif provider == "anthropic":

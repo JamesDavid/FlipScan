@@ -311,9 +311,12 @@ async function showSettings() {
     <h2>Settings <span class="meta">(apply to all projects)</span></h2>
     <label>Transcription provider</label>
     <select id="set-provider">
-      ${["ollama","anthropic","hybrid","mock"].map(p =>
+      ${["ollama","anthropic","openai","hybrid","mock"].map(p =>
         `<option ${p === s.provider ? "selected" : ""}>${p}</option>`).join("")}
     </select>
+    <div class="meta" style="margin:.2rem 0 .6rem"><b>openai</b> = any
+      OpenAI-compatible vision API (OpenAI, Google Gemini, OpenRouter, Groq,
+      local vLLM/LM Studio) — configure it below.</div>
     <label>Ollama server URL</label>
     <div class="row" style="flex-wrap:nowrap">
       <input id="set-ourl" value="${esc(s.ollama_url)}" style="margin-bottom:0">
@@ -336,9 +339,34 @@ async function showSettings() {
       <span class="meta" style="margin:0">— unchecked: nothing is ever sent or
         billed (hybrid escalation, AI refine, page re-read all stay local);
         the key stays saved</span></label>
-    <div class="meta" style="margin-bottom:.6rem">Stored in the projects folder's
+    <hr style="border:0;border-top:1px solid var(--line);margin:.9rem 0">
+    <label>OpenAI-compatible provider <span class="meta">— for the <b>openai</b>
+      provider above (and hybrid escalation)</span></label>
+    <div class="row" style="flex-wrap:wrap;margin-bottom:.4rem">
+      <button class="secondary" onclick="setOaiPreset('https://api.openai.com/v1','gpt-4o')">OpenAI · GPT-4o</button>
+      <button class="secondary" onclick="setOaiPreset('https://generativelanguage.googleapis.com/v1beta/openai','gemini-2.0-flash')">Google · Gemini Flash</button>
+      <button class="secondary" onclick="setOaiPreset('https://openrouter.ai/api/v1','openai/gpt-4o')">OpenRouter</button>
+    </div>
+    <label>Base URL</label>
+    <input id="set-oaiurl" value="${esc(s.openai_base_url || '')}">
+    <label>Model</label>
+    <input id="set-oaimodel" value="${esc(s.openai_model || '')}"
+           placeholder="gpt-4o · gemini-2.0-flash · openai/gpt-4o …">
+    <label>API key ${s.openai_api_key_set
+      ? '<span class="badge ok">configured</span>' : "(for the openai provider)"}</label>
+    <input id="set-oaikey" type="password"
+           placeholder="${s.openai_api_key_set ? "leave blank to keep current key"
+             : "OpenAI / OpenRouter / Gemini key"}">
+    <div class="meta" style="margin:.3rem 0 .6rem">⚠ the openai provider sends each
+      page image to that service (unlike local Ollama).</div>
+    <label>When hybrid escalates, send low-confidence pages to</label>
+    <select id="set-escto" style="width:auto">
+      ${["anthropic","openai"].map(t =>
+        `<option ${t === s.escalate_to ? "selected" : ""}>${t}</option>`).join("")}
+    </select>
+    <div class="meta" style="margin:.6rem 0">Stored in the projects folder's
       config.toml on this machine. Hybrid mode transcribes locally first and only
-      sends low-confidence pages to Anthropic.</div>
+      sends flagged pages to the chosen cloud provider.</div>
     <button onclick="saveSettings()">Save settings</button>
     <span class="meta" id="settings-status" style="margin-left:.6rem"></span>
   </div>`;
@@ -358,6 +386,12 @@ async function testOllama() {
   }
 }
 
+function setOaiPreset(url, model) {
+  $("set-oaiurl").value = url;
+  $("set-oaimodel").value = model;
+  $("set-provider").value = "openai";
+}
+
 async function saveSettings() {
   await api("/settings", {method:"PUT", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({
@@ -366,6 +400,11 @@ async function saveSettings() {
       ollama_model: $("set-omodel").value,
       anthropic_model: $("set-amodel").value,
       anthropic_api_key: $("set-akey").value,
+      anthropic_enabled: $("set-aenabled").checked,
+      openai_base_url: $("set-oaiurl").value,
+      openai_model: $("set-oaimodel").value,
+      openai_api_key: $("set-oaikey").value,
+      escalate_to: $("set-escto").value,
     })});
   $("settings-status").textContent = "saved ✓";
   setTimeout(() => $("settings-status").textContent = "", 2500);

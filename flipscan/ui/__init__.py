@@ -129,6 +129,10 @@ class Settings(BaseModel):
     anthropic_model: str = ""
     anthropic_api_key: str = ""
     anthropic_enabled: bool = True
+    openai_base_url: str = ""
+    openai_model: str = ""
+    openai_api_key: str = ""
+    escalate_to: str = "anthropic"
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -527,6 +531,12 @@ def create_app(root: Path) -> FastAPI:
             "anthropic_api_key_set": bool(p.get("anthropic_api_key")
                                           or os.environ.get("ANTHROPIC_API_KEY")
                                           or os.environ.get("FLIPSCAN_ANTHROPIC_API_KEY")),
+            "openai_base_url": p.get("openai_base_url", "https://api.openai.com/v1"),
+            "openai_model": p.get("openai_model", "gpt-4o"),
+            "openai_api_key_set": bool(p.get("openai_api_key")
+                                       or os.environ.get("OPENAI_API_KEY")
+                                       or os.environ.get("FLIPSCAN_OPENAI_API_KEY")),
+            "escalate_to": p.get("escalate_to", "anthropic"),
         }
 
     @app.put("/api/settings")
@@ -540,6 +550,11 @@ def create_app(root: Path) -> FastAPI:
             "anthropic_enabled": s.anthropic_enabled,
             # keep the stored key unless a new one was typed
             "anthropic_api_key": s.anthropic_api_key or current.get("anthropic_api_key", ""),
+            "openai_base_url": s.openai_base_url or current.get("openai_base_url",
+                                                                "https://api.openai.com/v1"),
+            "openai_model": s.openai_model or current.get("openai_model", "gpt-4o"),
+            "openai_api_key": s.openai_api_key or current.get("openai_api_key", ""),
+            "escalate_to": s.escalate_to or current.get("escalate_to", "anthropic"),
         }})
         return {"ok": True}
 
