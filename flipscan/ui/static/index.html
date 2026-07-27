@@ -2145,11 +2145,24 @@ function renderReview() {
         onclick="openProject(current,'pipeline')">✕ exit</button>
     </div>
     <div style="color:#b45309;margin:.4rem 0">⚠ ${esc(it.reasons.join("; "))}</div>
-    ${pg.color ? `<img decoding="async"
-       src="/api/projects/${current}/thumb/${pg.color}?w=900${fv(pg.color)}"
-       style="max-height:56vh;max-width:100%;border:1px solid var(--line);
-              border-radius:6px;display:block;margin:0 auto">`
-      : "<div class='meta'>no processed image for this page yet</div>"}
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1 1 340px;min-width:280px">
+        ${pg.color ? `<img decoding="async"
+           src="/api/projects/${current}/thumb/${pg.color}?w=900${fv(pg.color)}"
+           style="max-height:70vh;max-width:100%;border:1px solid var(--line);
+                  border-radius:6px;display:block;margin:0 auto">`
+          : "<div class='meta'>no processed image for this page yet</div>"}
+      </div>
+      <div style="flex:1 1 340px;min-width:280px">
+        <div class="meta" style="margin:0 0 .3rem">Extracted markdown — compare it
+          against the page to decide if a reshoot/re-OCR is worth it:</div>
+        <pre id="rv-md-${it.id}" style="white-space:pre-wrap;word-break:break-word;
+             max-height:66vh;overflow:auto;margin:0;padding:.6rem .8rem;
+             border:1px solid var(--line);border-radius:6px;font-size:.82rem;
+             line-height:1.4;background:var(--panel,#f9fafb)">${
+          pg.md ? "loading…" : "— no transcription for this page —"}</pre>
+      </div>
+    </div>
     <div class="row" style="margin-top:.8rem">
       <button style="font-size:1rem;padding:.65rem 1.3rem"
         onclick="reviewKeep()">✔ Agree — reshoot it</button>
@@ -2162,6 +2175,15 @@ function renderReview() {
         title="junk capture — hide the page entirely"
         onclick="reviewHide('${it.id}')">Hide page</button>
     </div></div>`;
+  // fill the extracted markdown (async — the manifest only has its path)
+  if (pg.md) {
+    const el = $("rv-md-" + it.id);
+    fetch(`/api/projects/${current}/file/${pg.md}`)
+      .then(r => r.ok ? r.text() : Promise.reject())
+      .then(t => { if (el && review.items[review.i]?.id === it.id)
+                     el.textContent = t.trim() || "— empty transcription —"; })
+      .catch(() => { if (el) el.textContent = "— couldn't load transcription —"; });
+  }
 }
 
 function reviewKeep() { review.kept++; review.i++; renderReview(); }
