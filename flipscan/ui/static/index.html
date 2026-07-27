@@ -2254,7 +2254,17 @@ function cropWizStep() {
   const info = $("crop-wiz-info");
   if (info) info.innerHTML = `<b>${cr.i + 1} / ${cr.steps.length}</b> · ` +
     `${s.printed_number != null ? "page " + s.printed_number : s.pageId} · ` +
-    `region ${s.ridx}${s.caption ? " · " + esc(s.caption).slice(0, 44) : ""}`;
+    `region ${s.ridx}`;
+  // full caption gets its own multi-line banner above the image (never truncated)
+  const cap = $("crop-wiz-caption");
+  if (cap) {
+    if (s.caption) {
+      cap.innerHTML = `<b>Crop this:</b> ${esc(s.caption)}`;
+      cap.style.display = "";
+    } else {
+      cap.style.display = "none";
+    }
+  }
 }
 // called by saveCrop() after a crop is stored (Save & next)
 async function cropWizAdvance(cropped) {
@@ -2486,6 +2496,10 @@ function cropModalHtml() {
           <button class="secondary" onclick="cropWizExit()">✕ Exit</button>
         </span>
       </div>
+      <div id="crop-wiz-caption" style="display:none;max-width:86vw;
+           margin:0 0 .5rem;padding:.5rem .7rem;border-radius:6px;
+           background:var(--panel,#f3f4f6);border:1px solid var(--line,#e5e7eb);
+           font-size:.85rem;line-height:1.35;white-space:normal"></div>
       <div id="crop-stage" style="position:relative;touch-action:none;cursor:crosshair;
            display:inline-block">
         <img id="crop-img" style="max-width:86vw;max-height:75vh;display:block;
@@ -2535,6 +2549,7 @@ function openCrop(pageId, figIdx, origin = "figures", isRegion = false) {
     $("crop-wiz-btns").style.display = wiz ? "" : "none";
     $("crop-normal-btns").style.display = wiz ? "none" : "";
     $("crop-wiz-info").style.display = wiz ? "" : "none";
+    $("crop-wiz-caption").style.display = "none";  // set by cropWizStep when there's a caption
     $("crop-hint").style.display = wiz ? "none" : "";
     $("crop-title").textContent = wiz ? "✂ Crop wizard" : "Re-crop figure";
   }
