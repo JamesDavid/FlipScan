@@ -2154,13 +2154,15 @@ function renderReview() {
           : "<div class='meta'>no processed image for this page yet</div>"}
       </div>
       <div style="flex:1 1 340px;min-width:280px">
-        <div class="meta" style="margin:0 0 .3rem">Extracted markdown — compare it
-          against the page to decide if a reshoot/re-OCR is worth it:</div>
-        <pre id="rv-md-${it.id}" style="white-space:pre-wrap;word-break:break-word;
-             max-height:66vh;overflow:auto;margin:0;padding:.6rem .8rem;
-             border:1px solid var(--line);border-radius:6px;font-size:.82rem;
-             line-height:1.4;background:var(--panel,#f9fafb)">${
-          pg.md ? "loading…" : "— no transcription for this page —"}</pre>
+        <div class="meta" style="margin:0 0 .3rem">Extracted markdown — edit &amp;
+          save it here, or compare against the page to decide on a reshoot/re-OCR:</div>
+        <textarea id="md-${it.id}" data-page="${it.id}"
+          placeholder="${pg.md ? "loading…" : "no transcription for this page"}"
+          style="height:66vh;font-size:.82rem;line-height:1.4"
+          oninput="this.dataset.dirty=1;const b=$('mdsave-${it.id}');
+                   b.textContent='Save markdown *';b.disabled=false"></textarea>
+        <button style="margin-top:.4rem" id="mdsave-${it.id}"
+          onclick="saveMd('${it.id}')">Save markdown</button>
       </div>
     </div>
     <div class="row" style="margin-top:.8rem">
@@ -2175,23 +2177,38 @@ function renderReview() {
         title="junk capture — hide the page entirely"
         onclick="reviewHide('${it.id}')">Hide page</button>
     </div></div>`;
-  // fill the extracted markdown (async — the manifest only has its path)
+  // fill the editable markdown (async — the manifest only has its path)
   if (pg.md) {
-    const el = $("rv-md-" + it.id);
     fetch(`/api/projects/${current}/file/${pg.md}`)
       .then(r => r.ok ? r.text() : Promise.reject())
-      .then(t => { if (el && review.items[review.i]?.id === it.id)
-                     el.textContent = t.trim() || "— empty transcription —"; })
-      .catch(() => { if (el) el.textContent = "— couldn't load transcription —"; });
+      .then(t => {
+        const el = $("md-" + it.id);
+        // don't clobber the editor if we've moved on, or the user is editing it
+        if (el && review.items[review.i]?.id === it.id
+            && !el.dataset.dirty && document.activeElement !== el)
+          el.value = t;
+      })
+      .catch(() => {});
   }
 }
 
-function reviewKeep() { review.kept++; review.i++; renderReview(); }
+// guard against navigating away from unsaved markdown edits in the review pane
+function reviewDirtyOK() {
+  const it = review?.items?.[review.i];
+  const el = it && $("md-" + it.id);
+  if (el && el.dataset.dirty)
+    return confirm("You have unsaved markdown edits on this page. Leave without "
+      + "saving?\n\n(Hit “Save markdown” first to keep them.)");
+  return true;
+}
+
+function reviewKeep() { if (!reviewDirtyOK()) return; review.kept++; review.i++; renderReview(); }
 
 // leave the item exactly as it is (still flagged) and move on
-function reviewSkip() { review.skipped++; review.i++; renderReview(); }
+function reviewSkip() { if (!reviewDirtyOK()) return; review.skipped++; review.i++; renderReview(); }
 
 async function reviewDismiss(pageId) {
+  if (!reviewDirtyOK()) return;
   const pg = (window._proj?.pages || []).find(x => x.id === pageId) || {};
   const body = {ignore_suspect: true};
   if (pg.needs_reshoot) body.needs_reshoot = false;
