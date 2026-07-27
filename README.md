@@ -121,6 +121,23 @@ Set globally in Settings (⚙) or per-workspace `config.toml`.
 - **Hybrid**: every page goes through Ollama first; only pages that come back low-confidence, malformed, or flagged are re-run through a cloud provider — Anthropic or the OpenAI-compatible one, chosen by `escalate_to`. Tune the triggers via `escalate_on`.
 - **Mock**: placeholder text, no model calls — for testing the plumbing.
 
+### Provider settings (⚙)
+
+Open **Settings** from the sidebar (⚙). Everything here is global — it applies to every project — and is saved to `config.toml` in your projects folder (the API keys never leave that machine and are gitignored). Fields:
+
+- **Transcription provider** — `ollama` · `anthropic` · `openai` · `hybrid` · `mock`. This picks which backend the pipeline (and per-page retry-OCR) uses.
+- **Ollama** — the server URL (with a **Test** button that lists the models it can reach) and the **vision model** name (autocompletes from the server). Runs entirely on your own hardware; nothing is sent out.
+- **Anthropic** — the **model** and **API key**, plus an **allow Anthropic API calls** checkbox: uncheck it and nothing is ever sent or billed (hybrid escalation, figure AI-refine, and page re-read all stay local) while your key stays saved. A "configured" badge shows when a key is stored; leave the key field blank to keep the current one.
+- **OpenAI-compatible** — a **base URL**, **model**, and **API key** for any OpenAI-style vision API, with one-click **presets**:
+  - **OpenAI · GPT-4o** → `https://api.openai.com/v1`, model `gpt-4o`
+  - **Google · Gemini Flash** → `https://generativelanguage.googleapis.com/v1beta/openai`, model `gemini-2.0-flash`
+  - **OpenRouter** → `https://openrouter.ai/api/v1`, model `openai/gpt-4o` (swap the model for any vision model OpenRouter offers)
+
+  A preset also flips the provider to `openai`. The model field is free-text, so any model name works (Groq, Together, Azure, a local vLLM/LM Studio URL, etc.). ⚠ Unlike Ollama, this sends each page image to that provider.
+- **When hybrid escalates, send low-confidence pages to** — `anthropic` or `openai`. In **hybrid** mode every page is transcribed locally on Ollama first, then only the pages that come back low-confidence, malformed, or flagged (`escalate_on`) are re-run on this cloud provider. Best of both: cheap/private for the easy pages, high accuracy where it matters.
+
+Prefer files/CI? The same values have environment overrides — `FLIPSCAN_PROVIDER`, `FLIPSCAN_OLLAMA_URL`/`_MODEL`, `FLIPSCAN_ANTHROPIC_MODEL`/`_API_KEY`, `FLIPSCAN_OPENAI_BASE_URL`/`_MODEL`/`_API_KEY` — see [Configuration](#configuration).
+
 ## Pipeline
 
 ```
