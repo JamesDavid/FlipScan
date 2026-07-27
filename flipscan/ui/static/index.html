@@ -2214,78 +2214,78 @@ async function reocrOne(pageId) {
   openProject(current, "pipeline");
 }
 
-// ---- crop list: step through pages whose figure regions need a crop drawn
+// ---- crop wizard: step through every region that needs a crop, opening the
+// crop tool inline on each one so the user just draws → Save & next → draw…
 let cropReview = null;
 async function startCropReview() {
   const r = await api(`/projects/${current}/crop-list`);
   if (!r.items?.length) { alert("Crop list is empty — every region has a crop."); return; }
-  cropReview = {items: r.items.map(it => ({...it, cropped: new Set()})),
-                i: 0, done: 0, skipped: 0};
-  renderCropReview();
-}
-function renderCropReview() {
-  const body = $("tabbody"), cr = cropReview;
+  // flatten pages → one wizard step per uncropped region
+  const steps = [], totals = {};
+  for (const it of r.items) {
+    totals[it.id] = it.regions.length;
+    it.regions.forEach((rg, k) => steps.push({
+      pageId: it.id, printed_number: it.printed_number, ridx: rg.idx,
+      caption: rg.caption || "", suspect: !!it.suspect,
+      lastOfPage: k === it.regions.length - 1,
+    }));
+  }
+  cropReview = {steps, totals, cropped: {}, i: 0, done: 0, skipped: 0};
+  // render the host body ONCE, with the crop modal in the DOM, then drive it
   $("main").scrollTop = 0;
-  if (cr.i >= cr.items.length) {
-    body.innerHTML = `<div class="card" style="text-align:center">
-      <h2>Crop list done</h2>
-      <p>${cr.done} pages cropped · ${cr.skipped} skipped</p>
-      <button class="secondary" onclick="openProject(current,'pipeline')">Back to pipeline</button>
-    </div>`;
-    return;
-  }
-  const it = cr.items[cr.i];
-  const pg = (window._proj?.pages || []).find(x => x.id === it.id) || {};
-  const remaining = it.regions.filter(rg => !it.cropped.has(rg.idx));
-  body.innerHTML = `<div class="card">
+  $("tabbody").innerHTML = `<div class="card">
     <div class="row">
-      <b>${cr.i + 1} / ${cr.items.length}</b>
-      <b>${it.printed_number != null ? "page " + it.printed_number : "unnumbered"}</b>
-      <span class="meta" style="margin:0">· ${it.id}</span>
-      <a href="javascript:void(0)" onclick="gotoPage('${it.id}')" style="margin-left:.6rem">open in pages tab</a>
+      <b>✂ Crop wizard</b>
+      <span class="meta" style="margin:0">draw a box for each figure the model
+        found (drag corners to fine-tune, or hit ✨ Magic crop), then Save &amp; next</span>
       <button class="secondary" style="margin-left:auto"
-        onclick="openProject(current,'pipeline')">✕ exit</button>
+        onclick="cropWizExit()">✕ exit</button>
     </div>
-    ${pg.color ? `<img decoding="async"
-       src="/api/projects/${current}/thumb/${pg.color}?w=900${fv(pg.color)}"
-       style="max-height:52vh;max-width:100%;border:1px solid var(--line);
-              border-radius:6px;display:block;margin:.4rem auto">` : ""}
-    <div class="meta" style="margin:.5rem 0 .2rem">${it.regions.length} figure
-      region${it.regions.length > 1 ? "s" : ""} the model marked — draw a box for each
-      (in the crop tool you can drag or hit ✨ Magic crop):</div>
-    <div class="row" style="flex-wrap:wrap">
-      ${it.regions.map(rg => it.cropped.has(rg.idx)
-        ? `<span class="badge ok">✓ region ${rg.idx}${rg.caption ? " · " + esc(rg.caption).slice(0,24) : ""}</span>`
-        : `<button onclick="cropReviewOpen('${it.id}', ${rg.idx})">✂ crop region ${rg.idx}${
-            rg.caption ? " · " + esc(rg.caption).slice(0,24) : ""}</button>`).join(" ")}
-    </div>
-    <div class="row" style="margin-top:.9rem">
-      ${remaining.length === 0
-        ? `<button style="font-size:1rem;padding:.6rem 1.2rem"
-             onclick="cropReviewNext(true)">✓ Done — next page</button>`
-        : `<span class="meta">crop the ${remaining.length} remaining region${
-            remaining.length > 1 ? "s" : ""} above…</span>`}
-      <button class="secondary" style="margin-left:auto"
-        onclick="cropReviewNext(false)">⏭ Skip page</button>
-    </div></div>`;
+    <div class="meta" id="crop-wiz-status" style="margin-top:.4rem"></div>
+  </div>` + cropModalHtml();
+  cropWizStep();
 }
-function cropReviewOpen(pageId, ri) {
-  openCrop(pageId, ri, "cropreview", true);   // saveCrop routes back to the stepper
+function cropWizStep() {
+  const cr = cropReview;
+  if (!cr) return;
+  if (cr.i >= cr.steps.length) return cropWizDone();
+  const s = cr.steps[cr.i];
+  openCrop(s.pageId, s.ridx, "cropreview", true);   // shows modal + wizard UI
+  const info = $("crop-wiz-info");
+  if (info) info.innerHTML = `<b>${cr.i + 1} / ${cr.steps.length}</b> · ` +
+    `${s.printed_number != null ? "page " + s.printed_number : s.pageId} · ` +
+    `region ${s.ridx}${s.caption ? " · " + esc(s.caption).slice(0, 44) : ""}`;
 }
-async function cropReviewNext(completed) {
-  const it = cropReview.items[cropReview.i];
-  if (completed) {
-    cropReview.done++;
-    // its only other complaint was a dismissible quality note — clear it so it
-    // leaves the lists (cropping it is the user vouching for the page)
-    if (it.suspect)
-      try { await api(`/projects/${current}/pages/${it.id}/accept-crops`, {method: "POST"}); }
-      catch {}
-  } else {
-    cropReview.skipped++;
-  }
-  cropReview.i++;
-  renderCropReview();
+// called by saveCrop() after a crop is stored (Save & next)
+async function cropWizAdvance(cropped) {
+  const cr = cropReview;
+  if (!cr) return;
+  const s = cr.steps[cr.i];
+  if (cropped) { cr.done++; cr.cropped[s.pageId] = (cr.cropped[s.pageId] || 0) + 1; }
+  else cr.skipped++;
+  // once every region on a suspect page is cropped, vouch for the page so it
+  // leaves the lists (clears the dismissible quality note)
+  if (s.lastOfPage && s.suspect && (cr.cropped[s.pageId] || 0) === cr.totals[s.pageId])
+    try { await api(`/projects/${current}/pages/${s.pageId}/accept-crops`, {method: "POST"}); }
+    catch {}
+  cr.i++;
+  cropWizStep();
+}
+function cropWizSkip() { cropWizAdvance(false); }
+function cropWizExit() {
+  cropReview = null;
+  $("crop-modal") && ($("crop-modal").style.display = "none");
+  openProject(current, "pipeline");
+}
+function cropWizDone() {
+  const cr = cropReview;
+  cropReview = null;
+  $("crop-modal") && ($("crop-modal").style.display = "none");
+  $("tabbody").innerHTML = `<div class="card" style="text-align:center">
+    <h2>Crop wizard done</h2>
+    <p>${cr.done} region${cr.done === 1 ? "" : "s"} cropped · ${cr.skipped} skipped</p>
+    <button class="secondary" onclick="openProject(current,'pipeline')">Back to pipeline</button>
+  </div>`;
 }
 
 function nextSection(ch) {
@@ -2469,14 +2469,22 @@ function cropModalHtml() {
     <div style="background:#fff;border-radius:10px;padding:1rem;max-width:92vw;
          max-height:92vh;overflow:auto">
       <div class="row" style="margin-bottom:.5rem">
-        <b>Re-crop figure</b>
-        <span class="meta">drag to draw a box, then drag corners/edges to fine-tune
-          (hold <b>Shift</b> to keep a straight rectangle) — skewed shapes are
-          straightened back to a rectangle</span>
+        <b id="crop-title">Re-crop figure</b>
+        <span class="meta" id="crop-hint">drag to draw a box, then drag corners/edges
+          to fine-tune (hold <b>Shift</b> to keep a straight rectangle) — skewed
+          shapes are straightened back to a rectangle</span>
+        <span class="meta" id="crop-wiz-info" style="display:none"></span>
         <button class="secondary" style="margin-left:auto"
                 onclick="magicCrop()">✨ Magic crop</button>
-        <button onclick="saveCrop()">Save crop</button>
-        <button class="secondary" onclick="$('crop-modal').style.display='none'">Cancel</button>
+        <span id="crop-normal-btns">
+          <button onclick="saveCrop()">Save crop</button>
+          <button class="secondary" onclick="$('crop-modal').style.display='none'">Cancel</button>
+        </span>
+        <span id="crop-wiz-btns" style="display:none">
+          <button onclick="saveCrop()">✓ Save &amp; next</button>
+          <button class="secondary" onclick="cropWizSkip()">⏭ Skip</button>
+          <button class="secondary" onclick="cropWizExit()">✕ Exit</button>
+        </span>
       </div>
       <div id="crop-stage" style="position:relative;touch-action:none;cursor:crosshair;
            display:inline-block">
@@ -2521,6 +2529,15 @@ function openCrop(pageId, figIdx, origin = "figures", isRegion = false) {
   const src = (own && figRel) ? figRel : pg.color;
   img.src = `/api/projects/${current}/file/${src}?t=${Date.now()}`;
   $("crop-modal").style.display = "flex";
+  // wizard vs one-off UI
+  const wiz = origin === "cropreview";
+  if ($("crop-wiz-btns")) {
+    $("crop-wiz-btns").style.display = wiz ? "" : "none";
+    $("crop-normal-btns").style.display = wiz ? "none" : "";
+    $("crop-wiz-info").style.display = wiz ? "" : "none";
+    $("crop-hint").style.display = wiz ? "none" : "";
+    $("crop-title").textContent = wiz ? "✂ Crop wizard" : "Re-crop figure";
+  }
   img.onload = () => drawCropQuad();
   attachCropHandlers();
 }
@@ -2688,10 +2705,7 @@ async function saveCrop() {
     bumpFig(`figures/${cropCtx.pageId}_${String.fromCharCode(97 + cropCtx.figIdx % 26)}.png`);
   $("crop-modal").style.display = "none";
   if (cropCtx.origin === "cropreview" && cropReview) {
-    const it = cropReview.items[cropReview.i];
-    if (it && it.id === cropCtx.pageId) it.cropped.add(cropCtx.figIdx);
-    if (it && it.regions.every(rg => it.cropped.has(rg.idx))) cropReviewNext(true);
-    else renderCropReview();
+    cropWizAdvance(true);   // records the crop, opens the next region's crop tool
     return;
   }
   if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
