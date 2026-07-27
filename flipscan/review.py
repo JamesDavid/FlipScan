@@ -80,13 +80,70 @@ def page_reasons(p: dict) -> list[str]:
     return reasons
 
 
-def reshoot_list(ws: Workspace) -> list[dict]:
-    """Pages that should be re-photographed, with reasons."""
+def uncropped_regions(p: dict) -> list[int]:
+    """Region indices that have a [[region-N]] placeholder but no cropped figure
+    file yet — i.e. a crop still needs to be drawn."""
+    figs = p.get("figures") or []
+    out = []
+    for ri, r in enumerate(p.get("regions") or []):
+        expected = f"figures/{p['id']}_{chr(97 + ri % 26)}.png"
+        if not r.get("deleted") and expected not in figs:
+            out.append(ri)
+    return out
+
+
+def _needs_reshoot_work(p: dict) -> bool:
+    """True if the PAGE itself needs re-photographing or a structural fix —
+    something a crop can't solve and 'looks fine' can't waive."""
+    if p.get("transcribe_error") or p.get("needs_reshoot"):
+        return True
+    if p.get("number_rejected") or p.get("number_conflict"):
+        return True
+    if p.get("status") == "missing":
+        return True
+    return any(r.get("needs_reshoot") or r.get("stale_crop")
+               for r in p.get("regions") or [])
+
+
+def crop_list(ws: Workspace) -> list[dict]:
+    """Pages whose only real to-do is drawing a figure crop (the region marker
+    is there but no crop exists) — including pages whose OTHER complaints are
+    all dismissible quality suspicions ('looks fine'). Pages that genuinely
+    need re-shooting stay on the reshoot list instead."""
     items = []
     for p in ws.manifest["pages"]:
-        # informational notes (multi-column etc.) don't justify a reshoot
-        reasons = [r for r in page_reasons(p) if not r.startswith("note:")]
-        if reasons and p["status"] not in ("duplicate", "deleted"):
+        if p["status"] in ("duplicate", "deleted") or _needs_reshoot_work(p):
+            continue
+        regions = uncropped_regions(p)
+        if regions:
+            items.append({
+                "id": p["id"], "printed_number": p.get("printed_number"),
+                "regions": [{"idx": ri,
+                             "caption": (p["regions"][ri].get("caption") or "")}
+                            for ri in regions],
+                # remember whether we also cleared a dismissible suspicion here
+                "suspect": p["status"] == "suspect" and not p.get("suspect_ignored"),
+            })
+    return items
+
+
+def reshoot_list(ws: Workspace) -> list[dict]:
+    """Pages that should be re-photographed, with reasons. Pages whose only work
+    is a missing crop (see crop_list) are excluded, and the 'no crop' reason is
+    dropped from pages that remain for a genuine reshoot."""
+    items = []
+    for p in ws.manifest["pages"]:
+        if p["status"] in ("duplicate", "deleted"):
+            continue
+        # a pure crop page belongs to the crop list, not here
+        if uncropped_regions(p) and not _needs_reshoot_work(p):
+            continue
+        # informational notes (multi-column etc.) don't justify a reshoot; the
+        # 'no crop' note is handled by the crop list
+        reasons = [r for r in page_reasons(p)
+                   if not r.startswith("note:")
+                   and not (r.startswith("figure region ") and "has no crop" in r)]
+        if reasons:
             items.append({"id": p["id"], "printed_number": p.get("printed_number"),
                           "reasons": reasons})
     return items

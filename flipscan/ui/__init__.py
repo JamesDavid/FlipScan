@@ -1941,6 +1941,30 @@ def create_app(root: Path) -> FastAPI:
             "missing_ranges": format_ranges(ws.manifest.get("missing_pages", [])),
         }
 
+    @app.get("/api/projects/{name}/crop-list")
+    def crop_list_endpoint(name: str):
+        """Pages that just need a figure crop drawn (not a reshoot)."""
+        from ..review import crop_list
+        ws = ws_for(name)
+        return {"items": crop_list(ws)}
+
+    @app.post("/api/projects/{name}/pages/{page_id}/accept-crops")
+    def accept_crops(name: str, page_id: str):
+        """Called when the crop stepper finishes a page whose only other
+        complaints were dismissible — clear the suspect flag so it leaves the
+        lists (the user vouched for it by cropping it)."""
+        ws = ws_for(name)
+        page = ws.page(page_id)
+        if page is None:
+            raise HTTPException(404, "no such page")
+        if page.get("status") == "suspect":
+            from ..review import page_reasons
+            page["ignored_reasons"] = page_reasons(page)
+            page["suspect_ignored"] = True
+            page["status"] = "ok"
+            ws.save()
+        return {"ok": True}
+
     # ---------------- build + files
 
     @app.post("/api/projects/{name}/build")

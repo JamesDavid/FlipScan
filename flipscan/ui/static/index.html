@@ -774,7 +774,8 @@ function renderTab(tab, p) {
   const name = p.name, body = $("tabbody");
   if (tab === "pipeline") {
     Promise.all([api("/projects/" + name + "/reshoot"),
-                 api(`/projects/${name}/capture-queue`)]).then(([r, q]) => {
+                 api(`/projects/${name}/capture-queue`),
+                 api(`/projects/${name}/crop-list`)]).then(([r, q, cl]) => {
       const items = r.items || [];
       const anyPages = (p.pages || []).some(x => !x.role);
       const wizardCard = wizardCardHtml(q.items, anyPages);
@@ -785,7 +786,25 @@ function renderTab(tab, p) {
           appear in no video. Film those parts of the book (any direction) and use
           <b>+ Add video</b>, or photograph them with the capture wizard above.</p>
         </div>` : "";
-      body.innerHTML = wizardCard + missingCard
+      const cropItems = cl.items || [];
+      const nCrops = cropItems.reduce((s, it) => s + it.regions.length, 0);
+      const cropCard = `<div class="card" style="border:2px solid #6366f1">
+        <div class="row" style="margin-bottom:.4rem">
+          <h2 style="margin:0">✂ Crop list — regions needing a crop</h2>
+          ${cropItems.length ? `<button style="margin-left:auto"
+             onclick="startCropReview()">✂ Define crops (${nCrops})…</button>` : ""}
+        </div>
+        <div class="meta">figures the model marked but that were never cropped —
+          step through each page and draw the box (or ✨ magic crop). Pages whose
+          only other issue is a dismissible quality note are included here.</div>`
+        + (cropItems.length ? "<ul>" + cropItems.map(it =>
+            `<li><a href="javascript:void(0)" onclick="gotoPage('${it.id}')"><b>${it.id}</b>${
+              it.printed_number ? ` (printed ${it.printed_number})` : ""}</a> — ${
+              it.regions.length} region${it.regions.length > 1 ? "s" : ""}${
+              it.suspect ? ` <span class="meta">· page also flagged</span>` : ""}</li>`).join("")
+            + "</ul>"
+          : "<div class='meta'>empty — every region has a crop</div>") + `</div>`;
+      body.innerHTML = wizardCard + missingCard + cropCard
         + `<div class="card"><div class="row" style="margin-bottom:.4rem">
             <h2 style="margin:0">Reshoot list — captured badly</h2>
             ${items.length ? `<button style="margin-left:auto"
@@ -2115,6 +2134,80 @@ async function reviewHide(pageId) {
   review.dismissed++; review.i++; renderReview();
 }
 
+// ---- crop list: step through pages whose figure regions need a crop drawn
+let cropReview = null;
+async function startCropReview() {
+  const r = await api(`/projects/${current}/crop-list`);
+  if (!r.items?.length) { alert("Crop list is empty — every region has a crop."); return; }
+  cropReview = {items: r.items.map(it => ({...it, cropped: new Set()})),
+                i: 0, done: 0, skipped: 0};
+  renderCropReview();
+}
+function renderCropReview() {
+  const body = $("tabbody"), cr = cropReview;
+  $("main").scrollTop = 0;
+  if (cr.i >= cr.items.length) {
+    body.innerHTML = `<div class="card" style="text-align:center">
+      <h2>Crop list done</h2>
+      <p>${cr.done} pages cropped · ${cr.skipped} skipped</p>
+      <button class="secondary" onclick="openProject(current,'pipeline')">Back to pipeline</button>
+    </div>`;
+    return;
+  }
+  const it = cr.items[cr.i];
+  const pg = (window._proj?.pages || []).find(x => x.id === it.id) || {};
+  const remaining = it.regions.filter(rg => !it.cropped.has(rg.idx));
+  body.innerHTML = `<div class="card">
+    <div class="row">
+      <b>${cr.i + 1} / ${cr.items.length}</b>
+      <b>${it.printed_number != null ? "page " + it.printed_number : "unnumbered"}</b>
+      <span class="meta" style="margin:0">· ${it.id}</span>
+      <a href="javascript:void(0)" onclick="gotoPage('${it.id}')" style="margin-left:.6rem">open in pages tab</a>
+      <button class="secondary" style="margin-left:auto"
+        onclick="openProject(current,'pipeline')">✕ exit</button>
+    </div>
+    ${pg.color ? `<img decoding="async"
+       src="/api/projects/${current}/thumb/${pg.color}?w=900${fv(pg.color)}"
+       style="max-height:52vh;max-width:100%;border:1px solid var(--line);
+              border-radius:6px;display:block;margin:.4rem auto">` : ""}
+    <div class="meta" style="margin:.5rem 0 .2rem">${it.regions.length} figure
+      region${it.regions.length > 1 ? "s" : ""} the model marked — draw a box for each
+      (in the crop tool you can drag or hit ✨ Magic crop):</div>
+    <div class="row" style="flex-wrap:wrap">
+      ${it.regions.map(rg => it.cropped.has(rg.idx)
+        ? `<span class="badge ok">✓ region ${rg.idx}${rg.caption ? " · " + esc(rg.caption).slice(0,24) : ""}</span>`
+        : `<button onclick="cropReviewOpen('${it.id}', ${rg.idx})">✂ crop region ${rg.idx}${
+            rg.caption ? " · " + esc(rg.caption).slice(0,24) : ""}</button>`).join(" ")}
+    </div>
+    <div class="row" style="margin-top:.9rem">
+      ${remaining.length === 0
+        ? `<button style="font-size:1rem;padding:.6rem 1.2rem"
+             onclick="cropReviewNext(true)">✓ Done — next page</button>`
+        : `<span class="meta">crop the ${remaining.length} remaining region${
+            remaining.length > 1 ? "s" : ""} above…</span>`}
+      <button class="secondary" style="margin-left:auto"
+        onclick="cropReviewNext(false)">⏭ Skip page</button>
+    </div></div>`;
+}
+function cropReviewOpen(pageId, ri) {
+  openCrop(pageId, ri, "cropreview", true);   // saveCrop routes back to the stepper
+}
+async function cropReviewNext(completed) {
+  const it = cropReview.items[cropReview.i];
+  if (completed) {
+    cropReview.done++;
+    // its only other complaint was a dismissible quality note — clear it so it
+    // leaves the lists (cropping it is the user vouching for the page)
+    if (it.suspect)
+      try { await api(`/projects/${current}/pages/${it.id}/accept-crops`, {method: "POST"}); }
+      catch {}
+  } else {
+    cropReview.skipped++;
+  }
+  cropReview.i++;
+  renderCropReview();
+}
+
 function nextSection(ch) {
   pageFilters.chapter = ch;
   renderTab("pages", window._proj);
@@ -2514,6 +2607,13 @@ async function saveCrop() {
   if (!cropCtx.isPage)
     bumpFig(`figures/${cropCtx.pageId}_${String.fromCharCode(97 + cropCtx.figIdx % 26)}.png`);
   $("crop-modal").style.display = "none";
+  if (cropCtx.origin === "cropreview" && cropReview) {
+    const it = cropReview.items[cropReview.i];
+    if (it && it.id === cropCtx.pageId) it.cropped.add(cropCtx.figIdx);
+    if (it && it.regions.every(rg => it.cropped.has(rg.idx))) cropReviewNext(true);
+    else renderCropReview();
+    return;
+  }
   if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
   else openProject(current, "figures");
 }
