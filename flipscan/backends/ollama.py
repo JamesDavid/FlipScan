@@ -41,6 +41,33 @@ def _gutter(gray, by: str) -> int:
     return lo + int(np.argmin(prof[lo:hi]))
 
 
+def _join_split(parts: list[str]) -> str:
+    """Join transcribed page-halves without a spurious blank line where the
+    split fell: stitch a word hyphenated across the cut, flow a paragraph that
+    continued mid-sentence with a single space, and only keep a paragraph break
+    at a real boundary (sentence end, heading, list, blockquote)."""
+    import re
+    out = ""
+    for raw in parts:
+        seg = (raw or "").strip()
+        if not seg:
+            continue
+        if not out:
+            out = seg
+            continue
+        out = out.rstrip()
+        last = out.rsplit("\n", 1)[-1].strip()
+        first = seg.split("\n", 1)[0].strip()
+        starts_block = bool(re.match(r"^(#{1,6}\s|[-*+]\s|\d+[.)]\s|>)", first))
+        if last.endswith("-"):                       # hyphenated word across cut
+            out = out[:-1] + seg
+        elif last and last[-1] not in ".!?:;\"')]}" and not starts_block:
+            out = out + " " + seg                    # same paragraph — flow it
+        else:
+            out = out + "\n\n" + seg                 # real break
+    return out
+
+
 def _split_halves(img, cols: bool):
     """Two sub-images: left/right if `cols` else top/bottom, cut at the quietest
     gutter so no line/column is sliced through."""
@@ -161,7 +188,7 @@ class OllamaBackend(TranscriptionBackend):
                 pnum = res.get("page_number_printed")
         if not mds:
             return None
-        return {"markdown": "\n\n".join(mds), "page_number_printed": pnum,
+        return {"markdown": _join_split(mds), "page_number_printed": pnum,
                 "confidence": "low", "regions": [],
                 "flags": ["split_recovered"] + (["multi_column"] if cols else [])}
 
