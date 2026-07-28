@@ -1884,6 +1884,19 @@ const fv = (k) => {
 };
 function bumpFig(k) { figV[k] = (figV[k] || 0) + 1; }
 
+// Reload a single figure's thumbnail(s) in place (new cache-busting version)
+// WITHOUT re-rendering the tab — so a re-crop on the figures tab doesn't rebuild
+// the list and throw you back to the top. Call bumpFig(figFile) first.
+function refreshFigThumb(figFile) {
+  document.querySelectorAll("img").forEach(img => {
+    const u = img.getAttribute("src") || "";
+    if (u.includes(`/thumb/${figFile}?w=`)) {
+      const w = (u.match(/[?&]w=(\d+)/) || [])[1] || "380";
+      img.src = `/api/projects/${current}/thumb/${figFile}?w=${w}${fv(figFile)}`;
+    }
+  });
+}
+
 // thumbnail width matched to the actual layout: full-width cells on phones,
 // the ~340px image column on desktop — halves phone decode memory
 function thumbW() {
@@ -2808,6 +2821,10 @@ async function saveCrop() {
     return;
   }
   if (cropCtx.origin === "pages") gotoPage(cropCtx.pageId);
+  else if (cropCtx.origin === "figures" && !cropCtx.isRegion)
+    // re-crop from the figures tab: swap just this thumbnail so the user keeps
+    // their scroll position instead of being bounced to the top
+    refreshFigThumb(`figures/${cropCtx.pageId}_${String.fromCharCode(97 + cropCtx.figIdx % 26)}.png`);
   else openProject(current, "figures");
 }
 
