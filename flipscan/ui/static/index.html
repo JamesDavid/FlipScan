@@ -950,10 +950,7 @@ function renderTab(tab, p) {
     document.querySelectorAll('textarea[id^="md-"]').forEach(t => {
       if (t.dataset.dirty) dirtyMd[t.id] = t.value;
     });
-    if (window._filterProj !== name) {   // fresh project -> fresh filters
-      pageFilters = {chapter: "", unnumbered: false};
-      window._filterProj = name;
-    }
+    freshFiltersFor(name);   // fresh project -> fresh filters (shared with figures)
     // assign every page to a chapter: printed-TOC ranges for numbered pages,
     // manual section marks always win, unnumbered pages inherit from the
     // previous page (book order)
@@ -982,16 +979,20 @@ function renderTab(tab, p) {
       if (!chapters.includes(pg._chapter)) chapters.push(pg._chapter);
     });
     const flt = pageFilters;
+    // a chapter chosen on the figures tab may have no pages here — keep it in the
+    // list so the shared filter stays visible/selected across the two tabs
+    const pageChapterOpts = chapterFilter && !chapters.includes(chapterFilter)
+      ? [...chapters, chapterFilter] : chapters;
     const shown = p.pages.filter(pg =>
-      (!flt.chapter || pg._chapter === flt.chapter)
+      (!chapterFilter || pg._chapter === chapterFilter)
       && (!flt.unnumbered || (pg.printed_number == null && !pg.role)));
     const toolbar = `<div class="card" style="padding:.7rem 1.5rem">
       <div class="row">
         <label style="margin:0">chapter</label>
         <select style="width:auto;margin:0"
-          onchange="pageFilters.chapter=this.value;renderTab('pages',window._proj)">
+          onchange="chapterFilter=this.value;renderTab('pages',window._proj)">
           <option value="">all</option>
-          ${chapters.map(c => `<option ${flt.chapter === c ? "selected" : ""}
+          ${pageChapterOpts.map(c => `<option ${chapterFilter === c ? "selected" : ""}
              value="${esc(c)}">${esc(c)}</option>`).join("")}
         </select>
         <label style="margin:0;display:flex;align-items:center;gap:.3rem">
@@ -1825,7 +1826,8 @@ async function gotoPage(pageId) {
     // the active section/unnumbered filter hides this page — switch the
     // filter to the section that contains it
     const pg = (window._proj?.pages || []).find(x => x.id === pageId);
-    pageFilters = {chapter: pg?._chapter || "", unnumbered: false};
+    chapterFilter = pg?._chapter || "";
+    pageFilters.unnumbered = false;
     renderTab("pages", window._proj);
     el = document.getElementById("cell-" + pageId);
   }
@@ -1861,8 +1863,19 @@ function toggleCell(pageId) {
   if (btn) btn.textContent = hidden ? "collapse ▴" : "expand ▾";
 }
 
-let pageFilters = {chapter: "", unnumbered: false};
-let figFilters = {chapter: ""};
+let pageFilters = {unnumbered: false};
+// The chapter filter is SHARED by the pages and figures tabs: pick a chapter in
+// one and the other shows the same slice when you open it. Loop-free BY DESIGN —
+// each tab's dropdown re-renders ONLY its own tab, never the other, so there is
+// no back-and-forth render cascade; the two sync lazily on tab switch.
+let chapterFilter = "";
+function freshFiltersFor(name) {   // reset filters when the project changes
+  if (window._filterProj !== name) {
+    chapterFilter = "";
+    pageFilters = {unnumbered: false};
+    window._filterProj = name;
+  }
+}
 let figV = {};   // session bumps (fallback until the next detail fetch)
 const fv = (k) => {
   const sv = window._proj?.file_versions?.[k] || 0;
@@ -2370,7 +2383,7 @@ function cropWizDone() {
 }
 
 function nextSection(ch) {
-  pageFilters.chapter = ch;
+  chapterFilter = ch;
   renderTab("pages", window._proj);
   $("main").scrollTop = 0;
 }
@@ -2860,11 +2873,14 @@ function renderFiguresTab(p, clusters) {
                  reacq: !!(pg.regions?.[ridx]?.needs_reshoot)});
     });
   });
+  freshFiltersFor(name);   // fresh project -> fresh filters (shared with pages)
   const figChapters = [];
   allRows.forEach(r => { if (!figChapters.includes(r.ch)) figChapters.push(r.ch); });
-  if (figFilters.chapter && !figChapters.includes(figFilters.chapter))
-    figFilters.chapter = "";   // stale filter (e.g. after switching projects)
-  const rows = allRows.filter(r => !figFilters.chapter || r.ch === figFilters.chapter);
+  // a chapter chosen on the pages tab may have no figures — keep it in the list
+  // so the shared filter stays visible/selected across the two tabs
+  const figChapterOpts = chapterFilter && !figChapters.includes(chapterFilter)
+    ? [...figChapters, chapterFilter] : figChapters;
+  const rows = allRows.filter(r => !chapterFilter || r.ch === chapterFilter);
   const groups = [];
   rows.forEach(r => {
     const last = groups[groups.length - 1];
@@ -2940,19 +2956,19 @@ function renderFiguresTab(p, clusters) {
     <div class="row" style="margin-bottom:.6rem">
       <label style="margin:0">chapter</label>
       <select style="width:auto;margin:0"
-        onchange="figFilters.chapter=this.value;renderTab('figures',window._proj)">
+        onchange="chapterFilter=this.value;renderTab('figures',window._proj)">
         <option value="">all</option>
-        ${figChapters.map(c => `<option ${figFilters.chapter === c ? "selected" : ""}
+        ${figChapterOpts.map(c => `<option ${chapterFilter === c ? "selected" : ""}
            value="${esc(c)}">${esc(c)}</option>`).join("")}
       </select>
-      ${figFilters.chapter ? `<span class="meta" style="margin:0">${rows.length} of
+      ${chapterFilter ? `<span class="meta" style="margin:0">${rows.length} of
         ${allRows.length} figures</span>` : ""}
       <button class="secondary" style="margin-left:auto" onclick="autoRefine()">✨ Auto-refine crops (edge detection)</button>
       <button onclick="aiRefine(this)" title="Claude proposes each figure's corners
 from the page photo; current manual crops are never touched">🤖 AI refine crops (Claude)</button>
     </div>` +
     (groups.map(groupHtml).join("")
-      || (figFilters.chapter
+      || (chapterFilter
           ? "<div class='meta'>no figures in this chapter</div>"
           : "<div class='meta'>no figures yet</div>"))
     + `</div>` + cropModalHtml();
