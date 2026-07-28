@@ -401,7 +401,15 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
                 break
         page["chapter"] = cur_chapter
 
-    book = _join_pages(_with_gap_markers(kept, texts))
+    # A PDF is already a COMPLETE scan: printed-number jumps just mean unnumbered
+    # pages (plates, front matter) sit between numbered ones — NOT pages missing
+    # from the scan. So skip the inline gap markers for PDF-sourced books. This
+    # matches reconcile(), which keeps PDF pages in authoritative import order and
+    # reports no missing pages (a video capture, by contrast, really can miss a
+    # page, so gap markers stay for those).
+    is_pdf = bool(kept) and all(p.get("source") == "pdf"
+                                for p in kept if not p.get("role"))
+    book = _join_pages(texts if is_pdf else _with_gap_markers(kept, texts))
     missing_nums = ws.manifest.get("missing_pages") or []
     if missing_nums:
         from .transcribe import format_ranges

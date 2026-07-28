@@ -2015,6 +2015,15 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/projects/{name}/build")
     def build(name: str, format: str = "epub", device: str = "none"):
         ws = ws_for(name)
+        # book.md is the source for EVERY output format, and it's only rewritten
+        # by assemble. A manifest edit (a page number, a deletion, a dedupe, an
+        # md edit…) leaves book.md stale, so always regenerate it here before
+        # packaging — otherwise the output keeps stale gap markers ("page 4
+        # missing from scan") the pages tab already cleared. Assemble is cheap
+        # (no model calls) and deterministic, so "build" reliably means "rebuild
+        # from the current manifest," immune to stale stage state.
+        from ..stages.assemble import run as assemble_run
+        assemble_run(ws, load_config(ws.root), log=lambda m: None)
         ext = {"epub": "epub", "markdown": "zip"}.get(format, "pdf")
         suffix = {"pdf-facsimile": "-facsimile", "markdown": "-markdown",
                   "pdf-latex": "-latex"}.get(format, "")
