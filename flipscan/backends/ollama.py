@@ -211,6 +211,29 @@ class OllamaBackend(TranscriptionBackend):
                 else:                              # split failed too → salvage
                     res = salvage_result(last_raw)
                     state = "salvaged" if res else "FAILED"
+            elif "cut_off_text" in (res.get("flags") or []):
+                # the whole page PARSED, but the model says text is cut off. On a
+                # two-column layout that almost always means it read one column
+                # and silently dropped the other. Split the columns, OCR each,
+                # and keep the result if it recovers more text. (Gate on the
+                # image gutter so a genuinely single-column page whose edge was
+                # cut off isn't sliced down the middle.)
+                import cv2
+                import numpy as np
+                img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8),
+                                   cv2.IMREAD_COLOR)
+                gray = (cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        if img is not None else None)
+                if gray is not None and _looks_multicolumn(gray):
+                    split = self._recover_split(img)
+                    if split and len(split.get("markdown", "")) > len(
+                            res.get("markdown", "")):
+                        if res.get("page_number_printed") is not None:
+                            split["page_number_printed"] = res["page_number_printed"]
+                        split["flags"] = sorted(set(res.get("flags", []))
+                                                | set(split.get("flags", [])))
+                        res = split
+                        state = "recovered (2-col split)"
             results[page_id] = res or {"error": "no usable response from model"}
             log(f"  ollama: {page_id} ({state}) [{i + 1}/{len(pages)}]")
         return results
