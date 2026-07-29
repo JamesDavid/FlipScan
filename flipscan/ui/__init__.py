@@ -768,6 +768,13 @@ def create_app(root: Path) -> FastAPI:
         ws.stage_reset("assemble")
         ws.save()
 
+    def _reassemble(ws):
+        """Force-regenerate work/book.md from the current pages. book.md is what
+        the proof tab and every build read, so this is the 'refresh the book'
+        action. Cheap — no model calls."""
+        from ..stages.assemble import run as assemble_run
+        assemble_run(ws, load_config(ws.root), log=lambda m: None)
+
     @app.patch("/api/projects/{name}/pages/{page_id}")
     def edit_page(name: str, page_id: str, edit: PageEdit):
         """Manual corrections: set/clear the printed page number, mark a page
@@ -1885,10 +1892,27 @@ def create_app(root: Path) -> FastAPI:
 
     # ---------------- proofread: a distinct, non-destructive layer
 
+    @app.post("/api/projects/{name}/reassemble")
+    def reassemble(name: str):
+        """Force work/book.md to regenerate from the current pages — the easy
+        'refresh the book' button. Proof and every build read book.md, so a page
+        edit that hasn't rebuilt it (e.g. a demoted index heading) shows up after
+        this. Assemble is cheap (no model calls)."""
+        ws = ws_for(name)
+        _reassemble(ws)
+        return {"ok": True}
+
     @app.get("/api/projects/{name}/proof")
     def proof_list(name: str):
         from ..proofread import proof_status
         ws = ws_for(name)
+        # book.md is the proof tab's source of truth; regenerate it from the
+        # current pages so the chapter list always reflects edits (a stale
+        # book.md is what makes index letters like "V" show as phantom sections)
+        try:
+            _reassemble(ws)
+        except Exception:
+            pass
         try:
             return {"chapters": proof_status(ws)}
         except FileNotFoundError as e:

@@ -258,6 +258,29 @@ def _demote_suppressed_headings(pages: list[dict], texts: list[str],
     return texts
 
 
+_LETTER_MARKER = re.compile(r"^\s*#{0,6}\s*[A-Z]\.?\s*$")
+_LETTER_HEADING = re.compile(r"^\s*#{1,6}\s+([A-Z]\.?)\s*$")
+
+
+def _demote_index_letters(texts: list[str]) -> list[str]:
+    """An alphabetical index or glossary marks its sections with single letters
+    (A, B, C…). OCR usually leaves them as plain text, but occasionally turns
+    one into a `# V` heading — which then wrongly opens a chapter (and a proof
+    section, and a TOC entry). On any page that carries several single-letter
+    section markers — i.e. an index — demote the heading ones back to plain text
+    so the letters stay consistent and never split a chapter. A lone
+    single-letter heading on an ordinary page (e.g. a bare roman-numeral chapter
+    opener) has no siblings, so it is left untouched."""
+    out = []
+    for t in texts:
+        lines = t.splitlines()
+        if sum(1 for ln in lines if _LETTER_MARKER.match(ln)) >= 2:
+            lines = [_LETTER_HEADING.sub(r"\1", ln) for ln in lines]
+            t = "\n".join(lines)
+        out.append(t)
+    return out
+
+
 def _apply_manual_sections(pages: list[dict], texts: list[str]) -> list[str]:
     """A user-assigned section heading on a page outranks everything: that
     page opens a chapter with exactly that title."""
@@ -386,6 +409,7 @@ def run(ws: Workspace, cfg: dict, log=print) -> None:
     texts = [heal_hyphenation(t) for t in texts]
     texts = _demote_suppressed_headings(
         kept, texts, ws.manifest.get("suppressed_headings") or {})
+    texts = _demote_index_letters(texts)  # A/B/C… index letters aren't chapters
 
     # record each page's chapter (matches the built book's # chapter splits) so
     # the pages tab can filter by the real chapter structure, cover included

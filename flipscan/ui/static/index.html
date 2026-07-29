@@ -1442,6 +1442,9 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
           <button class="secondary" onclick="rereadAllStuck()"
             title="re-read every stuck page-anchored finding from its page image;
 safe fixes auto-apply so you can focus on what's left">🔎 Re-read all stuck pages</button>
+          <button class="secondary" onclick="rebuildBook(this)"
+            title="regenerate the book from the current page text — refreshes the
+chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book from pages</button>
           <span class="meta" id="proofall-status" style="margin:0"></span>
         </div></div>` + chs.map((c, i) => chCard(c, details[i])).join("");
     }).catch(e => body.innerHTML =
@@ -1923,6 +1926,13 @@ async function waitForJob(jobId, onLine) {
     if (j.status === "canceled") throw new Error("canceled");
     await new Promise(r => setTimeout(r, 1000));
   }
+}
+
+async function rebuildBook(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "rebuilding…"; }
+  try { await api(`/projects/${current}/reassemble`, {method: "POST"}); }
+  catch (e) { alert("rebuild failed: " + e.message); if (btn) btn.disabled = false; return; }
+  renderTab("proof", window._proj);   // reloads chapters from the fresh book.md
 }
 
 async function runProof(idx, btn) {
