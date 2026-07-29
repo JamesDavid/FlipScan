@@ -250,8 +250,12 @@ class JobQueue:
                                  "WHERE status='running' GROUP BY kind"):
                 lane = self._lane(row["kind"])
                 running[lane] = running.get(lane, 0) + row["n"]
+            # A pipeline run holds its lane for an hour or more. When the lane is
+            # free and several jobs are waiting, let the short interactive jobs
+            # (a single re-OCR, a page re-read) go FIRST rather than sit behind a
+            # queued pipeline — FIFO is preserved within each priority tier.
             for r in c.execute("SELECT * FROM jobs WHERE status='queued' "
-                               "ORDER BY id"):
+                               "ORDER BY (kind='pipeline') ASC, id ASC"):
                 lane = self._lane(r["kind"])
                 if running.get(lane, 0) >= self._lane_cap(lane):
                     continue                      # this lane is at capacity

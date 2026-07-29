@@ -148,6 +148,38 @@ def create_app(root: Path) -> FastAPI:
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)   # projects folder made on demand
     app = FastAPI(title="FlipScan")
+
+    # local usage log: one JSONL line per request (no page content) so we can
+    # analyze how the UI is actually navigated. Size-capped with a single
+    # rotation so it can never grow unbounded; gitignored, never leaves the box.
+    import threading as _threading
+    _access_log = root / "access.jsonl"
+    _access_lock = _threading.Lock()
+    _ACCESS_CAP = 25 * 1024 * 1024   # 25 MB, then rotate to access.jsonl.1
+
+    @app.middleware("http")
+    async def _log_request(request, call_next):
+        import time as _time
+        t0 = _time.perf_counter()
+        response = await call_next(request)
+        try:
+            line = json.dumps({
+                "ts": round(_time.time(), 3),
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "ms": round((_time.perf_counter() - t0) * 1000, 1),
+            }, separators=(",", ":"))
+            with _access_lock:
+                if (_access_log.exists()
+                        and _access_log.stat().st_size > _ACCESS_CAP):
+                    _access_log.replace(root / "access.jsonl.1")
+                with open(_access_log, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass   # logging must never break a request
+        return response
+
     # durable job queue: heavy work (pipeline, proofread, re-reads) runs here,
     # in a background worker, as SQLite rows — so it survives restarts and
     # dropped requests instead of dying with the process or the browser tab.
@@ -451,6 +483,7 @@ def create_app(root: Path) -> FastAPI:
             "current": current,
             "detail": detail,
             "eta_seconds": eta,
+            "book_title": ws.manifest["book"].get("title") or name,
         }
 
     @app.get("/api/projects/{name}/events")
@@ -1906,6 +1939,13 @@ def create_app(root: Path) -> FastAPI:
     def proof_list(name: str):
         from ..proofread import proof_status
         ws = ws_for(name)
+        # nothing to proofread until the book has transcribed text — say so
+        # plainly instead of failing (or showing an empty phantom chapter)
+        has_text = any(p.get("md") and not p.get("role")
+                       and p.get("status") not in ("duplicate", "deleted")
+                       for p in ws.manifest["pages"])
+        if not has_text:
+            return {"chapters": [], "needs_pipeline": True}
         # book.md is the proof tab's source of truth; regenerate it from the
         # current pages so the chapter list always reflects edits (a stale
         # book.md is what makes index letters like "V" show as phantom sections)
@@ -1914,9 +1954,9 @@ def create_app(root: Path) -> FastAPI:
         except Exception:
             pass
         try:
-            return {"chapters": proof_status(ws)}
-        except FileNotFoundError as e:
-            raise HTTPException(400, str(e))
+            return {"chapters": proof_status(ws), "needs_pipeline": False}
+        except FileNotFoundError:
+            return {"chapters": [], "needs_pipeline": True}
 
     @app.get("/api/projects/{name}/proof/{idx}")
     def proof_detail(name: str, idx: int):
@@ -1936,6 +1976,29 @@ def create_app(root: Path) -> FastAPI:
         job_id = jobq.enqueue(name, "proof-chapter", {"idx": idx},
                               label=f"proofread ch{idx}")
         return {"ok": True, "job_id": job_id}
+
+    @app.post("/api/projects/{name}/proof/{idx}/refresh")
+    def proof_refresh(name: str, idx: int):
+        """Re-validate a stale chapter's proof against the current text WITHOUT
+        re-running the model — re-applies the existing findings and updates the
+        hash. Instant; keeps the user's accept/reject decisions."""
+        from ..proofread import refresh_proof
+        ws = ws_for(name)
+        try:
+            d = refresh_proof(ws, idx)
+        except IndexError as e:
+            raise HTTPException(404, str(e))
+        if d is None:
+            raise HTTPException(400, "chapter not proofread yet — run it first")
+        return {"ok": True, "status": d.get("status"), "applied": d.get("applied")}
+
+    @app.post("/api/projects/{name}/proof/refresh-stale")
+    def proof_refresh_stale(name: str):
+        """Bulk-refresh every stale chapter (no model calls) — clears the wall of
+        staleness a book-wide rebuild leaves behind."""
+        from ..proofread import refresh_stale
+        ws = ws_for(name)
+        return {"ok": True, "refreshed": refresh_stale(ws)}
 
     @app.post("/api/projects/{name}/proof/{idx}/finding/{fi}")
     def proof_finding(name: str, idx: int, fi: int, enabled: bool,

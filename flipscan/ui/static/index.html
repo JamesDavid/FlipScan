@@ -1394,6 +1394,10 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
     const chCard = (c, d) => {
       const badgeCls = {review: "patched", accepted: "ok", rejected: "deleted",
                         stale: "acceptable"}[c.status] || "";
+      // page-anchored findings that still need a fix — re-reading the page image
+      // can often resolve them automatically
+      const stuck = (d?.findings || []).filter(f =>
+        f.page && !f.applied && !f.rejected && (f.replacement == null || f.skip_reason));
       return `<div class="card">
         <div class="row">
           <b>${c.idx}. ${esc(c.title)}</b>
@@ -1403,6 +1407,12 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
               ? ` · ${c.findings} findings · ${c.applied} auto-applied` : ""}${
             c.heavy ? ' · <span style="color:#b45309">⚠ large change — review carefully</span>' : ""}</span>
           <span class="row" style="margin-left:auto">
+            ${stuck.length && c.status !== "stale" ? `<button class="secondary"
+              onclick="rereadChapter(${c.idx}, this)" title="re-read this chapter's ${stuck.length}
+unresolved page-anchored finding(s) straight from the page images; safe fixes auto-apply"
+              >🔎 Re-read ${stuck.length} stuck</button>` : ""}
+            ${c.status === "stale" ? `<button onclick="refreshProof(${c.idx}, this)"
+              title="re-apply the existing fixes to the updated text — no model call">↻ Refresh</button>` : ""}
             <button class="secondary" onclick="runProof(${c.idx}, this)">
               ${c.status === "unproofed" ? "Proofread" : "Re-run"}</button>
             ${c.status === "review" || c.status === "rejected"
@@ -1412,7 +1422,9 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
           </span>
         </div>
         ${c.status === "stale" ? `<div class="meta" style="color:#b45309;margin:.3rem 0 0">
-           chapter text changed since this proof — re-run before accepting</div>` : ""}
+           chapter text changed since this proof. If it was just a rebuild (markers,
+           reflow, a heading), hit <b>↻ Refresh</b> to re-apply your fixes instantly —
+           only <b>Re-run</b> if the wording actually changed.</div>` : ""}
         ${c.status === "accepted" ? `<div class="meta" style="color:#166534;margin:.3rem 0 0">
            accepted — the next EPUB/PDF build uses this proofed text</div>`
          : c.status === "review" ? `<div class="meta" style="margin:.3rem 0 0">
@@ -1424,6 +1436,16 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
       </div>`;
     };
     api(`/projects/${name}/proof`).then(async r => {
+      if (r.needs_pipeline) {
+        body.innerHTML = `<div class="card" style="text-align:center;padding:2rem">
+          <h2 style="margin-top:0">Nothing to proofread yet</h2>
+          <p class="meta">This book hasn't been transcribed. Proofreading works on the
+            book text the pipeline produces — run it first.</p>
+          <button style="font-size:1rem;padding:.6rem 1.3rem"
+            onclick="openProject(current,'pipeline')">→ Go to the pipeline</button>
+        </div>`;
+        return;
+      }
       const chs = r.chapters;
       const details = await Promise.all(chs.map(c =>
         c.status === "unproofed" ? null
@@ -1439,6 +1461,9 @@ the page photo" onclick="resolveFinding(${ci}, ${fi}, this)">🔎 re-read page</
           press <b>Accept</b> on the chapter.</div>
         <div class="row">
           <button onclick="proofAll()">Proofread all pending</button>
+          ${chs.some(c => c.status === "stale") ? `<button onclick="refreshAllStale(this)"
+            title="re-apply existing fixes to every stale chapter at once — no model
+calls">↻ Refresh all stale (${chs.filter(c => c.status === "stale").length})</button>` : ""}
           <button class="secondary" onclick="rereadAllStuck()"
             title="re-read every stuck page-anchored finding from its page image;
 safe fixes auto-apply so you can focus on what's left">🔎 Re-read all stuck pages</button>
@@ -1450,7 +1475,18 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
     }).catch(e => body.innerHTML =
       `<div class="card"><div class="meta">${esc(e.message)}</div></div>`);
   } else if (tab === "output") {
-    body.innerHTML = `<div class="card"><h2>Build</h2>
+    const staleN = (p.outputs || []).filter(o => o.stale).length;
+    body.innerHTML =
+      (staleN ? `<div class="card" style="border:2px solid #d97706;background:#fffbeb;
+         display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div style="flex:1;min-width:14rem">
+          <b style="color:#b45309">⚠ ${staleN} built file${staleN > 1 ? "s are" : " is"} out of date</b>
+          <div class="meta" style="margin:.15rem 0 0">Your pages, figures, or proofs changed
+            after these were built. Rebuild below to fold the changes in.</div>
+        </div>
+        <button onclick="buildFmt('epub')">↻ Rebuild EPUB</button>
+      </div>` : "")
+      + `<div class="card"><h2>Build</h2>
       <div class="row" style="margin-bottom:.6rem">
         <label style="margin:0">Target device</label>
         <select id="build-device" style="width:auto">
@@ -1488,6 +1524,9 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
 
 async function runPipeline() {
   const prov = $("provider").value;
+  // a pipeline can run for hours — offer a browser notification for when it's done
+  try { if (window.Notification && Notification.permission === "default")
+          Notification.requestPermission(); } catch {}
   await api(`/projects/${current}/run` + (prov ? `?provider=${prov}` : ""), {method:"POST"});
   $("runbtn").disabled = true; $("runbtn").textContent = "Running…";
   attachEvents(current);
@@ -1495,12 +1534,22 @@ async function runPipeline() {
 }
 
 let progressTimer = null;
+let _wasRunning = {};   // per-project, to fire a "done" notification on the edge
 function startProgress(name) {
   clearInterval(progressTimer);
   const tick = async () => {
     let p;
     try { p = await api(`/projects/${name}/progress`); } catch { return; }
     if (name !== current) { clearInterval(progressTimer); return; }
+    // notify when a pipeline we saw running has just finished (opt-in; only if
+    // the tab is in the background, so it doesn't nag while you're watching)
+    if (_wasRunning[name] && !p.running) {
+      if (document.hidden && window.Notification && Notification.permission === "granted")
+        new Notification("FlipScan", {body: `Pipeline finished — ${p.book_title || name}`});
+      const s = $("global-status"); if (s) { s.style.display = "block";
+        s.textContent = "✓ pipeline finished"; setTimeout(() => s.style.display = "none", 6000); }
+    }
+    _wasRunning[name] = !!p.running;
     const chip = $("global-status");
     if (chip) {
       if (p.running) {
@@ -1935,6 +1984,23 @@ async function rebuildBook(btn) {
   renderTab("proof", window._proj);   // reloads chapters from the fresh book.md
 }
 
+// cheaply re-validate a stale chapter's proof against the current text (no LLM)
+async function refreshProof(idx, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "refreshing…"; }
+  try { await api(`/projects/${current}/proof/${idx}/refresh`, {method: "POST"}); }
+  catch (e) { alert("refresh failed: " + e.message); if (btn) btn.disabled = false; return; }
+  renderTab("proof", window._proj);
+}
+
+async function refreshAllStale(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "refreshing…"; }
+  try {
+    const r = await api(`/projects/${current}/proof/refresh-stale`, {method: "POST"});
+    const s = $("proofall-status"); if (s) s.textContent = `refreshed ${r.refreshed} chapter(s)`;
+  } catch (e) { alert("refresh failed: " + e.message); if (btn) btn.disabled = false; return; }
+  renderTab("proof", window._proj);
+}
+
 async function runProof(idx, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "proofreading…"; }
   try {
@@ -2056,8 +2122,20 @@ async function reviewProof(idx, accept) {
 
 async function proofAll() {
   const r = await api(`/projects/${current}/proof`);
-  const todo = r.chapters.filter(c => c.status === "unproofed" || c.status === "stale");
-  if (!todo.length) { alert("Nothing pending — all chapters are proofed."); return; }
+  // stale chapters just need their existing fixes re-applied (instant, no model);
+  // only genuinely unproofed chapters go through the LLM
+  const staleN = r.chapters.filter(c => c.status === "stale").length;
+  if (staleN) {
+    const st = $("proofall-status");
+    if (st) st.textContent = `refreshing ${staleN} stale chapter(s)…`;
+    try { await api(`/projects/${current}/proof/refresh-stale`, {method: "POST"}); } catch {}
+  }
+  const todo = r.chapters.filter(c => c.status === "unproofed");
+  if (!todo.length) {
+    if (staleN) renderTab("proof", window._proj);
+    else alert("Nothing pending — all chapters are proofed.");
+    return;
+  }
   for (let i = 0; i < todo.length; i++) {
     const st = $("proofall-status");
     if (st) st.textContent = `proofreading ${i + 1}/${todo.length}: ${todo[i].title}…`;
@@ -2070,6 +2148,20 @@ async function proofAll() {
       break;
     }
   }
+  renderTab("proof", window._proj);
+}
+
+// re-read one chapter's stuck page-anchored findings from the page images
+async function rereadChapter(idx, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "re-reading…"; }
+  try {
+    const { job_id } = await api(`/projects/${current}/proof/${idx}/reread-stuck`, {method: "POST"});
+    const j = await waitForJob(job_id);
+    const d = j.result || {};
+    const s = $("proofall-status");
+    if (s) s.textContent = `re-read ${d.attempted || 0}: ${d.rescued || 0} auto-fixed, `
+      + `${d.still_manual || 0} still need you`;
+  } catch (e) { alert(e.message); if (btn) btn.disabled = false; return; }
   renderTab("proof", window._proj);
 }
 

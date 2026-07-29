@@ -598,6 +598,58 @@ def reread_chapter_stuck(ws: Workspace, cfg: dict, idx: int) -> dict:
             "still_manual": attempted - rescued}
 
 
+def refresh_proof(ws: Workspace, idx: int) -> dict | None:
+    """Re-validate an existing proof against the CURRENT chapter text WITHOUT
+    calling the model. A chapter goes 'stale' the moment its text changes at
+    all — but a structural rebuild (a removed 'page missing' marker, a reflow, a
+    demoted index heading) doesn't change the prose the fixes target. So instead
+    of re-running the whole LLM proofread, re-apply the findings we already have
+    to the new base text and update the hash. The user's accept/reject decisions
+    and authored fixes are preserved; findings whose quote no longer appears
+    simply stop applying. Returns None if the chapter was never proofed."""
+    chs = chapters(ws)
+    if not 0 <= idx < len(chs):
+        raise IndexError(f"no chapter {idx}")
+    title, md = chs[idx]
+    d = load_proof(ws, idx)
+    if d is None:
+        return None
+    from .review import find_page_by_text
+    findings = d.get("findings") or []
+    for f in findings:
+        f["applied"] = False
+        f.pop("skip_reason", None)
+        if f.get("quote"):                 # re-anchor to the (possibly moved) page
+            p = find_page_by_text(ws, f["quote"])
+            f["page"] = p["id"] if p else None
+            f["printed_number"] = p.get("printed_number") if p else None
+    proofed, applied = apply_edits(md, [f for f in findings if not f.get("rejected")])
+    d.update({
+        "title": title,
+        "base_hash": chapter_hash(md),
+        "findings": findings,
+        "applied": applied,
+        "proofed_md": proofed,
+        "heavy": abs(len(proofed) - len(md)) > max(200, len(md) * 0.05),
+    })
+    save_proof(ws, idx, d)
+    return d
+
+
+def refresh_stale(ws: Workspace) -> int:
+    """Cheaply refresh every stale chapter (see refresh_proof). One click to
+    clear a wall of staleness after a book-wide rebuild — no model calls."""
+    n = 0
+    for row in proof_status(ws):
+        if row["status"] == "stale":
+            try:
+                refresh_proof(ws, row["idx"])
+                n += 1
+            except Exception:
+                pass
+    return n
+
+
 def proof_status(ws: Workspace) -> list[dict]:
     """One row per chapter for the UI: proof state vs the current text."""
     rows = []

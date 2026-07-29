@@ -19,6 +19,10 @@ jobs.db
 jobs.db-wal
 jobs.db-shm
 
+# Local usage/access log
+access.jsonl
+access.jsonl.1
+
 # Python
 __pycache__/
 *.py[cod]
