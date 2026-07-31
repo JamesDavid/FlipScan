@@ -19,8 +19,26 @@ from typing import Callable
 
 from .workspace import Workspace
 
-MAX_QUOTES_PER_CHAPTER = 200
+MAX_QUOTES_PER_CHAPTER = 400
 SAMPLES_PER_CHARACTER = 3
+ANALYZE_CHUNK_CHARS = 18000   # a dialogue-dense 100k+ chapter overflows one
+#                               reply's token budget — analyze in windows
+
+
+def _split_for_analysis(text: str, target: int = ANALYZE_CHUNK_CHARS) -> list[str]:
+    """Paragraph-boundary windows of roughly `target` chars."""
+    if len(text) <= target * 1.3:
+        return [text]
+    parts, buf = [], ""
+    for p in text.split("\n\n"):
+        if buf and len(buf) + len(p) > target:
+            parts.append(buf)
+            buf = p
+        else:
+            buf = f"{buf}\n\n{p}" if buf else p
+    if buf:
+        parts.append(buf)
+    return parts
 
 CAST_PROMPT = """\
 You are analyzing one chapter of a book for audiobook production. Find the
@@ -109,6 +127,31 @@ def _parse_cast(raw: str) -> dict:
 
 
 # ---------------- tolerant quote location
+
+def _salvage_cast(raw: str) -> dict:
+    """Broken/truncated JSON (a dense chapter can blow the token budget) still
+    contains complete flat objects — harvest every {"quote"...} and
+    {"name"...} that parses individually, instead of losing the chapter."""
+    chars, quotes = [], []
+    for m in re.finditer(r"\{[^{}]*\}", raw):
+        try:
+            obj = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("quote"):
+            q = str(obj["quote"]).strip()
+            if len(q) >= 8:
+                quotes.append({"q": q,
+                               "speaker": str(obj.get("speaker", "")).strip()
+                               or "NARRATOR"})
+        elif obj.get("name"):
+            chars.append({"name": str(obj["name"]).strip(),
+                          "description": str(obj.get("description", "")).strip(),
+                          "sounds_like": str(obj.get("sounds_like", "")).strip()})
+    return {"characters": chars, "quotes": quotes[:MAX_QUOTES_PER_CHAPTER]}
+
 
 def _normalize(s: str) -> tuple[str, list[int]]:
     """Lowercased, typography-straightened, whitespace-collapsed copy of `s`
@@ -271,15 +314,45 @@ def analyze_book(ws: Workspace, cfg: dict,
         if only_failed and old is not None and not old.get("error"):
             chapters.append(old)      # keep the good result untouched
             continue
-        log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: analyzing…")
-        try:
-            parsed = _parse_cast(call(cfg, CAST_PROMPT + text))
-        except Exception as e:
-            err = str(e)[:160]
-            log(f"    analysis failed ({err[:80]}) — chapter stays narrator-only")
+        parts = _split_for_analysis(text)
+        log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: analyzing"
+            + (f" in {len(parts)} parts" if len(parts) > 1 else "") + "…")
+        all_chars: list[dict] = []
+        all_quotes: list[dict] = []
+        errs: list[str] = []
+        for part in parts:
+            if should_cancel():
+                from .jobs import JobCanceled
+                raise JobCanceled()
+            raw = None
+            try:
+                raw = call(cfg, CAST_PROMPT + part)
+                parsed = _parse_cast(raw)
+            except Exception as e:
+                # a truncated/broken reply still holds complete objects —
+                # harvest them rather than losing the window
+                parsed = _salvage_cast(raw) if raw else {"characters": [],
+                                                         "quotes": []}
+                if parsed["quotes"] or parsed["characters"]:
+                    log(f"    a window's reply was malformed — salvaged "
+                        f"{len(parsed['quotes'])} quotes from it")
+                else:
+                    errs.append(str(e)[:120])
+                    continue
+            all_chars += parsed["characters"]
+            all_quotes += parsed["quotes"]
+        if errs and not all_quotes and not all_chars:
+            err = errs[0]
+            log(f"    analysis failed ({err[:80]}) — chapter stays "
+                f"narrator-only")
             chapters.append({"title": title, "quotes": [], "characters": [],
                              "error": err})
             continue
+        if errs:
+            log(f"    note: {len(errs)}/{len(parts)} window(s) yielded "
+                f"nothing usable")
+        parsed = {"characters": all_chars,
+                  "quotes": all_quotes[:MAX_QUOTES_PER_CHAPTER]}
         located = locate_quotes(text, parsed["quotes"])
         real = [q for q in located if q["speaker"] != "NARRATOR"]
         log(f"    {len(parsed['quotes'])} quotes reported, "
