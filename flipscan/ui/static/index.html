@@ -1476,17 +1476,34 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
       `<div class="card"><div class="meta">${esc(e.message)}</div></div>`);
   } else if (tab === "output") {
     const staleN = (p.outputs || []).filter(o => o.stale).length;
+    // one download row, with WHY it's stale when it is
+    const dlItem = (o) => `<li><a href="/api/projects/${name}/file/out/${o.name}">${o.name}</a>
+        ${o.stale
+          ? `<span class="badge acceptable" title="${esc((o.reasons || []).join("; "))}">stale — rebuild</span>
+             <span class="meta" style="margin-left:.3rem">${esc((o.reasons || []).join("; "))}</span>`
+          : `<span class="badge ok">current</span>`}
+        ${o.built_at ? `<span class="meta" style="margin-left:.4rem"
+            title="when this file was built">built ${new Date(o.built_at * 1000)
+            .toLocaleString([], {month: "short", day: "numeric",
+                                 hour: "2-digit", minute: "2-digit"})}</span>` : ""}
+        ${o.name.endsWith(".epub") ? `<a href="/static/reader.html?project=${
+            encodeURIComponent(name)}&file=${encodeURIComponent(o.name)}"
+          style="margin-left:.6rem">📖 read in browser</a>` : ""}</li>`;
+    const dlList = (items, empty) => items.length
+      ? `<ul>${items.map(dlItem).join("")}</ul>` : `<div class="meta">${empty}</div>`;
+    const bookOuts = (p.outputs || []).filter(o => !o.name.endsWith(".m4b"));
+    const audioOuts = (p.outputs || []).filter(o => o.name.endsWith(".m4b"));
     body.innerHTML =
       (staleN ? `<div class="card" style="border:2px solid #d97706;background:#fffbeb;
          display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
         <div style="flex:1;min-width:14rem">
           <b style="color:#b45309">⚠ ${staleN} built file${staleN > 1 ? "s are" : " is"} out of date</b>
-          <div class="meta" style="margin:.15rem 0 0">Your pages, figures, or proofs changed
-            after these were built. Rebuild below to fold the changes in.</div>
+          <div class="meta" style="margin:.15rem 0 0">Each file below says what changed
+            since it was built. Rebuild the ones you care about.</div>
         </div>
         <button onclick="buildFmt('epub')">↻ Rebuild EPUB</button>
       </div>` : "")
-      + `<div class="card"><h2>Build</h2>
+      + `<div class="card"><h2>📖 Book files <span class="meta">(EPUB / PDF / Markdown)</span></h2>
       <div class="row" style="margin-bottom:.6rem">
         <label style="margin:0">Target device</label>
         <select id="build-device" style="width:auto">
@@ -1509,7 +1526,10 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
       </div>
       <div class="meta" style="margin-top:.3rem">pdf (LaTeX) is an optional,
         best-typography PDF; the plain <b>pdf</b> above needs no extra tools.</div>
-      <h2 style="margin-top:1.2rem">🎧 Audiobook</h2>
+      <h3 style="margin:1rem 0 .3rem">Downloads</h3>
+      ${dlList(bookOuts, "no book files built yet")}
+      </div>
+      <div class="card"><h2>🎧 Audiobook</h2>
       <div class="meta" style="margin-bottom:.5rem">Narrates the proofed book text with
         a local voice model (nothing leaves your machine) and packs it into an
         <b>.m4b</b> with chapter markers and the cover. A full book takes hours —
@@ -1586,16 +1606,9 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
           </div>
         </div>
       </div>
-      <h2 style="margin-top:1rem">Downloads</h2>
-      <ul>${p.outputs.map(o =>
-        `<li><a href="/api/projects/${name}/file/out/${o.name}">${o.name}</a>
-           ${o.stale ? `<span class="badge acceptable" title="pages, figures,
-              or proofs changed after this was built — rebuild to update">
-              stale — rebuild</span>` : `<span class="badge ok">current</span>`}
-           ${o.name.endsWith(".epub") ? `<a href="/static/reader.html?project=${
-               encodeURIComponent(name)}&file=${encodeURIComponent(o.name)}"
-             style="margin-left:.6rem">📖 read in browser</a>` : ""}</li>`).join("")
-        || "<div class='meta'>nothing built yet</div>"}</ul></div>`;
+      <h3 style="margin:1rem 0 .3rem">Downloads</h3>
+      ${dlList(audioOuts, "no audiobooks built yet")}
+      </div>`;
     if (p.tts_available) fetchAbEstimate();
   }
 }

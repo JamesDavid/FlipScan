@@ -323,15 +323,13 @@ def create_app(root: Path) -> FastAPI:
                     texts.append(f.read_text(encoding="utf-8"))
         return [{"title": t, "start": s} for t, s in parse_printed_toc(texts)]
 
-    from ..outputs import build_signature as _build_signature
+    from ..outputs import output_status, record_output
 
     @app.get("/api/projects/{name}")
     def project_detail(name: str):
         from ..review import page_reasons
         ws = ws_for(name)
         m = ws.manifest
-        sig = _build_signature(ws)
-        built = m.get("outputs_built", {})
         # offer to auto-fill book details from an ISBN found in the OCR — only
         # when the book has no ISBN yet and the user hasn't dismissed it.
         # Scan once and cache (ISBNs don't change).
@@ -369,8 +367,7 @@ def create_app(root: Path) -> FastAPI:
             "latex_available": _latex_tools_available(),
             "tts_available": _tts_available(),
             "voices": _voice_names(),
-            "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
-                        for f in ws.dir("out").glob("*") if f.is_file()],
+            "outputs": output_status(ws),
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
         }
 
@@ -2205,11 +2202,10 @@ def create_app(root: Path) -> FastAPI:
                 raise HTTPException(400, f"unknown format {format!r}")
         except (RuntimeError, FileNotFoundError) as e:
             raise HTTPException(400, str(e))
-        # record what this output was built from — any later page/figure/
-        # proof change makes it stale
-        ws.manifest.setdefault("outputs_built", {})[out.name] = \
-            _build_signature(ws)
-        ws.save()
+        # record what this output was built from (per-component, so the stale
+        # badge can say what changed) — any later page/figure/proof change
+        # makes it stale
+        record_output(ws, out.name)
         return {"ok": True, "file": out.name}
 
     @app.get("/api/projects/{name}/thumb/{path:path}")

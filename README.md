@@ -113,9 +113,11 @@ pip install chatterbox-tts
 pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124 --force-reinstall --no-deps
 ```
 
-- Narrates the same proofed text the EPUB uses; skips figures/tables; chapter markers, cover art, and title/author metadata are embedded in the `.m4b`.
-- **Voice cloning:** upload a clean 10–30 s recording on the output tab and the whole book is narrated in that voice. Only use a voice that's yours or whose owner has agreed.
-- A full book is hours of synthesis — it runs as a durable job (⚙ queue), survives restarts, and re-builds only re-narrate chapters whose text changed.
+- Narrates the same proofed text the EPUB uses; skips figures/tables; each chapter's title is spoken as an audible break, and chapter markers, cover art, and title/author metadata are embedded in the `.m4b`.
+- **Voice library & cloning:** record a 10–30 s sample in the browser (a guided reading passage is provided) or upload one, give it a name, and it joins a library **shared across all your books** — pick any voice (or the built-in narrator) from the dropdown per build. Only use a voice that's yours or whose owner has agreed. Recording from a phone needs the **https** URL printed at startup (accept the self-signed certificate warning once).
+- **Speed** (1× / 1.25× / 1.5× / 2×): time-compresses the narration (pitch preserved, chapter markers rescaled). It shortens the audiobook, not the generation — but chapters are cached, so re-rendering the same narration at a new speed takes seconds.
+- The card shows an **estimate** before you commit the GPU (≈1,200 chars/min of narration; synthesis ≈1.1× the audio length at 1×). A full book is hours — it runs as a durable job (⚙ queue), survives restarts, and re-builds only re-narrate chapters whose text changed.
+- Each build saves as `book--voice[--speed]--datetime.m4b`, so a long run never overwrites an earlier one. Every output's stale badge says *what* changed since it was built (book text, figures, proofs, cover).
 - The model (~2 GB) downloads from Hugging Face on first build. ~6 GB VRAM recommended; synthesis shares the GPU with local OCR, so avoid running a pipeline and an audiobook at the same time on small cards.
 - Not bundled in the Docker image (it would add ~5 GB) — install it in the container or run the audiobook build from a host install.
 
@@ -123,8 +125,10 @@ pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.
 
 `flipscan ui` (and the Docker container) listen on all interfaces and print a "your network" URL — open it on your phone. New project → **Add video / Add PDF / Add page from photo**. On a phone the sidebar collapses to a hamburger menu, and the pages/figures tools are finger-sized.
 
-If another device can't reach it on Windows, allow the port once (admin PowerShell):
-`netsh advfirewall firewall add rule name="FlipScan GUI" dir=in action=allow protocol=TCP localport=8321 profile=private`
+The server also listens on **https at port+1** (default `https://<your-ip>:8322`) with a self-signed certificate — phone browsers only allow **microphone access** (the voice-clone recorder) over https, so use that URL on the phone and accept the certificate warning once.
+
+If another device can't reach it on Windows, allow the ports once (admin PowerShell):
+`netsh advfirewall firewall add rule name="FlipScan GUI" dir=in action=allow protocol=TCP localport=8321-8322 profile=private`
 Use `--host 127.0.0.1` to keep the GUI private to this machine.
 
 ## Backends
