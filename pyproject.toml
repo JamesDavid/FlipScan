@@ -26,6 +26,9 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["reportlab>=4.0", "pikepdf>=8.0", "weasyprint>=61"]
 ui = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9", "sse-starlette>=2.0"]
+# local audiobook synthesis with voice cloning (Chatterbox TTS, MIT). Install a
+# CUDA torch afterwards for GPU speed; setuptools<81 keeps perth's pkg_resources.
+audiobook = ["chatterbox-tts>=0.1.7", "setuptools<81"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

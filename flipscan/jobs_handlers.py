@@ -27,10 +27,15 @@ from .workspace import Workspace
 #            project's pipeline (blocked by the 409 gate), so this lane runs
 #            independently of `main` — an import never waits behind another
 #            book's pipeline.
+#   tts    — audiobook synthesis. Serial, and its own lane so an hours-long
+#            narration neither blocks nor waits behind OCR work. (Both use the
+#            GPU: run a pipeline and an audiobook at the same time only if your
+#            VRAM fits both models.)
 KIND_LANES = {
     "proof-chapter": "proof",
     "pdf-import": "import",
     "video-import": "import",
+    "audiobook": "tts",
 }
 
 
@@ -43,7 +48,7 @@ def concurrency_config() -> tuple[dict[str, int], dict[str, str]]:
         n = int(os.environ.get("FLIPSCAN_PROOF_CONCURRENCY", "3"))
     except ValueError:
         n = 3
-    return {"main": 1, "proof": max(1, n), "import": 1}, KIND_LANES
+    return {"main": 1, "proof": max(1, n), "import": 1, "tts": 1}, KIND_LANES
 
 
 def register_handlers(jobq: JobQueue, root: Path) -> None:
@@ -123,6 +128,14 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         log(f"added video {entry['id']}")
         return {"id": entry["id"]}
 
+    def audiobook(project, params, log, should_cancel):
+        from .audiobook import build_audiobook
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        out = ws.dir("out") / f"{ws.root.name}.m4b"
+        build_audiobook(ws, cfg, out, log=log, should_cancel=should_cancel)
+        return {"file": out.name}
+
     jobq.register("pipeline", pipeline)
     jobq.register("proof-chapter", proof_chapter)
     jobq.register("proof-resolve", proof_resolve)
@@ -130,3 +143,4 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
     jobq.register("retry-ocr", retry_ocr)
     jobq.register("pdf-import", pdf_import)
     jobq.register("video-import", video_import)
+    jobq.register("audiobook", audiobook)

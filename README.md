@@ -103,6 +103,22 @@ sudo apt install pandoc texlive-xetex texlive-fonts-recommended
 
 The Docker image already includes these, so the LaTeX PDF works there out of the box.
 
+### Optional: audiobook output (local TTS + voice cloning)
+
+The output tab can narrate the proofed book into a chaptered **`.m4b` audiobook** using a local voice model — nothing leaves your machine. It uses [Chatterbox TTS](https://github.com/resemble-ai/chatterbox) (MIT, by Resemble AI):
+
+```sh
+pip install chatterbox-tts
+# for GPU speed (recommended — CPU synthesis is very slow):
+pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124 --force-reinstall --no-deps
+```
+
+- Narrates the same proofed text the EPUB uses; skips figures/tables; chapter markers, cover art, and title/author metadata are embedded in the `.m4b`.
+- **Voice cloning:** upload a clean 10–30 s recording on the output tab and the whole book is narrated in that voice. Only use a voice that's yours or whose owner has agreed.
+- A full book is hours of synthesis — it runs as a durable job (⚙ queue), survives restarts, and re-builds only re-narrate chapters whose text changed.
+- The model (~2 GB) downloads from Hugging Face on first build. ~6 GB VRAM recommended; synthesis shares the GPU with local OCR, so avoid running a pipeline and an audiobook at the same time on small cards.
+- Not bundled in the Docker image (it would add ~5 GB) — install it in the container or run the audiobook build from a host install.
+
 ### From your phone
 
 `flipscan ui` (and the Docker container) listen on all interfaces and print a "your network" URL — open it on your phone. New project → **Add video / Add PDF / Add page from photo**. On a phone the sidebar collapses to a hamburger menu, and the pages/figures tools are finger-sized.
@@ -157,7 +173,7 @@ Every stage is idempotent and resumable; state lives in the workspace's `manifes
 | transcribe | vision LLM → strict JSON (markdown, printed number, figure regions, flags); printed-number reconciliation | `pages/*.md` |
 | figures | detect/snap figure bboxes, crop from color frames, insert into markdown | `figures/` |
 | assemble | concatenate pages, heal hyphenation, strip running headers, chapter structure from the printed contents page, gap notices | `work/book.md` |
-| build | EPUB / PDF / Markdown outputs | `out/` |
+| build | EPUB / PDF / Markdown / audiobook (m4b) outputs | `out/` |
 
 ## Configuration
 

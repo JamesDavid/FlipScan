@@ -1509,6 +1509,31 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
       </div>
       <div class="meta" style="margin-top:.3rem">pdf (LaTeX) is an optional,
         best-typography PDF; the plain <b>pdf</b> above needs no extra tools.</div>
+      <h2 style="margin-top:1.2rem">🎧 Audiobook</h2>
+      <div class="meta" style="margin-bottom:.5rem">Narrates the proofed book text with
+        a local voice model (nothing leaves your machine) and packs it into an
+        <b>.m4b</b> with chapter markers and the cover. A full book takes hours —
+        it runs in the ⚙ job queue and resumes if interrupted. Chapters are cached,
+        so a re-build after edits only re-narrates what changed.</div>
+      <div class="row">
+        ${p.tts_available
+          ? `<button onclick="buildAudiobook(this)">🎧 Build audiobook (m4b)</button>`
+          : `<button disabled style="opacity:.55"
+               title="install the local voice engine: pip install chatterbox-tts">
+               audiobook — needs chatterbox-tts</button>`}
+        <span class="meta" style="margin:0">voice:
+          ${p.voice_sample ? `<b>custom (cloned)</b>
+             <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
+               onclick="removeVoice()">✕ remove</button>`
+           : `built-in narrator`}</span>
+        <input type="file" id="voice-file" accept="audio/*" style="display:none"
+               onchange="uploadVoice()">
+        <button class="secondary" onclick="$('voice-file').click()">
+          🎙 ${p.voice_sample ? "Replace" : "Clone a"} voice…</button>
+      </div>
+      <div class="meta" style="margin-top:.3rem">Voice cloning: upload a clean
+        10–30&nbsp;s recording and the whole book is narrated in that voice —
+        only use a voice that's yours or whose owner has agreed.</div>
       <h2 style="margin-top:1rem">Downloads</h2>
       <ul>${p.outputs.map(o =>
         `<li><a href="/api/projects/${name}/file/out/${o.name}">${o.name}</a>
@@ -1750,6 +1775,35 @@ async function buildFmt(fmt) {
     await api(`/projects/${current}/build?format=${fmt}&device=${dev}`, {method:"POST"});
     openProject(current, "output");
   } catch (e) { alert(e.message); }
+}
+
+// ---- audiobook: durable synthesis job + voice-clone sample management
+async function buildAudiobook(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "queued…"; }
+  try {
+    const { job_id } = await api(`/projects/${current}/build-audiobook`, {method: "POST"});
+    if (btn) btn.textContent = "🎧 narrating… (watch ⚙ queue)";
+    await waitForJob(job_id);
+  } catch (e) { alert(e.message); openProject(current, "output"); return; }
+  openProject(current, "output");
+}
+
+async function uploadVoice() {
+  const input = $("voice-file");
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append("sample", input.files[0]);
+  try {
+    const r = await fetch(`/api/projects/${current}/voice-sample`, {method: "POST", body: fd});
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  } catch (e) { alert("voice upload failed: " + e.message); return; }
+  openProject(current, "output");
+}
+
+async function removeVoice() {
+  try { await api(`/projects/${current}/voice-sample`, {method: "DELETE"}); }
+  catch (e) { alert(e.message); return; }
+  openProject(current, "output");
 }
 
 // ---- capture wizards: numbered pages in order, and unidentified captures

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
@@ -24,6 +25,12 @@ def _latex_tools_available() -> bool:
     """Whether the optional high-quality PDF (pandoc + xelatex) can be built."""
     import shutil
     return bool(shutil.which("pandoc") and shutil.which("xelatex"))
+
+
+def _tts_available() -> bool:
+    """Whether the local audiobook voice engine is installed."""
+    import importlib.util
+    return importlib.util.find_spec("chatterbox") is not None
 
 # workspace files the browser may fetch, by top-level directory
 SERVABLE = {"frames", "work", "figures", "review", "out", "pages", "videos", "patches"}
@@ -392,6 +399,8 @@ def create_app(root: Path) -> FastAPI:
             "archived": bool(m.get("archived")),
             "suppressed_headings": m.get("suppressed_headings") or {},
             "latex_available": _latex_tools_available(),
+            "tts_available": _tts_available(),
+            "voice_sample": (ws.root / "voice-sample.wav").exists(),
             "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
                         for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
@@ -2098,6 +2107,56 @@ def create_app(root: Path) -> FastAPI:
         return {"ok": True}
 
     # ---------------- build + files
+
+    @app.post("/api/projects/{name}/build-audiobook")
+    def build_audiobook_ep(name: str):
+        """Enqueue the audiobook synthesis as a durable job — a full book is
+        hours of local TTS, so it runs in the queue (own 'tts' lane), survives
+        restarts, and resumes from the per-chapter wav cache."""
+        ws = ws_for(name)
+        try:
+            import chatterbox  # noqa: F401 — presence check only
+        except ImportError:
+            raise HTTPException(400,
+                "the local voice engine isn't installed — run: "
+                "pip install chatterbox-tts (plus a CUDA torch for GPU speed)")
+        if not any(p.get("md") and not p.get("role")
+                   and p.get("status") not in ("duplicate", "deleted")
+                   for p in ws.manifest["pages"]):
+            raise HTTPException(400, "no transcribed text — run the pipeline first")
+        if jobq.active(name, ("audiobook",)) is not None:
+            raise HTTPException(409, "an audiobook build is already running")
+        job_id = jobq.enqueue(name, "audiobook", {}, label="audiobook (m4b)")
+        return {"ok": True, "job_id": job_id}
+
+    @app.post("/api/projects/{name}/voice-sample")
+    async def upload_voice_sample(name: str, sample: UploadFile):
+        """Store a narration voice for this book: a 10-30s clean recording,
+        converted to the engine's format (24 kHz mono wav). Only upload a voice
+        you have the right to use — your own, or someone who has agreed."""
+        from ..ffmpeg import _find as _ff
+        ws = ws_for(name)
+        raw = ws.root / "_voice_upload.tmp"
+        raw.write_bytes(await sample.read())
+        out = ws.root / "voice-sample.wav"
+        try:
+            r = subprocess.run(
+                [_ff("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                 "-i", str(raw), "-ar", "24000", "-ac", "1", "-t", "40",
+                 str(out)], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise HTTPException(400, f"couldn't read that audio file: "
+                                         f"{r.stderr[-200:]}")
+        finally:
+            raw.unlink(missing_ok=True)
+        # a new voice invalidates the chapter cache via the synthesis key
+        return {"ok": True}
+
+    @app.delete("/api/projects/{name}/voice-sample")
+    def delete_voice_sample(name: str):
+        ws = ws_for(name)
+        (ws.root / "voice-sample.wav").unlink(missing_ok=True)
+        return {"ok": True}
 
     @app.post("/api/projects/{name}/build")
     def build(name: str, format: str = "epub", device: str = "none"):

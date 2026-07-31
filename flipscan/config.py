@@ -57,6 +57,14 @@ DEFAULTS: dict[str, Any] = {
     "transcribe": {
         "max_retries": 1,
     },
+    "audiobook": {
+        "engine": "chatterbox",   # local TTS with zero-shot voice cloning
+        # path to a 10-30s reference recording; a per-project voice-sample.wav
+        # takes precedence. Only clone voices you have the right to use.
+        "voice_sample": "",
+        "exaggeration": 0.5,      # expressiveness (0..1); 0.5 = neutral
+        "cfg_weight": 0.5,        # pacing/adherence; lower = slower delivery
+    },
 }
 
 
