@@ -26,6 +26,7 @@ SAMPLE_RATE = 24000          # Chatterbox output rate
 CHUNK_CHARS = 400            # per-generate text budget (short = stable prosody)
 CHUNK_GAP_S = 0.25           # silence between chunks
 PARA_GAP_S = 0.65            # silence between paragraphs
+INTRO_GAP_S = 1.4            # silence after the spoken chapter announcement
 CHAPTER_TAIL_S = 1.2         # silence at each chapter end
 
 
@@ -40,10 +41,12 @@ _HEAD = re.compile(r"^#{1,6}\s+", re.M)
 _NOTE = re.compile(r"^>\s*⟦.*?⟧\s*$", re.M | re.S)
 
 
-def md_to_narration(md: str) -> str:
+def md_to_narration(md: str, title: str | None = None) -> str:
     """Flatten a chapter's markdown into clean prose for the voice: images,
     tables, production notes and markup vanish; headings and paragraphs stay
-    as paragraph breaks (which become audible pauses)."""
+    as paragraph breaks (which become audible pauses). When `title` is given,
+    a leading line that just repeats it is dropped — the chapter announcement
+    is spoken separately (with a longer pause) by synthesize_chapter."""
     t = md
     t = _NOTE.sub("", t)
     t = _IMG.sub("", t)
@@ -68,7 +71,12 @@ def md_to_narration(md: str) -> str:
     t = re.sub(r"\[\[region-\d+\]\]", "", t)
     t = re.sub(r"[ \t]+", " ", t)
     t = re.sub(r"\n{3,}", "\n\n", t)
-    return t.strip()
+    t = t.strip()
+    if title:
+        first, _, rest = t.partition("\n")
+        if first.strip().rstrip(".").lower() == title.strip().rstrip(".").lower():
+            t = rest.strip()
+    return t
 
 
 _SENT = re.compile(r"(?<=[.!?…])\s+")
@@ -110,7 +118,7 @@ def narration_chapters(ws: Workspace) -> list[tuple[str, str]]:
         if (d and d.get("status") == "accepted" and d.get("proofed_md")
                 and d.get("base_hash") == chapter_hash(md)):
             md = d["proofed_md"]
-        text = md_to_narration(md)
+        text = md_to_narration(md, title=title)
         if text:
             out.append((title, text))
     return out
@@ -153,8 +161,12 @@ class ChatterboxEngine:
 
 def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
                        log: Callable[[str], None] = print,
-                       should_cancel: Callable[[], bool] = lambda: False) -> None:
-    """Whole chapter -> one 16-bit PCM wav (paragraph pauses included)."""
+                       should_cancel: Callable[[], bool] = lambda: False,
+                       announce: str | None = None) -> None:
+    """Whole chapter -> one 16-bit PCM wav (paragraph pauses included). With
+    `announce`, the chapter title is spoken first as its own line, followed by
+    a longer beat of silence — the audiobook convention that makes chapter
+    starts audible in the recording itself, not just in the player's menu."""
     import torch
     import torchaudio
     pieces = []
@@ -162,6 +174,10 @@ def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
     chunks = [(pi, c) for pi, par in enumerate(paragraphs)
               for c in chunk_paragraph(par)]
     gap = lambda s: torch.zeros(int(engine.sr * s))
+    if announce:
+        line = announce.strip()
+        pieces.append(engine.speak(line if line[-1:] in ".!?" else line + ".").cpu())
+        pieces.append(gap(INTRO_GAP_S))
     last_par = None
     for n, (pi, chunk) in enumerate(chunks):
         if should_cancel():
@@ -257,9 +273,13 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
     for i, (title, text) in enumerate(chs):
         wav = adir / f"ch{i:03d}.wav"
         sig = adir / f"ch{i:03d}.json"
-        # cache key: chapter text + the voice/params that shaped it
+        # cache key: chapter text + announcement + the voice/params behind it.
+        # A changed voice sample re-keys every chapter (a re-recorded sample at
+        # the same path changes nothing here — hash the sample bytes).
+        vhash = (hashlib.sha1(Path(voice).read_bytes()).hexdigest()
+                 if voice and Path(voice).exists() else "")
         key = hashlib.sha1(json.dumps(
-            [text, voice, engine.exaggeration, engine.cfg_weight]
+            [text, title, vhash, engine.exaggeration, engine.cfg_weight]
         ).encode()).hexdigest()
         if wav.exists() and sig.exists() and \
                 json.loads(sig.read_text()).get("key") == key:
@@ -267,7 +287,8 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
         else:
             log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: "
                 f"synthesizing {len(text) / 1000:.1f}k chars…")
-            synthesize_chapter(engine, text, wav, log, should_cancel)
+            synthesize_chapter(engine, text, wav, log, should_cancel,
+                               announce=title)
             sig.write_text(json.dumps({"key": key, "title": title}))
         wavs.append((title, wav))
     assemble_m4b(ws, wavs, out, log)

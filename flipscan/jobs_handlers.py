@@ -130,10 +130,18 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
 
     def audiobook(project, params, log, should_cancel):
         from .audiobook import build_audiobook
+        from .outputs import record_output
+        from .stages.assemble import run as assemble_run
         ws = ws_for(project)
         cfg = load_config(ws.root)
+        # narrate from a book.md that reflects the current pages (same
+        # regenerate-before-packaging rule as the build endpoint)
+        assemble_run(ws, cfg, log=lambda m: None)
         out = ws.dir("out") / f"{ws.root.name}.m4b"
         build_audiobook(ws, cfg, out, log=log, should_cancel=should_cancel)
+        # stamp what it was built from, so the output tab's stale/current badge
+        # is honest (without this the m4b reads "stale" forever)
+        record_output(ws, out.name)
         return {"file": out.name}
 
     jobq.register("pipeline", pipeline)

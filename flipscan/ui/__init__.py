@@ -322,40 +322,7 @@ def create_app(root: Path) -> FastAPI:
                     texts.append(f.read_text(encoding="utf-8"))
         return [{"title": t, "start": s} for t, s in parse_printed_toc(texts)]
 
-    def _build_signature(ws: Workspace) -> str:
-        """Fingerprint of everything a built output depends on: the assembled
-        book text, every referenced figure file, proof states, and whether
-        assemble is even up to date. Any page/figure/proof change after a
-        build makes the output stale."""
-        import hashlib
-        import re as _re
-        h = hashlib.sha1()
-        h.update(ws.stage_status("assemble").encode())
-        book = ws.work_file("book.md")
-        if book.exists():
-            text = book.read_text(encoding="utf-8")
-            h.update(text.encode())
-            for rel in sorted(set(_re.findall(r"\]\((figures/[^)]+)\)", text))):
-                f = ws.root / rel
-                h.update(rel.encode())
-                if f.exists():
-                    h.update(str(f.stat().st_mtime_ns).encode())
-        pdir = ws.work_file("proof")
-        if pdir.exists():
-            for f in sorted(pdir.glob("proof_*.json")):
-                try:
-                    d = json.loads(f.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    continue
-                h.update(f"{f.name}|{d.get('status')}|{d.get('base_hash')}|"
-                         f"{len(d.get('proofed_md') or '')}".encode())
-        cover = next((p for p in ws.manifest["pages"]
-                      if p.get("role") == "cover"), None)
-        if cover and cover.get("color"):
-            f = ws.root / cover["color"]
-            if f.exists():
-                h.update(str(f.stat().st_mtime_ns).encode())
-        return h.hexdigest()[:16]
+    from ..outputs import build_signature as _build_signature
 
     @app.get("/api/projects/{name}")
     def project_detail(name: str):
