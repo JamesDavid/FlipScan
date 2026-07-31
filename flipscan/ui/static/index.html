@@ -1899,8 +1899,13 @@ let vrec = null;   // {rec, stream, chunks, blob, t0, timer}
 function openVoiceRecorder() {
   $("voice-modal").style.display = "flex";
   const note = $("vrec-note");
-  if (!navigator.mediaDevices?.getUserMedia)
-    note.textContent = "no mic access here (needs localhost/HTTPS) — use upload";
+  if (!navigator.mediaDevices?.getUserMedia) {
+    // plain-http on the LAN: browsers block the mic. The server also listens
+    // on https at port+1 — send the user there (one-time cert warning).
+    const httpsUrl = `https://${location.hostname}:${(+location.port || 80) + 1}${location.pathname}${location.hash}`;
+    note.innerHTML = `mic needs https: <a href="${httpsUrl}">switch to the
+      secure address</a> (accept the certificate warning once) — or 📁 upload`;
+  }
 }
 function closeVoiceRecorder() {
   if (vrec?.rec?.state === "recording") vrec.rec.stop();

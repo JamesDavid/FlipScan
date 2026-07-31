@@ -2305,6 +2305,7 @@ def create_app(root: Path) -> FastAPI:
 
 def serve(root: Path, host: str = "127.0.0.1", port: int = 8321) -> None:
     import socket
+    import threading
 
     import uvicorn
 
@@ -2320,4 +2321,22 @@ def serve(root: Path, host: str = "127.0.0.1", port: int = 8321) -> None:
         raise SystemExit(
             f"FlipScan is already running on port {port} — open "
             f"http://localhost:{port}, or stop the other instance first.")
-    uvicorn.run(create_app(root), host=host, port=port, log_level="warning")
+
+    # ONE app (one job-queue worker pool), served on two ports: plain http on
+    # `port`, and https with a self-signed cert on `port+1` — phone browsers
+    # only allow microphone access (the voice-clone recorder) over https, so
+    # the LAN needs a secure URL. Accept the phone's cert warning once.
+    app = create_app(root)
+    try:
+        cert, key = None, None
+        from ..tls import ensure_self_signed
+        cert, key = ensure_self_signed(Path(root))
+        https_cfg = uvicorn.Config(app, host=host, port=port + 1,
+                                   log_level="warning",
+                                   ssl_certfile=str(cert),
+                                   ssl_keyfile=str(key))
+        threading.Thread(target=uvicorn.Server(https_cfg).run,
+                         name="flipscan-https", daemon=True).start()
+    except Exception as e:                       # https is a nicety, not a need
+        print(f"  (https listener not started: {e})")
+    uvicorn.run(app, host=host, port=port, log_level="warning")

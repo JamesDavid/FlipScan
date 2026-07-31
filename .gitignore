@@ -23,6 +23,9 @@ jobs.db-shm
 access.jsonl
 access.jsonl.1
 
+# Self-signed TLS material for LAN https (never commit keys)
+.tls/
+
 # Python
 __pycache__/
 *.py[cod]

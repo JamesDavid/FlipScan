@@ -284,6 +284,9 @@ def ui(root, host, port):
             lan_ip = s.getsockname()[0]
             s.close()
             click.echo(f"  your network:  http://{lan_ip}:{port}  (phone, tablet, ...)")
+            click.echo(f"  phone mic:     https://{lan_ip}:{port + 1}  "
+                       f"(voice recording needs https — accept the "
+                       f"certificate warning once)")
         except OSError:
             pass
     serve(root, host=host, port=port)
