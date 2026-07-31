@@ -2301,5 +2301,20 @@ def create_app(root: Path) -> FastAPI:
 
 
 def serve(root: Path, host: str = "127.0.0.1", port: int = 8321) -> None:
+    import socket
+
     import uvicorn
+
+    # Windows allows two servers to bind the same port (SO_REUSEADDR), after
+    # which requests bounce unpredictably between them — one may even lack the
+    # optional deps the other has, so the UI flaps between feature states and
+    # both processes run duelling job workers. Refuse to start a twin.
+    probe = socket.socket()
+    probe.settimeout(0.6)
+    already = probe.connect_ex(("127.0.0.1", port)) == 0
+    probe.close()
+    if already:
+        raise SystemExit(
+            f"FlipScan is already running on port {port} — open "
+            f"http://localhost:{port}, or stop the other instance first.")
     uvicorn.run(create_app(root), host=host, port=port, log_level="warning")
