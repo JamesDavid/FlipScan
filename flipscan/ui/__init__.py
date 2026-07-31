@@ -2118,6 +2118,37 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, str(e))
         return {"ok": True}
 
+    @app.post("/api/projects/{name}/voice-preview")
+    def voice_preview(name: str, voice: str = "", character: str = ""):
+        """Enqueue a few-second voice audition: the narrator line, or — when
+        `character` is given — one of that character's actual quotes from the
+        cast analysis, spoken in `voice` ('' = built-in narrator). Returns a
+        job id; the finished job's result names the preview file."""
+        from ..audiobook import PREVIEW_LINE
+        from ..casting import load_cast
+        ws = ws_for(name)
+        voice = voice.strip()
+        if voice and not (root / "voices" / f"{voice}.wav").exists():
+            raise HTTPException(404, f"voice {voice!r} is not in the library")
+        text = PREVIEW_LINE
+        if character:
+            cast = load_cast(ws) or {}
+            ch = (cast.get("characters") or {}).get(character)
+            if ch and ch.get("samples"):
+                text = ch["samples"][0]
+        job_id = jobq.enqueue(name, "tts-preview",
+                              {"voice": voice, "text": text},
+                              label=f"voice preview ({voice or 'built-in'})")
+        return {"ok": True, "job_id": job_id}
+
+    @app.get("/api/voice-previews/{fname}")
+    def voice_preview_file(fname: str):
+        f = (root / "voices" / "previews" / fname).resolve()
+        base = (root / "voices" / "previews").resolve()
+        if not str(f).startswith(str(base)) or not f.exists():
+            raise HTTPException(404, "no such preview")
+        return FileResponse(f, media_type="audio/wav")
+
     @app.get("/api/projects/{name}/audiobook-estimate")
     def audiobook_estimate(name: str):
         """Narration length + GPU-time estimate from the current book text."""

@@ -126,10 +126,24 @@ def narration_chapters(ws: Workspace) -> list[tuple[str, str]]:
 
 # ---------------- synthesis engine (lazy import; the model is ~2 GB)
 
+_SHARED_MODEL = None    # one Chatterbox instance per process (it's ~3.4 GB VRAM)
+
+
+def _shared_model():
+    global _SHARED_MODEL
+    if _SHARED_MODEL is None:
+        import torch
+        from chatterbox.tts import ChatterboxTTS
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _SHARED_MODEL = ChatterboxTTS.from_pretrained(device=device)
+    return _SHARED_MODEL
+
+
 class ChatterboxEngine:
     """Chatterbox TTS (resemble-ai, MIT). Default built-in voice, or zero-shot
     cloning from a short reference sample. Loaded lazily so the module imports
-    without torch installed."""
+    without torch installed; the underlying model is shared process-wide so an
+    audiobook build and a quick voice preview never double-load it."""
 
     def __init__(self, cfg: dict):
         a = cfg.get("audiobook", {})
@@ -140,10 +154,7 @@ class ChatterboxEngine:
 
     def _load(self):
         if self._model is None:
-            import torch
-            from chatterbox.tts import ChatterboxTTS
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self._model = ChatterboxTTS.from_pretrained(device=device)
+            self._model = _shared_model()
         return self._model
 
     @property
@@ -213,6 +224,28 @@ def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     torchaudio.save(str(out_wav), audio, engine.sr,
                     encoding="PCM_S", bits_per_sample=16)
+
+
+PREVIEW_LINE = ("This is how your audiobook will sound. A clear evening, "
+                "a good chair, and a story worth hearing.")
+
+
+def synthesize_preview(cfg: dict, text: str, voice_path: str,
+                       out_wav: Path) -> Path:
+    """A few seconds of a voice reading `text` — cheap enough to audition
+    every voice before committing hours of synthesis to a full book."""
+    import torch
+    import torchaudio
+    engine = ChatterboxEngine(cfg)
+    text = (text or PREVIEW_LINE).strip()[:300]
+    pieces = []
+    for chunk in chunk_paragraph(text):
+        pieces.append(engine.speak(chunk, voice=voice_path or None).cpu())
+        pieces.append(torch.zeros(int(engine.sr * CHUNK_GAP_S)))
+    out_wav.parent.mkdir(parents=True, exist_ok=True)
+    torchaudio.save(str(out_wav), torch.cat(pieces).unsqueeze(0), engine.sr,
+                    encoding="PCM_S", bits_per_sample=16)
+    return out_wav
 
 
 # ---------------- m4b assembly

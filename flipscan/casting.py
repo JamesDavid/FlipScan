@@ -32,7 +32,7 @@ Return ONLY a JSON object, no code fences, exactly this shape:
 {
   "characters": [
     {"name": "Hugo Eckener", "description": "airship commander; German, formal, measured",
-     "sounds_like": "a gravelly, deliberate elder-statesman baritone — in the vein of Winston Churchill's radio addresses"}
+     "sounds_like": "gravelly, deliberate elder-statesman baritone — similar to Anthony Hopkins in The Remains of the Day"}
   ],
   "quotes": [
     {"quote": "the exact quoted words, copied verbatim from the text", "speaker": "Hugo Eckener"}
@@ -50,11 +50,13 @@ Rules:
 - "characters": every speaker you used (except NARRATOR), with a description
   in under 15 words drawn from the text: who they are, and anything relevant
   to voice (age, gender, nationality, temperament) that the TEXT supports.
-- "sounds_like": a casting tip in under 20 words — what this person's voice
-  might sound like, naming a widely known voice as a reference point. For real
-  historical figures, use your general knowledge of how they actually sounded;
-  otherwise suggest a famous voice fitting the description. It's a hint for a
-  human choosing voices, not a claim.
+- "sounds_like": a casting tip in under 20 words. It MUST name a specific
+  famous person — an actor (ideally with a specific role, e.g. "similar to
+  Robert De Niro in Casino"), broadcaster, or public figure — plus a few words
+  describing the voice quality. For real historical figures, use your general
+  knowledge of how they actually sounded (or name the person themselves if
+  their voice is famous). Never answer with only a generic description; always
+  include a name. It's a hint for a human choosing voices, not a claim.
 - No commentary, just the JSON.
 
 CHAPTER:

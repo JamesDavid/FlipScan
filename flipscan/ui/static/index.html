@@ -1551,6 +1551,9 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
         <button class="secondary" style="padding:.15rem .5rem;font-size:.72rem"
           title="delete the selected cloned voice from the library"
           onclick="deleteVoice()">✕</button>
+        <button class="secondary" style="padding:.15rem .5rem"
+          title="hear a few seconds of the selected narrator voice"
+          onclick="previewVoice($('ab-voice').value, '', this)">▶</button>
         <label style="margin:0">speed</label>
         <select id="ab-speed" style="width:auto;margin:0"
           onchange="updateAbEstimate()">
@@ -1937,9 +1940,36 @@ async function fetchCast() {
         </div>
         <select style="width:auto;margin:0"
           onchange="assignCastVoice('${esc(n)}', this.value)">${opt(ch.voice || "")}</select>
+        <button class="secondary" style="padding:.15rem .5rem"
+          title="hear this character's assigned voice speak one of their actual quotes"
+          onclick="previewVoice(this.previousElementSibling.value || ($('ab-voice')?.value ?? ''), '${esc(n)}', this)">▶</button>
       </div>`; }).join("")
       : `<div class="meta">no attributed quotes found — this book reads as pure narration</div>`}
   </div>`;
+}
+
+// audition a voice: short synthesis through the tts job lane, then play it.
+// Characters preview one of their real quotes; the narrator gets a stock line.
+async function previewVoice(voice, character, btn) {
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "⏳"; }
+  try {
+    const { job_id } = await api(`/projects/${current}/voice-preview`
+      + `?voice=${encodeURIComponent(voice || "")}`
+      + `&character=${encodeURIComponent(character || "")}`, {method: "POST"});
+    const j = await waitForJob(job_id);
+    const f = j.result?.file;
+    if (!f) throw new Error("no preview produced");
+    let a = $("preview-audio");
+    if (!a) {
+      a = document.createElement("audio");
+      a.id = "preview-audio";
+      document.body.appendChild(a);
+    }
+    a.src = `/api/voice-previews/${encodeURIComponent(f)}`;
+    a.play();
+  } catch (e) { alert("preview failed: " + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
 }
 
 async function analyzeCast(btn, onlyFailed = false) {

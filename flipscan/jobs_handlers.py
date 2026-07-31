@@ -37,6 +37,7 @@ KIND_LANES = {
     "pdf-import": "import",
     "video-import": "import",
     "audiobook": "tts",
+    "tts-preview": "tts",       # shares the GPU lane so it never fights a build
 }
 
 
@@ -187,7 +188,31 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
                 "quotes": sum(c["quotes"] for c
                               in (cast.get("characters") or {}).values())}
 
+    def tts_preview(project, params, log, should_cancel):
+        import hashlib
+        from .audiobook import synthesize_preview
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        vname = (params.get("voice") or "").strip()
+        voice = ""
+        if vname:
+            vp = root / "voices" / f"{vname}.wav"
+            if not vp.exists():
+                raise FileNotFoundError(f"voice {vname!r} is not in the library")
+            voice = str(vp)
+        text = (params.get("text") or "").strip()
+        pdir = root / "voices" / "previews"
+        key = hashlib.sha1(f"{vname}|{text}".encode("utf-8")).hexdigest()[:12]
+        out = pdir / f"{vname or 'builtin'}--{key}.wav"
+        if not out.exists():
+            log(f"preview: {vname or 'built-in narrator'} — synthesizing…")
+            synthesize_preview(cfg, text, voice, out)
+        else:
+            log("preview: cached")
+        return {"file": out.name}
+
     jobq.register("pdf-import", pdf_import)
     jobq.register("video-import", video_import)
     jobq.register("audiobook", audiobook)
     jobq.register("cast-analysis", cast_analysis)
+    jobq.register("tts-preview", tts_preview)
