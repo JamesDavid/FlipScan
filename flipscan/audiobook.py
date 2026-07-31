@@ -150,42 +150,61 @@ class ChatterboxEngine:
     def sr(self) -> int:
         return self._model.sr if self._model else SAMPLE_RATE
 
-    def speak(self, text: str):
-        """One chunk -> 1-D float tensor."""
+    def speak(self, text: str, voice: str | None = None):
+        """One chunk -> 1-D float tensor. `voice` overrides the engine default
+        for this chunk (full-cast narration switches voices per quote)."""
         m = self._load()
         kwargs = dict(exaggeration=self.exaggeration, cfg_weight=self.cfg_weight)
-        if self.voice:
-            kwargs["audio_prompt_path"] = self.voice
+        v = voice if voice is not None else self.voice
+        if v:
+            kwargs["audio_prompt_path"] = v
         return m.generate(text, **kwargs).squeeze(0)
 
 
 def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
                        log: Callable[[str], None] = print,
                        should_cancel: Callable[[], bool] = lambda: False,
-                       announce: str | None = None) -> None:
+                       announce: str | None = None,
+                       segments: list[tuple[str, str]] | None = None) -> None:
     """Whole chapter -> one 16-bit PCM wav (paragraph pauses included). With
     `announce`, the chapter title is spoken first as its own line, followed by
     a longer beat of silence — the audiobook convention that makes chapter
-    starts audible in the recording itself, not just in the player's menu."""
+    starts audible in the recording itself, not just in the player's menu.
+
+    `segments` enables full-cast narration: [(voice_path, seg_text)] runs in
+    order, '' = the engine's default narrator. Segment boundaries usually fall
+    mid-paragraph (a quote inside a sentence), so crossing one uses the short
+    chunk gap, not a paragraph pause."""
     import torch
     import torchaudio
+    if segments is None:
+        segments = [("", text)]
+    # (voice, paragraph_id, chunk) — paragraph ids number across the whole
+    # chapter so pause logic survives segmentation
+    chunks: list[tuple[str, int, str]] = []
+    pid = 0
+    for si, (voice, seg) in enumerate(segments):
+        paras = [p for p in seg.split("\n\n") if p.strip()]
+        for j, par in enumerate(paras):
+            if j > 0:
+                pid += 1
+            for c in chunk_paragraph(par):
+                chunks.append((voice, pid, c))
+        # a segment boundary is mid-flow — do NOT advance the paragraph id
     pieces = []
-    paragraphs = [p for p in text.split("\n\n") if p.strip()]
-    chunks = [(pi, c) for pi, par in enumerate(paragraphs)
-              for c in chunk_paragraph(par)]
     gap = lambda s: torch.zeros(int(engine.sr * s))
     if announce:
         line = announce.strip()
         pieces.append(engine.speak(line if line[-1:] in ".!?" else line + ".").cpu())
         pieces.append(gap(INTRO_GAP_S))
     last_par = None
-    for n, (pi, chunk) in enumerate(chunks):
+    for n, (voice, pi, chunk) in enumerate(chunks):
         if should_cancel():
             from .jobs import JobCanceled
             raise JobCanceled()
         if pieces:
             pieces.append(gap(PARA_GAP_S if pi != last_par else CHUNK_GAP_S))
-        pieces.append(engine.speak(chunk).cpu())
+        pieces.append(engine.speak(chunk, voice=voice or None).cpu())
         last_par = pi
         if (n + 1) % 10 == 0 or n + 1 == len(chunks):
             log(f"    {n + 1}/{len(chunks)} chunks")
@@ -277,11 +296,14 @@ def estimate(ws: Workspace) -> dict:
 
 def build_audiobook(ws: Workspace, cfg: dict, out: Path,
                     voice: str | None = None, speed: float = 1.0,
+                    use_cast: bool = False, voices_dir: Path | None = None,
                     log: Callable[[str], None] = print,
                     should_cancel: Callable[[], bool] = lambda: False) -> Path:
     """`voice` is a path to a reference sample from the voice library (cloned
     narration), or None/'' for the engine's built-in narrator; a configured
-    audiobook.voice_sample is the fallback when no explicit choice is made."""
+    audiobook.voice_sample is the fallback when no explicit choice is made.
+    With `use_cast`, quotes attributed by the cast analysis are spoken in each
+    character's assigned library voice (voices_dir resolves the names)."""
     chs = narration_chapters(ws)
     if not chs:
         raise RuntimeError("no narratable text — run the pipeline first")
@@ -293,26 +315,58 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
     adir = ws.work_file("audiobook")
     adir.mkdir(parents=True, exist_ok=True)
 
+    cast, voice_of = None, {}
+    if use_cast:
+        from .casting import load_cast
+        cast = load_cast(ws)
+        if cast is None:
+            raise RuntimeError("no cast analysis — run Analyze characters first")
+        for cname, c in (cast.get("characters") or {}).items():
+            v = (c.get("voice") or "").strip()
+            if v and voices_dir:
+                p = voices_dir / f"{v}.wav"
+                if p.exists():
+                    voice_of[cname] = str(p)
+        log(f"  cast: {len(voice_of)} character(s) with voices — "
+            + (", ".join(f"{n} -> {Path(p).stem}" for n, p in voice_of.items())
+               or "none (all narrator)"))
+
+    def chapter_quotes(i: int, title: str) -> list[dict]:
+        rows = (cast or {}).get("chapters") or []
+        if i < len(rows) and rows[i].get("title") == title:
+            return rows[i].get("quotes") or []
+        return next((r.get("quotes") or [] for r in rows
+                     if r.get("title") == title), [])
+
     wavs: list[tuple[str, Path]] = []
     for i, (title, text) in enumerate(chs):
+        segments = None
+        if voice_of:
+            from .casting import locate_quotes, segments_for
+            segments = segments_for(
+                text, locate_quotes(text, chapter_quotes(i, title)), voice_of)
         wav = adir / f"ch{i:03d}.wav"
         sig = adir / f"ch{i:03d}.json"
-        # cache key: chapter text + announcement + the voice/params behind it.
-        # A changed voice sample re-keys every chapter (a re-recorded sample at
-        # the same path changes nothing here — hash the sample bytes).
-        vhash = (hashlib.sha1(Path(voice).read_bytes()).hexdigest()
-                 if voice and Path(voice).exists() else "")
+        # cache key: chapter text + announcement + the voice/params behind it
+        # + the resolved cast segmentation. A changed voice sample re-keys every
+        # chapter (hash the sample bytes, not the path).
+        def _vhash(p: str) -> str:
+            return (hashlib.sha1(Path(p).read_bytes()).hexdigest()
+                    if p and Path(p).exists() else "")
         key = hashlib.sha1(json.dumps(
-            [text, title, vhash, engine.exaggeration, engine.cfg_weight]
+            [text, title, _vhash(voice), engine.exaggeration, engine.cfg_weight,
+             [(v, _vhash(v), len(t)) for v, t in (segments or [])]]
         ).encode()).hexdigest()
         if wav.exists() and sig.exists() and \
                 json.loads(sig.read_text()).get("key") == key:
             log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: cached")
         else:
+            nseg = sum(1 for v, _ in (segments or []) if v)
             log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: "
-                f"synthesizing {len(text) / 1000:.1f}k chars…")
+                f"synthesizing {len(text) / 1000:.1f}k chars"
+                + (f", {nseg} cast quote run(s)" if nseg else "") + "…")
             synthesize_chapter(engine, text, wav, log, should_cancel,
-                               announce=title)
+                               announce=title, segments=segments)
             sig.write_text(json.dumps({"key": key, "title": title}))
         wavs.append((title, wav))
     assemble_m4b(ws, wavs, out, speed=speed, log=log)

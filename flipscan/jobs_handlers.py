@@ -33,6 +33,7 @@ from .workspace import Workspace
 #            VRAM fits both models.)
 KIND_LANES = {
     "proof-chapter": "proof",
+    "cast-analysis": "proof",   # text-LLM work, parallel-safe like proofreads
     "pdf-import": "import",
     "video-import": "import",
     "audiobook": "tts",
@@ -154,14 +155,18 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
             speed = float(params.get("speed") or 1.0)
         except (TypeError, ValueError):
             speed = 1.0
+        use_cast = bool(params.get("use_cast"))
         vslug = re.sub(r"[^A-Za-z0-9_-]+", "-", vname) if vname else "builtin"
         stamp = time.strftime("%Y%m%d-%H%M")
         sslug = f"--{speed:g}x" if speed != 1.0 else ""
-        out = ws.dir("out") / f"{ws.root.name}--{vslug}{sslug}--{stamp}.m4b"
+        cslug = "--cast" if use_cast else ""
+        out = ws.dir("out") / f"{ws.root.name}--{vslug}{sslug}{cslug}--{stamp}.m4b"
         log(f"voice: {vname or 'built-in narrator'}"
-            + (f", {speed:g}x speed" if speed != 1.0 else "") + f" -> {out.name}")
-        build_audiobook(ws, cfg, out, voice=voice, speed=speed, log=log,
-                        should_cancel=should_cancel)
+            + (f", {speed:g}x speed" if speed != 1.0 else "")
+            + (", full cast" if use_cast else "") + f" -> {out.name}")
+        build_audiobook(ws, cfg, out, voice=voice, speed=speed,
+                        use_cast=use_cast, voices_dir=root / "voices",
+                        log=log, should_cancel=should_cancel)
         # stamp what it was built from, so the output tab's stale/current badge
         # is honest (without this the m4b reads "stale" forever)
         record_output(ws, out.name)
@@ -172,6 +177,16 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
     jobq.register("proof-resolve", proof_resolve)
     jobq.register("proof-reread-stuck", proof_reread_stuck)
     jobq.register("retry-ocr", retry_ocr)
+    def cast_analysis(project, params, log, should_cancel):
+        from .casting import analyze_book
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        cast = analyze_book(ws, cfg, log=log, should_cancel=should_cancel)
+        return {"characters": len(cast.get("characters") or {}),
+                "quotes": sum(c["quotes"] for c
+                              in (cast.get("characters") or {}).values())}
+
     jobq.register("pdf-import", pdf_import)
     jobq.register("video-import", video_import)
     jobq.register("audiobook", audiobook)
+    jobq.register("cast-analysis", cast_analysis)

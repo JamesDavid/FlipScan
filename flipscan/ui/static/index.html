@@ -1555,9 +1555,15 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
           ${["1","1.25","1.5","2"].map(s =>
             `<option value="${s}">${s}×</option>`).join("")}
         </select>
+        <label style="margin:0;display:flex;align-items:center;gap:.3rem"
+               title="narrate quotes in each character's assigned voice (needs a
+cast analysis below)">
+          <input type="checkbox" id="ab-cast" style="width:auto;margin:0" disabled>
+          🎭 cast voices</label>
         <button class="secondary" onclick="openVoiceRecorder()">🎙 Clone a new voice…</button>
       </div>
       <div class="meta" id="ab-estimate" style="margin-top:.3rem"></div>
+      <div id="cast-section" style="margin-top:.7rem"></div>
       <div class="meta" style="margin-top:.3rem">Voices are shared across all your
         books. Speed shortens the narration (pitch preserved) — it does <b>not</b>
         shorten generation, which is set by the amount of audio synthesized; a
@@ -1609,7 +1615,7 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
       <h3 style="margin:1rem 0 .3rem">Downloads</h3>
       ${dlList(audioOuts, "no audiobooks built yet")}
       </div>`;
-    if (p.tts_available) fetchAbEstimate();
+    if (p.tts_available) { fetchAbEstimate(); fetchCast(); }
   }
 }
 
@@ -1847,10 +1853,11 @@ async function buildFmt(fmt) {
 async function buildAudiobook(btn) {
   const voice = $("ab-voice")?.value || "";
   const speed = $("ab-speed")?.value || "1";
+  const cast = $("ab-cast")?.checked ? "&use_cast=true" : "";
   if (btn) { btn.disabled = true; btn.textContent = "queued…"; }
   try {
     const { job_id } = await api(`/projects/${current}/build-audiobook`
-      + `?voice=${encodeURIComponent(voice)}&speed=${speed}`, {method: "POST"});
+      + `?voice=${encodeURIComponent(voice)}&speed=${speed}${cast}`, {method: "POST"});
     if (btn) btn.textContent = "🎧 narrating… (watch ⚙ queue)";
     await waitForJob(job_id);
   } catch (e) { alert(e.message); openProject(current, "output"); return; }
@@ -1876,6 +1883,66 @@ function updateAbEstimate() {
     + (speed !== 1 ? ` at ${speed}×` : "")
     + ` · about <b>${fmt(e.synth_min)}</b> to generate on the GPU`
     + (speed !== 1 ? ` <span title="speed is applied after synthesis">(speed doesn't change generation time)</span>` : "");
+}
+
+// ---- full-cast narration: character analysis + per-character voice casting
+async function fetchCast() {
+  const el = $("cast-section");
+  if (!el) return;
+  let c;
+  try { c = await api(`/projects/${current}/audiobook-cast`); }
+  catch { return; }
+  const voices = window._proj?.voices || [];
+  const chk = $("ab-cast");
+  const names = Object.keys(c.characters || {});
+  if (!c.exists) {
+    el.innerHTML = `<div class="row">
+      <button class="secondary" onclick="analyzeCast(this)">🎭 Analyze characters…</button>
+      <span class="meta" style="margin:0">find who speaks in this book (one text-model
+        pass per chapter) so quotes can be read in different voices</span></div>`;
+    return;
+  }
+  if (chk) chk.disabled = !names.some(n => (c.characters[n].voice || "") !== "");
+  const opt = (sel) => `<option value="">— narrator reads them —</option>`
+    + voices.map(v => `<option ${sel === v ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
+  el.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem">
+    <div class="row" style="margin-bottom:.3rem">
+      <b>🎭 Cast</b>
+      <span class="meta" style="margin:0">${names.length} speaking character${names.length === 1 ? "" : "s"}
+        — assign voices, then tick “cast voices” above before building</span>
+      <button class="secondary" style="margin-left:auto;padding:.15rem .6rem;font-size:.75rem"
+        onclick="analyzeCast(this)">↻ Re-analyze</button>
+    </div>
+    ${names.length ? names.sort((a, b) => c.characters[b].quotes - c.characters[a].quotes)
+      .map(n => { const ch = c.characters[n]; return `
+      <div class="row" style="border-top:1px solid var(--line);padding:.4rem 0">
+        <div style="flex:1;min-width:12rem">
+          <b>${esc(n)}</b> <span class="meta">· ${ch.quotes} quote${ch.quotes === 1 ? "" : "s"}</span>
+          <div class="meta" title="${esc((ch.samples || []).map(s => "“" + s + "”").join("\n"))}">${esc(ch.description || "")}</div>
+        </div>
+        <select style="width:auto;margin:0"
+          onchange="assignCastVoice('${esc(n)}', this.value)">${opt(ch.voice || "")}</select>
+      </div>`; }).join("")
+      : `<div class="meta">no attributed quotes found — this book reads as pure narration</div>`}
+  </div>`;
+}
+
+async function analyzeCast(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "analyzing…"; }
+  try {
+    const { job_id } = await api(`/projects/${current}/audiobook-cast/analyze`, {method: "POST"});
+    await waitForJob(job_id);
+  } catch (e) { alert(e.message); }
+  fetchCast();
+}
+
+async function assignCastVoice(character, voice) {
+  try {
+    await api(`/projects/${current}/audiobook-cast/assign`
+      + `?character=${encodeURIComponent(character)}&voice=${encodeURIComponent(voice)}`,
+      {method: "POST"});
+  } catch (e) { alert(e.message); }
+  fetchCast();   // refreshes the cast-voices checkbox enablement
 }
 
 async function uploadVoice() {

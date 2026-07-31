@@ -2073,6 +2073,45 @@ def create_app(root: Path) -> FastAPI:
 
     # ---------------- build + files
 
+    @app.get("/api/projects/{name}/audiobook-cast")
+    def get_cast(name: str):
+        """The analyzed cast (characters, descriptions, quote counts, samples,
+        voice assignments) — or exists=False if never analyzed."""
+        from ..casting import load_cast
+        ws = ws_for(name)
+        cast = load_cast(ws)
+        if cast is None:
+            return {"exists": False, "characters": {}}
+        return {"exists": True, "analyzed_at": cast.get("analyzed_at"),
+                "characters": cast.get("characters") or {}}
+
+    @app.post("/api/projects/{name}/audiobook-cast/analyze")
+    def analyze_cast_ep(name: str):
+        """Enqueue the character analysis (one text-LLM pass per chapter)."""
+        ws = ws_for(name)
+        if not any(p.get("md") and not p.get("role")
+                   and p.get("status") not in ("duplicate", "deleted")
+                   for p in ws.manifest["pages"]):
+            raise HTTPException(400, "no transcribed text — run the pipeline first")
+        if jobq.active(name, ("cast-analysis",)) is not None:
+            raise HTTPException(409, "a cast analysis is already running")
+        job_id = jobq.enqueue(name, "cast-analysis", {},
+                              label="analyze characters")
+        return {"ok": True, "job_id": job_id}
+
+    @app.post("/api/projects/{name}/audiobook-cast/assign")
+    def assign_cast_voice(name: str, character: str, voice: str = ""):
+        """Map a character to a library voice ('' = narrator reads them)."""
+        from ..casting import assign_voice
+        ws = ws_for(name)
+        if voice and not (root / "voices" / f"{voice}.wav").exists():
+            raise HTTPException(404, f"voice {voice!r} is not in the library")
+        try:
+            assign_voice(ws, character, voice)
+        except (FileNotFoundError, KeyError) as e:
+            raise HTTPException(404, str(e))
+        return {"ok": True}
+
     @app.get("/api/projects/{name}/audiobook-estimate")
     def audiobook_estimate(name: str):
         """Narration length + GPU-time estimate from the current book text."""
@@ -2084,7 +2123,8 @@ def create_app(root: Path) -> FastAPI:
             return {"chars": 0, "audio_min": 0, "synth_min": 0}
 
     @app.post("/api/projects/{name}/build-audiobook")
-    def build_audiobook_ep(name: str, voice: str = "", speed: float = 1.0):
+    def build_audiobook_ep(name: str, voice: str = "", speed: float = 1.0,
+                           use_cast: bool = False):
         """Enqueue the audiobook synthesis as a durable job — a full book is
         hours of local TTS, so it runs in the queue (own 'tts' lane), survives
         restarts, and resumes from the per-chapter wav cache. `voice` is a name
@@ -2104,13 +2144,20 @@ def create_app(root: Path) -> FastAPI:
         voice = voice.strip()
         if voice and not (root / "voices" / f"{voice}.wav").exists():
             raise HTTPException(404, f"voice {voice!r} is not in the library")
+        if use_cast:
+            from ..casting import load_cast
+            if load_cast(ws) is None:
+                raise HTTPException(400, "no cast analysis yet — run "
+                                         "Analyze characters first")
         if jobq.active(name, ("audiobook",)) is not None:
             raise HTTPException(409, "an audiobook build is already running")
         speed = max(0.5, min(3.0, speed))
         label = f"audiobook ({voice or 'built-in voice'}" \
-                + (f", {speed:g}x" if speed != 1.0 else "") + ")"
+                + (f", {speed:g}x" if speed != 1.0 else "") \
+                + (", cast" if use_cast else "") + ")"
         job_id = jobq.enqueue(name, "audiobook",
-                              {"voice": voice, "speed": speed}, label=label)
+                              {"voice": voice, "speed": speed,
+                               "use_cast": use_cast}, label=label)
         return {"ok": True, "job_id": job_id}
 
     # ---------------- narration voice library (shared across all books)
