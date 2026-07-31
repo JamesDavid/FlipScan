@@ -469,9 +469,10 @@ function updateJobsChip(jobs) {
   const queued = jobs.filter(j => j.status === "queued");
   if (!running.length && !queued.length) { chip.style.display = "none"; return; }
   chip.style.display = "block";
-  const r = running[0];
-  chip.innerHTML = `<span class="spin">⚙</span> `
-    + (r ? esc(prettyJob(r)) : "starting…")
+  // several jobs can run at once (tts / proof / import lanes are independent)
+  const label = running.length > 1 ? `${running.length} running`
+    : running.length ? esc(prettyJob(running[0])) : "starting…";
+  chip.innerHTML = `<span class="spin">⚙</span> ${label}`
     + (queued.length ? ` · +${queued.length} queued` : "");
 }
 // one global poller for the whole queue (all books) — never reset on switch
@@ -507,15 +508,16 @@ async function renderJobsModal(jobs) {
   const queued = jobs.filter(j => j.status === "queued");
   const recent = jobs.filter(j => ["done", "error", "canceled"].includes(j.status)).slice(0, 8);
   const icon = {done: "✓", error: "✗", canceled: "⊘"};
+  // one card PER running job — the lanes run several at once (an audiobook
+  // narrating while a cast analysis or proofread runs is normal)
   let runHtml = "";
-  if (running.length) {
-    const j = running[0];
+  for (const j of running) {
     let tail = "working…";
     try {
       const { logs } = await api(`/jobs/${j.id}/logs`);
       if (logs && logs.length) tail = logs.slice(-10).map(l => esc(l.line)).join("\n");
     } catch {}
-    runHtml = `<div class="card" style="border:2px solid var(--accent)">
+    runHtml += `<div class="card" style="border:2px solid var(--accent)">
       <div class="row" style="align-items:center">
         <span class="spin">⚙</span> <b>${esc(prettyJob(j))}</b>
         <span class="meta" style="margin:0">running ${jobElapsed(j.started_at)}</span>
