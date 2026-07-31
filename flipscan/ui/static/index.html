@@ -1907,6 +1907,7 @@ async function fetchCast() {
   if (chk) chk.disabled = !names.some(n => (c.characters[n].voice || "") !== "");
   const opt = (sel) => `<option value="">— narrator reads them —</option>`
     + voices.map(v => `<option ${sel === v ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
+  const failed = c.failed_chapters || [];
   el.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem">
     <div class="row" style="margin-bottom:.3rem">
       <b>🎭 Cast</b>
@@ -1915,12 +1916,24 @@ async function fetchCast() {
       <button class="secondary" style="margin-left:auto;padding:.15rem .6rem;font-size:.75rem"
         onclick="analyzeCast(this)">↻ Re-analyze</button>
     </div>
+    ${failed.length ? `<div class="row" style="background:#fef2f2;border:1px solid #dc2626;
+        border-radius:6px;padding:.35rem .7rem;margin:.3rem 0">
+      <span class="meta" style="margin:0;color:#dc2626">⚠ analysis failed on
+        ${failed.length} chapter${failed.length > 1 ? "s" : ""}
+        (${esc(failed.slice(0, 3).join(", "))}${failed.length > 3 ? "…" : ""}) —
+        ${failed.length > 1 ? "they stay" : "it stays"} narrator-only until retried</span>
+      <button style="margin-left:auto;padding:.15rem .6rem;font-size:.75rem"
+        onclick="analyzeCast(this, true)">↻ Retry failed only</button>
+    </div>` : ""}
     ${names.length ? names.sort((a, b) => c.characters[b].quotes - c.characters[a].quotes)
       .map(n => { const ch = c.characters[n]; return `
       <div class="row" style="border-top:1px solid var(--line);padding:.4rem 0">
         <div style="flex:1;min-width:12rem">
           <b>${esc(n)}</b> <span class="meta">· ${ch.quotes} quote${ch.quotes === 1 ? "" : "s"}</span>
           <div class="meta" title="${esc((ch.samples || []).map(s => "“" + s + "”").join("\n"))}">${esc(ch.description || "")}</div>
+          ${ch.sounds_like ? `<div class="meta" style="color:var(--accent)"
+             title="a casting hint only — pick or record a voice from your library that fits">
+             💡 ${esc(ch.sounds_like)}</div>` : ""}
         </div>
         <select style="width:auto;margin:0"
           onchange="assignCastVoice('${esc(n)}', this.value)">${opt(ch.voice || "")}</select>
@@ -1929,10 +1942,11 @@ async function fetchCast() {
   </div>`;
 }
 
-async function analyzeCast(btn) {
+async function analyzeCast(btn, onlyFailed = false) {
   if (btn) { btn.disabled = true; btn.textContent = "analyzing…"; }
   try {
-    const { job_id } = await api(`/projects/${current}/audiobook-cast/analyze`, {method: "POST"});
+    const { job_id } = await api(`/projects/${current}/audiobook-cast/analyze`
+      + (onlyFailed ? "?only_failed=true" : ""), {method: "POST"});
     await waitForJob(job_id);
   } catch (e) { alert(e.message); }
   fetchCast();

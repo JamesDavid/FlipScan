@@ -2081,13 +2081,17 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)
         cast = load_cast(ws)
         if cast is None:
-            return {"exists": False, "characters": {}}
+            return {"exists": False, "characters": {}, "failed_chapters": []}
         return {"exists": True, "analyzed_at": cast.get("analyzed_at"),
-                "characters": cast.get("characters") or {}}
+                "characters": cast.get("characters") or {},
+                "failed_chapters": [r["title"] for r in
+                                    (cast.get("chapters") or [])
+                                    if r.get("error")]}
 
     @app.post("/api/projects/{name}/audiobook-cast/analyze")
-    def analyze_cast_ep(name: str):
-        """Enqueue the character analysis (one text-LLM pass per chapter)."""
+    def analyze_cast_ep(name: str, only_failed: bool = False):
+        """Enqueue the character analysis (one text-LLM pass per chapter).
+        only_failed re-analyzes just the chapters whose last pass errored."""
         ws = ws_for(name)
         if not any(p.get("md") and not p.get("role")
                    and p.get("status") not in ("duplicate", "deleted")
@@ -2095,8 +2099,10 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "no transcribed text — run the pipeline first")
         if jobq.active(name, ("cast-analysis",)) is not None:
             raise HTTPException(409, "a cast analysis is already running")
-        job_id = jobq.enqueue(name, "cast-analysis", {},
-                              label="analyze characters")
+        job_id = jobq.enqueue(name, "cast-analysis",
+                              {"only_failed": only_failed},
+                              label="analyze characters"
+                                    + (" (retry failed)" if only_failed else ""))
         return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/audiobook-cast/assign")

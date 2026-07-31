@@ -181,7 +181,8 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         from .casting import analyze_book
         ws = ws_for(project)
         cfg = load_config(ws.root)
-        cast = analyze_book(ws, cfg, log=log, should_cancel=should_cancel)
+        cast = analyze_book(ws, cfg, log=log, should_cancel=should_cancel,
+                            only_failed=bool(params.get("only_failed")))
         return {"characters": len(cast.get("characters") or {}),
                 "quotes": sum(c["quotes"] for c
                               in (cast.get("characters") or {}).values())}

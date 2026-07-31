@@ -31,7 +31,8 @@ Return ONLY a JSON object, no code fences, exactly this shape:
 
 {
   "characters": [
-    {"name": "Hugo Eckener", "description": "airship commander; German, formal, measured"}
+    {"name": "Hugo Eckener", "description": "airship commander; German, formal, measured",
+     "sounds_like": "a gravelly, deliberate elder-statesman baritone — in the vein of Winston Churchill's radio addresses"}
   ],
   "quotes": [
     {"quote": "the exact quoted words, copied verbatim from the text", "speaker": "Hugo Eckener"}
@@ -49,6 +50,11 @@ Rules:
 - "characters": every speaker you used (except NARRATOR), with a description
   in under 15 words drawn from the text: who they are, and anything relevant
   to voice (age, gender, nationality, temperament) that the TEXT supports.
+- "sounds_like": a casting tip in under 20 words — what this person's voice
+  might sound like, naming a widely known voice as a reference point. For real
+  historical figures, use your general knowledge of how they actually sounded;
+  otherwise suggest a famous voice fitting the description. It's a hint for a
+  human choosing voices, not a claim.
 - No commentary, just the JSON.
 
 CHAPTER:
@@ -89,7 +95,8 @@ def _parse_cast(raw: str) -> dict:
         raise ValueError(f"no JSON in cast response: {raw[:200]!r}")
     obj = json.loads(text[start:end + 1])
     chars = [{"name": str(c.get("name", "")).strip(),
-              "description": str(c.get("description", "")).strip()}
+              "description": str(c.get("description", "")).strip(),
+              "sounds_like": str(c.get("sounds_like", "")).strip()}
              for c in obj.get("characters", []) if isinstance(c, dict)
              and str(c.get("name", "")).strip()]
     quotes = [{"q": str(q.get("quote", "")).strip(),
@@ -209,30 +216,67 @@ def assign_voice(ws: Workspace, character: str, voice: str) -> dict:
 
 # ---------------- the analysis job
 
+def _aggregate(chapters: list[dict], prev_voices: dict[str, str]) -> dict:
+    """Book-wide character map rebuilt from the per-chapter results; voice
+    assignments carried over by name."""
+    characters: dict[str, dict] = {}
+    for row in chapters:
+        for c in row.get("characters") or []:
+            entry = characters.setdefault(c["name"], {
+                "description": "", "sounds_like": "", "quotes": 0,
+                "samples": [], "voice": prev_voices.get(c["name"], "")})
+            if not entry["description"] and c.get("description"):
+                entry["description"] = c["description"]
+            if not entry["sounds_like"] and c.get("sounds_like"):
+                entry["sounds_like"] = c["sounds_like"]
+        for q in row.get("quotes") or []:
+            if q["speaker"] == "NARRATOR":
+                continue
+            entry = characters.setdefault(q["speaker"], {
+                "description": "", "sounds_like": "", "quotes": 0,
+                "samples": [], "voice": prev_voices.get(q["speaker"], "")})
+            entry["quotes"] += 1
+            if len(entry["samples"]) < SAMPLES_PER_CHARACTER:
+                entry["samples"].append(q["q"][:160])
+    # characters the model listed but never actually quoted add noise — drop
+    return {n: c for n, c in characters.items() if c["quotes"] > 0}
+
+
 def analyze_book(ws: Workspace, cfg: dict,
                  log: Callable[[str], None] = print,
                  should_cancel: Callable[[], bool] = lambda: False,
-                 call_llm: Callable[[dict, str], str] | None = None) -> dict:
+                 call_llm: Callable[[dict, str], str] | None = None,
+                 only_failed: bool = False) -> dict:
     """One LLM pass per chapter; aggregates a book-wide cast. Existing voice
-    assignments survive re-analysis (matched by character name)."""
+    assignments survive re-analysis (matched by character name). A chapter
+    whose analysis fails is recorded with its error (and stays narrator-only)
+    so the UI can offer a retry; only_failed re-analyzes just those chapters
+    and keeps every successful chapter's result."""
     from .audiobook import narration_chapters
     call = call_llm or _call_llm
     prev = load_cast(ws) or {}
     prev_voices = {n: c.get("voice", "")
                    for n, c in (prev.get("characters") or {}).items()}
+    prev_rows = {r.get("title"): r for r in (prev.get("chapters") or [])}
 
-    chapters, characters = [], {}
+    chapters = []
     chs = narration_chapters(ws)
     for i, (title, text) in enumerate(chs):
         if should_cancel():
             from .jobs import JobCanceled
             raise JobCanceled()
+        old = prev_rows.get(title)
+        if only_failed and old is not None and not old.get("error"):
+            chapters.append(old)      # keep the good result untouched
+            continue
         log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: analyzing…")
         try:
             parsed = _parse_cast(call(cfg, CAST_PROMPT + text))
         except Exception as e:
-            log(f"    analysis failed ({str(e)[:80]}) — chapter stays narrator-only")
-            chapters.append({"title": title, "quotes": []})
+            err = str(e)[:160]
+            log(f"    analysis failed ({err[:80]}) — chapter stays narrator-only")
+            chapters.append({"title": title, "quotes": [], "characters": [],
+                             "error": err})
             continue
         located = locate_quotes(text, parsed["quotes"])
         real = [q for q in located if q["speaker"] != "NARRATOR"]
@@ -240,26 +284,15 @@ def analyze_book(ws: Workspace, cfg: dict,
             f"{len(located)} matched in text, {len(real)} attributed")
         chapters.append({"title": title,
                          "quotes": [{"q": q["q"], "speaker": q["speaker"]}
-                                    for q in located]})
-        for c in parsed["characters"]:
-            entry = characters.setdefault(c["name"], {
-                "description": c["description"], "quotes": 0, "samples": [],
-                "voice": prev_voices.get(c["name"], "")})
-            if not entry["description"] and c["description"]:
-                entry["description"] = c["description"]
-        for q in real:
-            entry = characters.setdefault(q["speaker"], {
-                "description": "", "quotes": 0, "samples": [],
-                "voice": prev_voices.get(q["speaker"], "")})
-            entry["quotes"] += 1
-            if len(entry["samples"]) < SAMPLES_PER_CHARACTER:
-                entry["samples"].append(q["q"][:160])
-
-    # characters the model listed but never actually quoted add noise — drop
-    characters = {n: c for n, c in characters.items() if c["quotes"] > 0}
+                                    for q in located],
+                         "characters": parsed["characters"]})
+    characters = _aggregate(chapters, prev_voices)
     cast = {"analyzed_at": time.time(), "chapters": chapters,
             "characters": characters}
     save_cast(ws, cast)
+    failed = [r["title"] for r in chapters if r.get("error")]
     log(f"  cast: {len(characters)} speaking character(s), "
-        f"{sum(c['quotes'] for c in characters.values())} attributed quotes")
+        f"{sum(c['quotes'] for c in characters.values())} attributed quotes"
+        + (f" — {len(failed)} chapter(s) FAILED: {', '.join(failed[:4])}"
+           if failed else ""))
     return cast
