@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -367,7 +368,7 @@ def create_app(root: Path) -> FastAPI:
             "suppressed_headings": m.get("suppressed_headings") or {},
             "latex_available": _latex_tools_available(),
             "tts_available": _tts_available(),
-            "voice_sample": (ws.root / "voice-sample.wav").exists(),
+            "voices": _voice_names(),
             "outputs": [{"name": f.name, "stale": built.get(f.name) != sig}
                         for f in ws.dir("out").glob("*") if f.is_file()],
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
@@ -2075,11 +2076,23 @@ def create_app(root: Path) -> FastAPI:
 
     # ---------------- build + files
 
+    @app.get("/api/projects/{name}/audiobook-estimate")
+    def audiobook_estimate(name: str):
+        """Narration length + GPU-time estimate from the current book text."""
+        from ..audiobook import estimate
+        ws = ws_for(name)
+        try:
+            return estimate(ws)
+        except FileNotFoundError:
+            return {"chars": 0, "audio_min": 0, "synth_min": 0}
+
     @app.post("/api/projects/{name}/build-audiobook")
-    def build_audiobook_ep(name: str):
+    def build_audiobook_ep(name: str, voice: str = "", speed: float = 1.0):
         """Enqueue the audiobook synthesis as a durable job — a full book is
         hours of local TTS, so it runs in the queue (own 'tts' lane), survives
-        restarts, and resumes from the per-chapter wav cache."""
+        restarts, and resumes from the per-chapter wav cache. `voice` is a name
+        from the shared library ('' = the built-in narrator); the output file
+        carries the voice and generation time, so runs never overwrite."""
         ws = ws_for(name)
         try:
             import chatterbox  # noqa: F401 — presence check only
@@ -2091,21 +2104,43 @@ def create_app(root: Path) -> FastAPI:
                    and p.get("status") not in ("duplicate", "deleted")
                    for p in ws.manifest["pages"]):
             raise HTTPException(400, "no transcribed text — run the pipeline first")
+        voice = voice.strip()
+        if voice and not (root / "voices" / f"{voice}.wav").exists():
+            raise HTTPException(404, f"voice {voice!r} is not in the library")
         if jobq.active(name, ("audiobook",)) is not None:
             raise HTTPException(409, "an audiobook build is already running")
-        job_id = jobq.enqueue(name, "audiobook", {}, label="audiobook (m4b)")
+        speed = max(0.5, min(3.0, speed))
+        label = f"audiobook ({voice or 'built-in voice'}" \
+                + (f", {speed:g}x" if speed != 1.0 else "") + ")"
+        job_id = jobq.enqueue(name, "audiobook",
+                              {"voice": voice, "speed": speed}, label=label)
         return {"ok": True, "job_id": job_id}
 
-    @app.post("/api/projects/{name}/voice-sample")
-    async def upload_voice_sample(name: str, sample: UploadFile):
-        """Store a narration voice for this book: a 10-30s clean recording,
-        converted to the engine's format (24 kHz mono wav). Only upload a voice
-        you have the right to use — your own, or someone who has agreed."""
+    # ---------------- narration voice library (shared across all books)
+
+    def _voice_names() -> list[str]:
+        vdir = root / "voices"
+        return sorted(f.stem for f in vdir.glob("*.wav")) if vdir.exists() else []
+
+    @app.get("/api/voices")
+    def list_voices():
+        return {"voices": _voice_names()}
+
+    @app.post("/api/voices")
+    async def add_voice(sample: UploadFile, voice_name: str = ""):
+        """Add a named narration voice to the shared library: a 10-30s clean
+        recording, converted to the engine's format (24 kHz mono wav). Usable
+        by every book's audiobook build. Only add a voice you have the right
+        to use — your own, or someone who has agreed."""
         from ..ffmpeg import _find as _ff
-        ws = ws_for(name)
-        raw = ws.root / "_voice_upload.tmp"
+        clean = re.sub(r"[^A-Za-z0-9 _-]+", "", voice_name).strip()
+        if not clean:
+            raise HTTPException(400, "give the voice a name")
+        vdir = root / "voices"
+        vdir.mkdir(exist_ok=True)
+        raw = vdir / "_upload.tmp"
         raw.write_bytes(await sample.read())
-        out = ws.root / "voice-sample.wav"
+        out = vdir / f"{clean}.wav"
         try:
             r = subprocess.run(
                 [_ff("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
@@ -2116,14 +2151,15 @@ def create_app(root: Path) -> FastAPI:
                                          f"{r.stderr[-200:]}")
         finally:
             raw.unlink(missing_ok=True)
-        # a new voice invalidates the chapter cache via the synthesis key
-        return {"ok": True}
+        return {"ok": True, "name": clean, "voices": _voice_names()}
 
-    @app.delete("/api/projects/{name}/voice-sample")
-    def delete_voice_sample(name: str):
-        ws = ws_for(name)
-        (ws.root / "voice-sample.wav").unlink(missing_ok=True)
-        return {"ok": True}
+    @app.delete("/api/voices/{voice_name}")
+    def delete_voice(voice_name: str):
+        f = (root / "voices" / f"{voice_name}.wav").resolve()
+        if not str(f).startswith(str((root / "voices").resolve())):
+            raise HTTPException(400, "bad voice name")
+        f.unlink(missing_ok=True)
+        return {"ok": True, "voices": _voice_names()}
 
     @app.post("/api/projects/{name}/build")
     def build(name: str, format: str = "epub", device: str = "none"):

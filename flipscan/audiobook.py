@@ -208,9 +208,13 @@ def _esc_meta(s: str) -> str:
 
 
 def assemble_m4b(ws: Workspace, wavs: list[tuple[str, Path]], out: Path,
+                 speed: float = 1.0,
                  log: Callable[[str], None] = print) -> None:
     """wavs [(chapter_title, wav_path)] -> .m4b with chapter markers, cover
-    art, and book metadata."""
+    art, and book metadata. `speed` > 1 time-compresses the narration (ffmpeg
+    atempo, pitch preserved) — applied here at assembly, so re-rendering the
+    same chapters at a different speed is seconds, not hours."""
+    speed = max(0.5, min(3.0, float(speed or 1.0)))
     adir = wavs[0][1].parent
     book = ws.manifest["book"]
     listing = adir / "concat.txt"
@@ -223,7 +227,7 @@ def assemble_m4b(ws: Workspace, wavs: list[tuple[str, Path]], out: Path,
             "genre=Audiobook"]
     t = 0.0
     for title, p in wavs:
-        dur = _wav_seconds(p)
+        dur = _wav_seconds(p) / speed     # markers land on the sped-up timeline
         meta += ["[CHAPTER]", "TIMEBASE=1/1000",
                  f"START={int(t * 1000)}", f"END={int((t + dur) * 1000)}",
                  f"title={_esc_meta(title)}"]
@@ -239,8 +243,10 @@ def assemble_m4b(ws: Workspace, wavs: list[tuple[str, Path]], out: Path,
            "-i", str(metafile)]
     if cover:
         cmd += ["-i", str(ws.root / cover["color"])]
-    cmd += ["-map", "0:a", "-map_metadata", "1",
-            "-c:a", "aac", "-b:a", "96k", "-ac", "1"]
+    cmd += ["-map", "0:a", "-map_metadata", "1"]
+    if speed != 1.0:
+        cmd += ["-filter:a", f"atempo={speed}"]
+    cmd += ["-c:a", "aac", "-b:a", "96k", "-ac", "1"]
     if cover:
         cmd += ["-map", "2:v", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]
     cmd += ["-f", "ipod", str(out)]
@@ -248,22 +254,40 @@ def assemble_m4b(ws: Workspace, wavs: list[tuple[str, Path]], out: Path,
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg m4b assembly failed: {r.stderr[-400:]}")
-    log(f"  audiobook: {out.name} ({t / 3600:.1f} h, {len(wavs)} chapters)")
+    log(f"  audiobook: {out.name} ({t / 3600:.1f} h"
+        + (f" at {speed}x" if speed != 1.0 else "") + f", {len(wavs)} chapters)")
 
 
 # ---------------- top-level build (durable-job entry point)
 
+ESTIMATE_CHARS_PER_MIN = 1216   # measured: 62.4k chars -> 51.3 min narration
+ESTIMATE_SYNTH_FACTOR = 1.11    # measured: 56.8 min GPU for 51.3 min audio
+
+
+def estimate(ws: Workspace) -> dict:
+    """Rough numbers for the UI, from the narration text length: minutes of
+    audio at 1x, and minutes of GPU synthesis (which speed settings do NOT
+    change — speed is applied after synthesis)."""
+    chars = sum(len(t) for _, t in narration_chapters(ws))
+    audio_min = chars / ESTIMATE_CHARS_PER_MIN
+    return {"chars": chars,
+            "audio_min": round(audio_min, 1),
+            "synth_min": round(audio_min * ESTIMATE_SYNTH_FACTOR, 1)}
+
+
 def build_audiobook(ws: Workspace, cfg: dict, out: Path,
+                    voice: str | None = None, speed: float = 1.0,
                     log: Callable[[str], None] = print,
                     should_cancel: Callable[[], bool] = lambda: False) -> Path:
+    """`voice` is a path to a reference sample from the voice library (cloned
+    narration), or None/'' for the engine's built-in narrator; a configured
+    audiobook.voice_sample is the fallback when no explicit choice is made."""
     chs = narration_chapters(ws)
     if not chs:
         raise RuntimeError("no narratable text — run the pipeline first")
     a = dict(cfg.get("audiobook", {}))
-    # a voice sample saved on the project wins; else the configured/global one
-    proj_voice = ws.root / "voice-sample.wav"
-    voice = str(proj_voice) if proj_voice.exists() \
-        else (a.get("voice_sample") or "").strip()
+    voice = (voice if voice is not None
+             else (a.get("voice_sample") or "")).strip()
     a["voice_sample"] = voice
     engine = ChatterboxEngine({**cfg, "audiobook": a})
     adir = ws.work_file("audiobook")
@@ -291,5 +315,5 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
                                announce=title)
             sig.write_text(json.dumps({"key": key, "title": title}))
         wavs.append((title, wav))
-    assemble_m4b(ws, wavs, out, log)
+    assemble_m4b(ws, wavs, out, speed=speed, log=log)
     return out

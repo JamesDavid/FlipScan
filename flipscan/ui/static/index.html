@@ -1521,19 +1521,29 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
           : `<button disabled style="opacity:.55"
                title="install the local voice engine: pip install chatterbox-tts">
                audiobook — needs chatterbox-tts</button>`}
-        <span class="meta" style="margin:0">voice:
-          ${p.voice_sample ? `<b>custom (cloned)</b>
-             <button class="secondary" style="padding:.1rem .5rem;font-size:.7rem"
-               onclick="removeVoice()">✕ remove</button>`
-           : `built-in narrator`}</span>
-        <input type="file" id="voice-file" accept="audio/*" style="display:none"
-               onchange="uploadVoice()">
-        <button class="secondary" onclick="openVoiceRecorder()">
-          🎙 ${p.voice_sample ? "Replace" : "Clone a"} voice…</button>
+        <label style="margin:0 0 0 .4rem">voice</label>
+        <select id="ab-voice" style="width:auto;margin:0">
+          <option value="">Built-in narrator</option>
+          ${(p.voices || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("")}
+        </select>
+        <button class="secondary" style="padding:.15rem .5rem;font-size:.72rem"
+          title="delete the selected cloned voice from the library"
+          onclick="deleteVoice()">✕</button>
+        <label style="margin:0">speed</label>
+        <select id="ab-speed" style="width:auto;margin:0"
+          onchange="updateAbEstimate()">
+          ${["1","1.25","1.5","2"].map(s =>
+            `<option value="${s}">${s}×</option>`).join("")}
+        </select>
+        <button class="secondary" onclick="openVoiceRecorder()">🎙 Clone a new voice…</button>
       </div>
-      <div class="meta" style="margin-top:.3rem">Voice cloning: record (or upload)
-        a clean 10–30&nbsp;s sample and the whole book is narrated in that voice —
-        only use a voice that's yours or whose owner has agreed.</div>
+      <div class="meta" id="ab-estimate" style="margin-top:.3rem"></div>
+      <div class="meta" style="margin-top:.3rem">Voices are shared across all your
+        books. Speed shortens the narration (pitch preserved) — it does <b>not</b>
+        shorten generation, which is set by the amount of audio synthesized; a
+        speed-only re-render of already-narrated chapters takes seconds. Each
+        build saves as <b>book--voice--time.m4b</b>, so nothing is overwritten.
+        Only clone a voice that's yours or whose owner has agreed.</div>
       <div id="voice-modal" style="display:none;position:fixed;inset:0;z-index:60;
            background:rgba(0,0,0,.7);align-items:center;justify-content:center">
         <div style="background:var(--panel,#fff);border-radius:10px;padding:1.2rem 1.4rem;
@@ -1557,14 +1567,21 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
             the tall windows, and somewhere below a door closed softly. I settled
             into the chair, turned past the title page, and began to read.”</div>
           <div class="row" style="margin-bottom:.6rem">
+            <label style="margin:0">name</label>
+            <input id="vrec-name" placeholder="e.g. James, Grandpa Joe…"
+                   style="flex:1;min-width:9rem;margin:0">
+          </div>
+          <div class="row" style="margin-bottom:.6rem">
             <button id="vrec-btn" onclick="toggleVoiceRec()">● Record</button>
             <span id="vrec-timer" class="meta" style="margin:0;font-variant-numeric:tabular-nums"></span>
             <audio id="vrec-audio" controls style="display:none;height:2rem;flex:1"></audio>
           </div>
           <div class="row">
-            <button id="vrec-use" style="display:none" onclick="useVoiceRec()">✓ Use this voice</button>
+            <button id="vrec-use" style="display:none" onclick="useVoiceRec()">✓ Save to voice library</button>
+            <input type="file" id="voice-file" accept="audio/*" style="display:none"
+                   onchange="uploadVoice()">
             <button class="secondary" onclick="$('voice-file').click()"
-              title="use an existing recording instead">📁 upload a file instead</button>
+              title="use an existing recording instead (it still needs a name above)">📁 upload a file instead</button>
             <span class="meta" id="vrec-note" style="margin:0 0 0 auto"></span>
           </div>
         </div>
@@ -1579,6 +1596,7 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
                encodeURIComponent(name)}&file=${encodeURIComponent(o.name)}"
              style="margin-left:.6rem">📖 read in browser</a>` : ""}</li>`).join("")
         || "<div class='meta'>nothing built yet</div>"}</ul></div>`;
+    if (p.tts_available) fetchAbEstimate();
   }
 }
 
@@ -1812,31 +1830,65 @@ async function buildFmt(fmt) {
   } catch (e) { alert(e.message); }
 }
 
-// ---- audiobook: durable synthesis job + voice-clone sample management
+// ---- audiobook: durable synthesis job + shared voice library
 async function buildAudiobook(btn) {
+  const voice = $("ab-voice")?.value || "";
+  const speed = $("ab-speed")?.value || "1";
   if (btn) { btn.disabled = true; btn.textContent = "queued…"; }
   try {
-    const { job_id } = await api(`/projects/${current}/build-audiobook`, {method: "POST"});
+    const { job_id } = await api(`/projects/${current}/build-audiobook`
+      + `?voice=${encodeURIComponent(voice)}&speed=${speed}`, {method: "POST"});
     if (btn) btn.textContent = "🎧 narrating… (watch ⚙ queue)";
     await waitForJob(job_id);
   } catch (e) { alert(e.message); openProject(current, "output"); return; }
   openProject(current, "output");
 }
 
+// narration-length + GPU-time estimate shown on the audiobook card
+async function fetchAbEstimate(retry = 1) {
+  try { window._abEst = await api(`/projects/${current}/audiobook-estimate`); }
+  catch {
+    window._abEst = null;
+    if (retry > 0) { setTimeout(() => fetchAbEstimate(retry - 1), 1500); return; }
+  }
+  updateAbEstimate();
+}
+function updateAbEstimate() {
+  const el = $("ab-estimate"), e = window._abEst;
+  if (!el) return;
+  if (!e || !e.chars) { el.textContent = ""; return; }
+  const speed = parseFloat($("ab-speed")?.value || "1");
+  const fmt = (m) => m >= 90 ? `${(m / 60).toFixed(1)} h` : `${Math.round(m)} min`;
+  el.innerHTML = `Estimate: <b>${fmt(e.audio_min / speed)}</b> of narration`
+    + (speed !== 1 ? ` at ${speed}×` : "")
+    + ` · about <b>${fmt(e.synth_min)}</b> to generate on the GPU`
+    + (speed !== 1 ? ` <span title="speed is applied after synthesis">(speed doesn't change generation time)</span>` : "");
+}
+
 async function uploadVoice() {
   const input = $("voice-file");
   if (!input.files.length) return;
+  const name = ($("vrec-name")?.value || "").trim()
+    || prompt("Name this voice (it goes in the shared library):") || "";
+  if (!name.trim()) { input.value = ""; return; }
   const fd = new FormData();
   fd.append("sample", input.files[0]);
   try {
-    const r = await fetch(`/api/projects/${current}/voice-sample`, {method: "POST", body: fd});
+    const r = await fetch(`/api/voices?voice_name=${encodeURIComponent(name)}`,
+                          {method: "POST", body: fd});
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
   } catch (e) { alert("voice upload failed: " + e.message); return; }
+  closeVoiceRecorder();
   openProject(current, "output");
 }
 
-async function removeVoice() {
-  try { await api(`/projects/${current}/voice-sample`, {method: "DELETE"}); }
+async function deleteVoice() {
+  const sel = $("ab-voice");
+  const v = sel?.value;
+  if (!v) { alert("The built-in narrator can't be deleted — select a cloned voice."); return; }
+  if (!confirm(`Delete the cloned voice “${v}” from the library?\n\n`
+    + `Books already narrated with it keep their audio.`)) return;
+  try { await api(`/voices/${encodeURIComponent(v)}`, {method: "DELETE"}); }
   catch (e) { alert(e.message); return; }
   openProject(current, "output");
 }
@@ -1895,14 +1947,18 @@ async function toggleVoiceRec() {
 }
 async function useVoiceRec() {
   if (!vrec?.blob) return;
+  const name = ($("vrec-name")?.value || "").trim();
+  if (!name) { alert("Give the voice a name first — it goes in the shared library."); return; }
   const fd = new FormData();
   fd.append("sample", vrec.blob, "voice-recording.webm");
   const btn = $("vrec-use");
   btn.disabled = true; btn.textContent = "saving…";
   try {
-    const r = await fetch(`/api/projects/${current}/voice-sample`, {method: "POST", body: fd});
+    const r = await fetch(`/api/voices?voice_name=${encodeURIComponent(name)}`,
+                          {method: "POST", body: fd});
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-  } catch (e) { alert("saving voice failed: " + e.message); btn.disabled = false; return; }
+  } catch (e) { alert("saving voice failed: " + e.message); btn.disabled = false;
+                btn.textContent = "✓ Save to voice library"; return; }
   closeVoiceRecorder();
   openProject(current, "output");
 }

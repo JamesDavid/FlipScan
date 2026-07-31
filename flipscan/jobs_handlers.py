@@ -129,16 +129,39 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         return {"id": entry["id"]}
 
     def audiobook(project, params, log, should_cancel):
+        import re
+        import time
         from .audiobook import build_audiobook
         from .outputs import record_output
         from .stages.assemble import run as assemble_run
         ws = ws_for(project)
         cfg = load_config(ws.root)
+        # voice: a name from the shared library (root/voices/<name>.wav) or
+        # empty for the engine's built-in narrator
+        vname = (params.get("voice") or "").strip()
+        voice = ""
+        if vname:
+            vpath = root / "voices" / f"{vname}.wav"
+            if not vpath.exists():
+                raise FileNotFoundError(f"voice {vname!r} is not in the library")
+            voice = str(vpath)
         # narrate from a book.md that reflects the current pages (same
         # regenerate-before-packaging rule as the build endpoint)
         assemble_run(ws, cfg, log=lambda m: None)
-        out = ws.dir("out") / f"{ws.root.name}.m4b"
-        build_audiobook(ws, cfg, out, log=log, should_cancel=should_cancel)
+        # hours of synthesis must never overwrite an earlier run: the filename
+        # carries the voice, the speed, and the generation time
+        try:
+            speed = float(params.get("speed") or 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
+        vslug = re.sub(r"[^A-Za-z0-9_-]+", "-", vname) if vname else "builtin"
+        stamp = time.strftime("%Y%m%d-%H%M")
+        sslug = f"--{speed:g}x" if speed != 1.0 else ""
+        out = ws.dir("out") / f"{ws.root.name}--{vslug}{sslug}--{stamp}.m4b"
+        log(f"voice: {vname or 'built-in narrator'}"
+            + (f", {speed:g}x speed" if speed != 1.0 else "") + f" -> {out.name}")
+        build_audiobook(ws, cfg, out, voice=voice, speed=speed, log=log,
+                        should_cancel=should_cancel)
         # stamp what it was built from, so the output tab's stale/current badge
         # is honest (without this the m4b reads "stale" forever)
         record_output(ws, out.name)
