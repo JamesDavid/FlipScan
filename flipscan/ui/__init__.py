@@ -23,8 +23,8 @@ _TERMINAL = {DONE, ERROR, CANCELED}
 
 def _latex_tools_available() -> bool:
     """Whether the optional high-quality PDF (pandoc + xelatex) can be built."""
-    import shutil
-    return bool(shutil.which("pandoc") and shutil.which("xelatex"))
+    from ..build_pdf_latex import latex_tools_available
+    return latex_tools_available()
 
 
 def _tts_available() -> bool:

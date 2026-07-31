@@ -11,6 +11,7 @@ ideas through pandoc's default template + a small header include.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,7 +23,13 @@ from .workspace import Workspace
 # optical margins, block paragraphs, no widows/orphans, looser tolerance for a
 # narrow column (all adapted from reCompose's rm2.latex).
 _EINK_HEADER = r"""
-\usepackage[protrusion=true]{microtype}
+% newer pandoc templates already load microtype — loading it again with
+% options is an "option clash", so configure it instead of re-loading it
+\ifdefined\microtypesetup
+  \microtypesetup{protrusion=true}
+\else
+  \usepackage[protrusion=true]{microtype}
+\fi
 \usepackage{parskip}
 \clubpenalty=10000
 \widowpenalty=10000
@@ -32,13 +39,39 @@ _EINK_HEADER = r"""
 """
 
 
+def _find_tool(tool: str) -> str | None:
+    """Locate pandoc/xelatex: env override, PATH, then the standard Windows
+    per-user install dirs — a server started before the install won't have the
+    updated PATH, so a known-location fallback keeps the tools usable without a
+    shell restart (same pattern as ffmpeg discovery)."""
+    env = os.environ.get(f"FLIPSCAN_{tool.upper()}")
+    if env:
+        return env
+    found = shutil.which(tool)
+    if found:
+        return found
+    localapp = os.environ.get("LOCALAPPDATA")
+    if localapp:
+        for cand in (
+            Path(localapp) / "Pandoc" / f"{tool}.exe",
+            Path(localapp) / "Programs" / "MiKTeX" / "miktex" / "bin" / "x64"
+            / f"{tool}.exe",
+            Path(localapp) / "Microsoft" / "WinGet" / "Links" / f"{tool}.exe",
+        ):
+            if cand.exists():
+                return str(cand)
+    return None
+
+
 def latex_tools_available() -> bool:
-    return bool(shutil.which("pandoc") and shutil.which("xelatex"))
+    return bool(_find_tool("pandoc") and _find_tool("xelatex"))
 
 
-def _require(tool: str, hint: str) -> None:
-    if not shutil.which(tool):
+def _require(tool: str, hint: str) -> str:
+    path = _find_tool(tool)
+    if not path:
         raise RuntimeError(f"{tool} not found — {hint}")
+    return path
 
 
 def build_pdf_latex(ws: Workspace, out_path: Path, title: str | None = None,
@@ -47,10 +80,10 @@ def build_pdf_latex(ws: Workspace, out_path: Path, title: str | None = None,
     """Render work/book.md to a PDF via pandoc + xelatex. Raises RuntimeError
     (with an install hint) if the tools are missing, or with the tail of the
     LaTeX log if the compile fails."""
-    _require("pandoc", "install pandoc (https://pandoc.org/installing.html)")
-    _require("xelatex", "install a TeX distribution with XeLaTeX — "
-                        "texlive-xetex + texlive-fonts-recommended on Debian/Ubuntu, "
-                        "or MiKTeX (Windows) / MacTeX (macOS)")
+    pandoc = _require("pandoc", "install pandoc (https://pandoc.org/installing.html)")
+    xelatex = _require("xelatex", "install a TeX distribution with XeLaTeX — "
+                       "texlive-xetex + texlive-fonts-recommended on Debian/Ubuntu, "
+                       "or MiKTeX (Windows) / MacTeX (macOS)")
 
     book_md = ws.work_file("book.md")
     if not book_md.exists():
@@ -73,8 +106,8 @@ def build_pdf_latex(ws: Workspace, out_path: Path, title: str | None = None,
 
     # run with cwd=ws.root so the figures/... image paths in book.md resolve
     args = [
-        "pandoc", "work/book.md", "-o", str(out_path.resolve()),
-        "--pdf-engine=xelatex",
+        pandoc, "work/book.md", "-o", str(out_path.resolve()),
+        f"--pdf-engine={xelatex}",
         "--from", "markdown+tex_math_dollars",
         "-V", "documentclass=article",
         "-V", "fontsize=11pt",
