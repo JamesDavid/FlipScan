@@ -2105,6 +2105,24 @@ def create_app(root: Path) -> FastAPI:
                                     + (" (retry failed)" if only_failed else ""))
         return {"ok": True, "job_id": job_id}
 
+    @app.post("/api/projects/{name}/audiobook-cast/generate-voice")
+    def generate_cast_voice(name: str, character: str):
+        """Mint a voice for a character from their description (Parler-TTS),
+        add it to the shared library, and cast them with it. Runs on the GPU
+        lane; audition it with ▶ afterwards."""
+        import importlib.util
+        from ..casting import load_cast
+        ws = ws_for(name)
+        if importlib.util.find_spec("parler_tts") is None:
+            raise HTTPException(400, "voice generation needs Parler-TTS — "
+                "run: pip install git+https://github.com/huggingface/parler-tts.git")
+        cast = load_cast(ws)
+        if not cast or character not in (cast.get("characters") or {}):
+            raise HTTPException(404, f"character {character!r} not in the cast")
+        job_id = jobq.enqueue(name, "voice-gen", {"character": character},
+                              label=f"generate voice ({character})")
+        return {"ok": True, "job_id": job_id}
+
     @app.post("/api/projects/{name}/audiobook-cast/assign")
     def assign_cast_voice(name: str, character: str, voice: str = ""):
         """Map a character to a library voice ('' = narrator reads them)."""

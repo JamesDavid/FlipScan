@@ -1941,8 +1941,13 @@ async function fetchCast() {
         <select style="width:auto;margin:0"
           onchange="assignCastVoice('${esc(n)}', this.value)">${opt(ch.voice || "")}</select>
         <button class="secondary" style="padding:.15rem .5rem"
+          title="🪄 generate a voice for this character from their description
+(Parler-TTS creates a matching generic voice — no real person imitated),
+add it to the library, and cast them with it"
+          onclick="generateCastVoice('${esc(n)}', this)">🪄</button>
+        <button class="secondary" style="padding:.15rem .5rem"
           title="hear this character's assigned voice speak one of their actual quotes"
-          onclick="previewVoice(this.previousElementSibling.value || ($('ab-voice')?.value ?? ''), '${esc(n)}', this)">▶</button>
+          onclick="previewVoice(this.parentElement.querySelector('select').value || ($('ab-voice')?.value ?? ''), '${esc(n)}', this)">▶</button>
       </div>`; }).join("")
       : `<div class="meta">no attributed quotes found — this book reads as pure narration</div>`}
   </div>`;
@@ -1970,6 +1975,21 @@ async function previewVoice(voice, character, btn) {
     a.play();
   } catch (e) { alert("preview failed: " + e.message); }
   if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+
+// mint a voice for a character from their description (Parler), auto-cast it
+async function generateCastVoice(character, btn) {
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "⏳"; }
+  try {
+    const { job_id } = await api(`/projects/${current}/audiobook-cast/generate-voice`
+      + `?character=${encodeURIComponent(character)}`, {method: "POST"});
+    await waitForJob(job_id);
+  } catch (e) { alert("voice generation failed: " + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+  // voice list changed too — refresh project (voices) then the cast table
+  try { window._proj = await api(`/projects/${current}`); } catch {}
+  fetchCast();
 }
 
 async function analyzeCast(btn, onlyFailed = false) {

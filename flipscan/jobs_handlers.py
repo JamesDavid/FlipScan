@@ -38,6 +38,7 @@ KIND_LANES = {
     "video-import": "import",
     "audiobook": "tts",
     "tts-preview": "tts",       # shares the GPU lane so it never fights a build
+    "voice-gen": "tts",         # Parler needs the GPU too — same serial lane
 }
 
 
@@ -211,8 +212,28 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
             log("preview: cached")
         return {"file": out.name}
 
+    def voice_gen(project, params, log, should_cancel):
+        import re as _re
+        from .casting import assign_voice, load_cast
+        from .voicegen import build_description, generate_voice_sample
+        ws = ws_for(project)
+        character = (params.get("character") or "").strip()
+        cast = load_cast(ws)
+        ch = (cast or {}).get("characters", {}).get(character)
+        if ch is None:
+            raise FileNotFoundError(f"character {character!r} not in the cast")
+        vname = _re.sub(r"[^A-Za-z0-9 _-]+", "", character).strip() or "generated"
+        out = root / "voices" / f"{vname}.wav"
+        desc = build_description(ch.get("description", ""),
+                                 ch.get("sounds_like", ""))
+        generate_voice_sample(desc, out, log=log)
+        assign_voice(ws, character, vname)   # cast it immediately
+        log(f"voice {vname!r} added to the library and assigned to {character}")
+        return {"voice": vname}
+
     jobq.register("pdf-import", pdf_import)
     jobq.register("video-import", video_import)
     jobq.register("audiobook", audiobook)
     jobq.register("cast-analysis", cast_analysis)
     jobq.register("tts-preview", tts_preview)
+    jobq.register("voice-gen", voice_gen)
