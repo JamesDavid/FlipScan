@@ -1897,7 +1897,8 @@ async function fetchCast() {
   let c;
   try { c = await api(`/projects/${current}/audiobook-cast`); }
   catch { return; }
-  const voices = window._proj?.voices || [];
+  const voices = window._proj?.voices || [];          // shared library
+  const bookVoices = window._proj?.book_voices || []; // 🪄 this book only
   const chk = $("ab-cast");
   const names = Object.keys(c.characters || {});
   if (!c.exists) {
@@ -1909,7 +1910,12 @@ async function fetchCast() {
   }
   if (chk) chk.disabled = !names.some(n => (c.characters[n].voice || "") !== "");
   const opt = (sel) => `<option value="">— narrator reads them —</option>`
-    + voices.map(v => `<option ${sel === v ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
+    + (bookVoices.length ? `<optgroup label="this book (🪄 generated)">`
+        + bookVoices.map(v => `<option ${sel === v ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("")
+        + `</optgroup>` : "")
+    + (voices.length ? `<optgroup label="voice library (all books)">`
+        + voices.map(v => `<option ${sel === v && !bookVoices.includes(v) ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("")
+        + `</optgroup>` : "");
   const failed = c.failed_chapters || [];
   el.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem">
     <div class="row" style="margin-bottom:.3rem">

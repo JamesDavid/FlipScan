@@ -144,9 +144,10 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         vname = (params.get("voice") or "").strip()
         voice = ""
         if vname:
-            vpath = root / "voices" / f"{vname}.wav"
-            if not vpath.exists():
-                raise FileNotFoundError(f"voice {vname!r} is not in the library")
+            from .audiobook import resolve_voice
+            vpath = resolve_voice(ws, root / "voices", vname)
+            if vpath is None:
+                raise FileNotFoundError(f"voice {vname!r} not found")
             voice = str(vpath)
         # narrate from a book.md that reflects the current pages (same
         # regenerate-before-packaging rule as the build endpoint)
@@ -191,19 +192,22 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
 
     def tts_preview(project, params, log, should_cancel):
         import hashlib
-        from .audiobook import synthesize_preview
+        from .audiobook import resolve_voice, synthesize_preview
         ws = ws_for(project)
         cfg = load_config(ws.root)
         vname = (params.get("voice") or "").strip()
-        voice = ""
+        voice, vhash = "", ""
         if vname:
-            vp = root / "voices" / f"{vname}.wav"
-            if not vp.exists():
-                raise FileNotFoundError(f"voice {vname!r} is not in the library")
+            vp = resolve_voice(ws, root / "voices", vname)
+            if vp is None:
+                raise FileNotFoundError(f"voice {vname!r} not found")
             voice = str(vp)
+            vhash = hashlib.sha1(vp.read_bytes()).hexdigest()[:8]
         text = (params.get("text") or "").strip()
         pdir = root / "voices" / "previews"
-        key = hashlib.sha1(f"{vname}|{text}".encode("utf-8")).hexdigest()[:12]
+        # the voice-bytes hash keys the cache, so two books' local voices that
+        # share a character name never collide
+        key = hashlib.sha1(f"{vname}|{vhash}|{text}".encode("utf-8")).hexdigest()[:12]
         out = pdir / f"{vname or 'builtin'}--{key}.wav"
         if not out.exists():
             log(f"preview: {vname or 'built-in narrator'} — synthesizing…")
@@ -223,7 +227,9 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         if ch is None:
             raise FileNotFoundError(f"character {character!r} not in the cast")
         vname = _re.sub(r"[^A-Za-z0-9 _-]+", "", character).strip() or "generated"
-        out = root / "voices" / f"{vname}.wav"
+        # generated character voices are BOOK-scoped — Count Zeppelin belongs
+        # to his book, not every book's voice menu
+        out = ws.root / "voices" / f"{vname}.wav"
         desc = build_description(ch.get("description", ""),
                                  ch.get("sounds_like", ""))
         generate_voice_sample(desc, out, log=log)

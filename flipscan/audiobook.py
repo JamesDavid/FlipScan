@@ -230,6 +230,22 @@ PREVIEW_LINE = ("This is how your audiobook will sound. A clear evening, "
                 "a good chair, and a story worth hearing.")
 
 
+def resolve_voice(ws: Workspace, global_dir: Path | None,
+                  name: str) -> Path | None:
+    """A voice name -> its wav. The book's own voices/ folder wins (🪄-generated
+    character voices are book-scoped), then the shared library (recorded or
+    uploaded voices, usable everywhere)."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    for d in (ws.root / "voices", global_dir):
+        if d is not None:
+            f = d / f"{name}.wav"
+            if f.exists():
+                return f
+    return None
+
+
 def synthesize_preview(cfg: dict, text: str, voice_path: str,
                        out_wav: Path) -> Path:
     """A few seconds of a voice reading `text` — cheap enough to audition
@@ -355,11 +371,9 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
         if cast is None:
             raise RuntimeError("no cast analysis — run Analyze characters first")
         for cname, c in (cast.get("characters") or {}).items():
-            v = (c.get("voice") or "").strip()
-            if v and voices_dir:
-                p = voices_dir / f"{v}.wav"
-                if p.exists():
-                    voice_of[cname] = str(p)
+            p = resolve_voice(ws, voices_dir, c.get("voice") or "")
+            if p is not None:
+                voice_of[cname] = str(p)
         log(f"  cast: {len(voice_of)} character(s) with voices — "
             + (", ".join(f"{n} -> {Path(p).stem}" for n, p in voice_of.items())
                or "none (all narrator)"))

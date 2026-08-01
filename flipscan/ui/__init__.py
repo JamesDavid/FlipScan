@@ -367,6 +367,10 @@ def create_app(root: Path) -> FastAPI:
             "latex_available": _latex_tools_available(),
             "tts_available": _tts_available(),
             "voices": _voice_names(),
+            # 🪄-generated character voices live with THIS book only
+            "book_voices": sorted(f.stem for f in
+                                  (ws.root / "voices").glob("*.wav"))
+                           if (ws.root / "voices").exists() else [],
             "outputs": output_status(ws),
             "contact_sheet": (ws.work_file("contact_sheet.jpg")).exists(),
         }
@@ -2126,10 +2130,11 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/projects/{name}/audiobook-cast/assign")
     def assign_cast_voice(name: str, character: str, voice: str = ""):
         """Map a character to a library voice ('' = narrator reads them)."""
+        from ..audiobook import resolve_voice
         from ..casting import assign_voice
         ws = ws_for(name)
-        if voice and not (root / "voices" / f"{voice}.wav").exists():
-            raise HTTPException(404, f"voice {voice!r} is not in the library")
+        if voice and resolve_voice(ws, root / "voices", voice) is None:
+            raise HTTPException(404, f"voice {voice!r} not found")
         try:
             assign_voice(ws, character, voice)
         except (FileNotFoundError, KeyError) as e:
@@ -2142,12 +2147,12 @@ def create_app(root: Path) -> FastAPI:
         `character` is given — one of that character's actual quotes from the
         cast analysis, spoken in `voice` ('' = built-in narrator). Returns a
         job id; the finished job's result names the preview file."""
-        from ..audiobook import PREVIEW_LINE
+        from ..audiobook import PREVIEW_LINE, resolve_voice
         from ..casting import load_cast
         ws = ws_for(name)
         voice = voice.strip()
-        if voice and not (root / "voices" / f"{voice}.wav").exists():
-            raise HTTPException(404, f"voice {voice!r} is not in the library")
+        if voice and resolve_voice(ws, root / "voices", voice) is None:
+            raise HTTPException(404, f"voice {voice!r} not found")
         text = PREVIEW_LINE
         if character:
             cast = load_cast(ws) or {}
@@ -2197,8 +2202,9 @@ def create_app(root: Path) -> FastAPI:
                    for p in ws.manifest["pages"]):
             raise HTTPException(400, "no transcribed text — run the pipeline first")
         voice = voice.strip()
-        if voice and not (root / "voices" / f"{voice}.wav").exists():
-            raise HTTPException(404, f"voice {voice!r} is not in the library")
+        from ..audiobook import resolve_voice
+        if voice and resolve_voice(ws, root / "voices", voice) is None:
+            raise HTTPException(404, f"voice {voice!r} not found")
         if use_cast:
             from ..casting import load_cast
             if load_cast(ws) is None:
