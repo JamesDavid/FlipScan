@@ -383,14 +383,21 @@ def add_pages_from_epub(ws: Workspace, cfg: dict, epub_path: Path,
         md = re.sub(r"\n{3,}", "\n\n", md).strip()
         if len(re.sub(r"[^A-Za-z0-9]", "", md)) < 20 and "![" not in md:
             continue                     # blank filler documents
-        pid = next_page_id(ws)
-        (pagedir / f"{pid}.md").write_text(md, encoding="utf-8")
-        pages.append({"id": pid, "cluster_frames": [], "canonical": None,
-                      "scores": {}, "status": "ok", "printed_number": None,
-                      "source": "epub", "md": f"pages/{pid}.md",
-                      "confidence": "high", "flags": [],
-                      "transcribed_by": "epub-import"})
-        n_imported += 1
+        # one page PER CHAPTER: split the document at its (possibly promoted)
+        # top-level headings so each chapter is its own editable page and the
+        # Contents tab reflects the book's structure
+        for section in re.split(r"(?=^# )", md, flags=re.M):
+            section = section.strip()
+            if not section:
+                continue
+            pid = next_page_id(ws)
+            (pagedir / f"{pid}.md").write_text(section + "\n", encoding="utf-8")
+            pages.append({"id": pid, "cluster_frames": [], "canonical": None,
+                          "scores": {}, "status": "ok", "printed_number": None,
+                          "source": "epub", "md": f"pages/{pid}.md",
+                          "confidence": "high", "flags": [],
+                          "transcribed_by": "epub-import"})
+            n_imported += 1
     # book metadata, if the project has none yet
     bm = ws.manifest["book"]
     for key, dc in (("title", "title"), ("author", "creator")):
