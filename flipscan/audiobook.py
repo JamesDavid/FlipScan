@@ -188,6 +188,34 @@ class ChatterboxEngine:
                           cfg_weight=self.cfg_weight).squeeze(0)
 
 
+TARGET_LUFS = -20.0   # broadcast-ish speech level all pieces normalize to
+
+
+def _condition_piece(wav, sr: int):
+    """Clean one synthesized piece before concatenation: short edge fades kill
+    the clicks heard at voice-switch seams, and loudness normalization evens
+    out level differences between voices (each reference sample records at its
+    own level, so cast quotes otherwise jump louder/quieter than narration)."""
+    import torch
+    wav = wav.clone()
+    n = int(sr * 0.008)
+    if wav.numel() > 2 * n:
+        ramp = torch.linspace(0.0, 1.0, n)
+        wav[:n] = wav[:n] * ramp
+        wav[-n:] = wav[-n:] * ramp.flip(0)
+    if wav.numel() >= sr // 2:            # meter needs ≥400 ms
+        try:
+            import pyloudnorm
+            loud = pyloudnorm.Meter(sr).integrated_loudness(
+                wav.numpy().astype("float64"))
+            if loud > -70.0:              # not silence
+                gain = 10 ** ((TARGET_LUFS - loud) / 20)
+                wav = wav * min(gain, 8.0)
+        except Exception:
+            pass                          # normalization is a nicety
+    return wav.clamp(-0.98, 0.98)
+
+
 def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
                        log: Callable[[str], None] = print,
                        should_cancel: Callable[[], bool] = lambda: False,
@@ -222,7 +250,9 @@ def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
     gap = lambda s: torch.zeros(int(engine.sr * s))
     if announce:
         line = announce.strip()
-        pieces.append(engine.speak(line if line[-1:] in ".!?" else line + ".").cpu())
+        pieces.append(_condition_piece(
+            engine.speak(line if line[-1:] in ".!?" else line + ".").cpu(),
+            engine.sr))
         pieces.append(gap(INTRO_GAP_S))
     last_par = None
     for n, (voice, pi, chunk) in enumerate(chunks):
@@ -231,7 +261,8 @@ def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
             raise JobCanceled()
         if pieces:
             pieces.append(gap(PARA_GAP_S if pi != last_par else CHUNK_GAP_S))
-        pieces.append(engine.speak(chunk, voice=voice or None).cpu())
+        pieces.append(_condition_piece(
+            engine.speak(chunk, voice=voice or None).cpu(), engine.sr))
         last_par = pi
         if (n + 1) % 10 == 0 or n + 1 == len(chunks):
             log(f"    {n + 1}/{len(chunks)} chunks")
@@ -272,7 +303,8 @@ def synthesize_preview(cfg: dict, text: str, voice_path: str,
     text = (text or PREVIEW_LINE).strip()[:300]
     pieces = []
     for chunk in chunk_paragraph(text):
-        pieces.append(engine.speak(chunk, voice=voice_path or None).cpu())
+        pieces.append(_condition_piece(
+            engine.speak(chunk, voice=voice_path or None).cpu(), engine.sr))
         pieces.append(torch.zeros(int(engine.sr * CHUNK_GAP_S)))
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     torchaudio.save(str(out_wav), torch.cat(pieces).unsqueeze(0), engine.sr,
@@ -362,7 +394,7 @@ def estimate(ws: Workspace) -> dict:
 def build_audiobook(ws: Workspace, cfg: dict, out: Path,
                     voice: str | None = None, speed: float = 1.0,
                     use_cast: bool = False, voices_dir: Path | None = None,
-                    chapters: list[int] | None = None,
+                    chapters: list[int] | None = None, head_chars: int = 0,
                     log: Callable[[str], None] = print,
                     should_cancel: Callable[[], bool] = lambda: False) -> Path:
     """`voice` is a path to a reference sample from the voice library (cloned
@@ -409,13 +441,26 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
     for i, (title, text) in enumerate(chs):
         if chapters is not None and i not in chapters:
             continue
+        head = ""
+        if head_chars > 0:
+            # quick audition: only the chapter's opening, cut at a paragraph
+            # boundary; cached under its own slot so the full chapter's audio
+            # is never clobbered
+            parts, total = [], 0
+            for par in text.split("\n\n"):
+                parts.append(par)
+                total += len(par)
+                if total >= head_chars:
+                    break
+            text = "\n\n".join(parts)
+            head = "-head"
         segments = None
         if voice_of:
             from .casting import locate_quotes, segments_for
             segments = segments_for(
                 text, locate_quotes(text, chapter_quotes(i, title)), voice_of)
-        wav = adir / f"ch{i:03d}.wav"
-        sig = adir / f"ch{i:03d}.json"
+        wav = adir / f"ch{i:03d}{head}.wav"
+        sig = adir / f"ch{i:03d}{head}.json"
         # cache key: chapter text + announcement + the voice/params behind it
         # + the resolved cast segmentation. A changed voice sample re-keys every
         # chapter (hash the sample bytes, not the path).
