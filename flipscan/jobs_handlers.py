@@ -214,8 +214,10 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
                         chapters=chapters, head_chars=head_chars,
                         log=log, should_cancel=should_cancel)
         # stamp what it was built from, so the output tab's stale/current badge
-        # is honest (without this the m4b reads "stale" forever)
-        record_output(ws, out.name)
+        # is honest. CRITICAL: re-open the workspace — this job may have run for
+        # HOURS, and saving the manifest we loaded at start would clobber every
+        # edit made in the meantime (it silently reverted a page restructure).
+        record_output(Workspace.open(ws.root), out.name)
         return {"file": out.name}
 
     jobq.register("pipeline", pipeline)

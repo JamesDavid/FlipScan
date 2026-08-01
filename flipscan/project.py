@@ -318,15 +318,29 @@ def add_pages_from_epub(ws: Workspace, cfg: dict, epub_path: Path,
     figdir.mkdir(exist_ok=True)
     pagedir = ws.dir("pages")
 
-    # ---- images: extract once, map their epub hrefs -> figures/<name>
-    img_map: dict[str, str] = {}
+    # ---- images: keep bytes in memory; each page's images are written under
+    # the standard figures/<page>_<letter>.png convention when the page is
+    # emitted, so the figures tab (thumbnails, captions, swap) works on them
+    img_bytes: dict[str, bytes] = {}
     for item in book.get_items():
         if item.get_type() not in (ITEM_IMAGE, ITEM_COVER):
             continue
-        base = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(item.get_name()).name)
-        dest = figdir / f"epub_{base}"
-        dest.write_bytes(item.get_content())
-        img_map[Path(item.get_name()).name] = f"figures/{dest.name}"
+        img_bytes[Path(item.get_name()).name] = item.get_content()
+
+    def _write_fig(name: str, pid: str, idx: int) -> str | None:
+        """Convert an epub image to figures/<pid>_<letter>.png; None if the
+        image is missing/undecodable or the page ran out of letters."""
+        if idx >= 26 or name not in img_bytes:
+            return None
+        import cv2
+        import numpy as np
+        arr = cv2.imdecode(np.frombuffer(img_bytes[name], np.uint8),
+                           cv2.IMREAD_COLOR)
+        if arr is None:
+            return None
+        rel = f"figures/{pid}_{chr(97 + idx)}.png"
+        cv2.imwrite(str(ws.root / rel), arr)
+        return rel
 
     # ---- cover page (pinned to the front, used by EPUB/PDF/m4b art)
     cover_item = next((i for i in book.get_items()
@@ -375,11 +389,6 @@ def add_pages_from_epub(ws: Workspace, cfg: dict, epub_path: Path,
         h2s = len(re.findall(r"^## ", md, re.M))
         if h1s <= 1 and h2s >= 3:
             md = re.sub(r"^## ", "# ", md, flags=re.M)
-        # rewrite image refs to the extracted figures
-        def _img(m):
-            name = Path(m.group(2)).name
-            return f"![{m.group(1)}]({img_map.get(name, m.group(2))})"
-        md = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _img, md)
         md = re.sub(r"\n{3,}", "\n\n", md).strip()
         if len(re.sub(r"[^A-Za-z0-9]", "", md)) < 20 and "![" not in md:
             continue                     # blank filler documents
@@ -391,12 +400,34 @@ def add_pages_from_epub(ws: Workspace, cfg: dict, epub_path: Path,
             if not section:
                 continue
             pid = next_page_id(ws)
+            # this page's images become first-class figures (standard naming,
+            # captioned from alt text, listed on the figures tab)
+            figs: list[str] = []
+            regions: list[dict] = []
+
+            def _img(m):
+                rel = _write_fig(Path(m.group(2)).name, pid, len(figs))
+                if rel is None:
+                    return ""            # drop refs to missing images
+                figs.append(rel)
+                # own_image: the figure IS its own source image (there's no
+                # page photo), so the crop tool trims the image itself and
+                # nothing downstream asks for a page-frame crop
+                regions.append({"type": "figure", "bbox_norm": [0, 0, 1, 1],
+                                "caption": m.group(1).strip(),
+                                "own_image": True, "user_crop": True})
+                return f"![{m.group(1)}]({rel})"
+            section = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _img, section)
             (pagedir / f"{pid}.md").write_text(section + "\n", encoding="utf-8")
-            pages.append({"id": pid, "cluster_frames": [], "canonical": None,
-                          "scores": {}, "status": "ok", "printed_number": None,
-                          "source": "epub", "md": f"pages/{pid}.md",
-                          "confidence": "high", "flags": [],
-                          "transcribed_by": "epub-import"})
+            page = {"id": pid, "cluster_frames": [], "canonical": None,
+                    "scores": {}, "status": "ok", "printed_number": None,
+                    "source": "epub", "md": f"pages/{pid}.md",
+                    "confidence": "high", "flags": [],
+                    "transcribed_by": "epub-import"}
+            if figs:
+                page["figures"] = figs
+                page["regions"] = regions
+            pages.append(page)
             n_imported += 1
     # book metadata, if the project has none yet
     bm = ws.manifest["book"]

@@ -191,13 +191,52 @@ class ChatterboxEngine:
 TARGET_LUFS = -20.0   # broadcast-ish speech level all pieces normalize to
 
 
+def _trim_edge_babble(wav, sr: int):
+    """Chatterbox sometimes hallucinates a spurious syllable ("meh", "ammm")
+    detached from the real speech at a generation's edge — audible exactly at
+    voice switches. Find voiced islands; a tiny island at either edge that is
+    separated from the main speech by a clear silence gap is babble — drop it.
+    Also trims plain leading/trailing silence."""
+    frame = int(sr * 0.02)
+    n = wav.numel() // frame
+    if n < 8:
+        return wav
+    e = wav[:n * frame].reshape(n, frame).pow(2).mean(1).sqrt()
+    thr = float(e.max()) * 0.06
+    voiced = (e > thr).tolist()
+    islands, s = [], None
+    for i, v in enumerate(voiced):
+        if v and s is None:
+            s = i
+        elif not v and s is not None:
+            islands.append((s, i))
+            s = None
+    if s is not None:
+        islands.append((s, n))
+    if not islands:
+        return wav
+    GAP, BLIP = int(0.30 / 0.02), int(0.60 / 0.02)   # 300 ms gap, 600 ms blip
+    while len(islands) >= 2 and \
+            (islands[0][1] - islands[0][0]) < BLIP and \
+            (islands[1][0] - islands[0][1]) >= GAP:
+        islands.pop(0)
+    while len(islands) >= 2 and \
+            (islands[-1][1] - islands[-1][0]) < BLIP and \
+            (islands[-1][0] - islands[-2][1]) >= GAP:
+        islands.pop()
+    pad = int(sr * 0.06)
+    a = max(0, islands[0][0] * frame - pad)
+    b = min(wav.numel(), islands[-1][1] * frame + pad)
+    return wav[a:b]
+
+
 def _condition_piece(wav, sr: int):
     """Clean one synthesized piece before concatenation: short edge fades kill
     the clicks heard at voice-switch seams, and loudness normalization evens
     out level differences between voices (each reference sample records at its
     own level, so cast quotes otherwise jump louder/quieter than narration)."""
     import torch
-    wav = wav.clone()
+    wav = _trim_edge_babble(wav.clone(), sr)
     n = int(sr * 0.008)
     if wav.numel() > 2 * n:
         ramp = torch.linspace(0.0, 1.0, n)
