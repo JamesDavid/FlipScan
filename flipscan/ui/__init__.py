@@ -2225,10 +2225,16 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(409, "an audiobook build is already running")
         speed = max(0.5, min(3.0, speed))
         chapters = ",".join(x for x in chapters.split(",") if x.strip().isdigit())
+        sample_note = ""
+        if chapters:
+            from ..casting import load_cast
+            rows = (load_cast(ws) or {}).get("chapters") or []
+            titles = [rows[int(x)]["title"] for x in chapters.split(",")
+                      if int(x) < len(rows)]
+            sample_note = f", sample: {', '.join(titles) or 'ch ' + chapters}"
         label = f"audiobook ({voice or 'built-in voice'}" \
                 + (f", {speed:g}x" if speed != 1.0 else "") \
-                + (", cast" if use_cast else "") \
-                + (f", sample ch {chapters}" if chapters else "") + ")"
+                + (", cast" if use_cast else "") + sample_note + ")"
         job_id = jobq.enqueue(name, "audiobook",
                               {"voice": voice, "speed": speed,
                                "use_cast": use_cast, "chapters": chapters},

@@ -165,8 +165,17 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         stamp = time.strftime("%Y%m%d-%H%M")
         sslug = f"--{speed:g}x" if speed != 1.0 else ""
         cslug = "--cast" if use_cast else ""
-        chslug = ("--sample-ch" + "-".join(str(c) for c in chapters)
-                  if chapters else "")
+        chslug = ""
+        if chapters:
+            # name the sample after the chapter's TITLE — the internal index
+            # ("ch9") means nothing to a listener whose file opens with
+            # "Chapter Five"
+            from .audiobook import narration_chapters
+            titles = [t for i, (t, _) in enumerate(narration_chapters(ws))
+                      if i in chapters]
+            tslug = "-".join(re.sub(r"[^A-Za-z0-9]+", "-", t).strip("-")[:24]
+                             for t in titles) or "chapters"
+            chslug = f"--sample-{tslug}"
         out = (ws.dir("out")
                / f"{ws.root.name}--{vslug}{sslug}{cslug}{chslug}--{stamp}.m4b")
         log(f"voice: {vname or 'built-in narrator'}"

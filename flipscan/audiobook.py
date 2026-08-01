@@ -127,15 +127,18 @@ def narration_chapters(ws: Workspace) -> list[tuple[str, str]]:
 # ---------------- synthesis engine (lazy import; the model is ~2 GB)
 
 _SHARED_MODEL = None    # one Chatterbox instance per process (it's ~3.4 GB VRAM)
+_BUILTIN_CONDS = None   # the model's default-narrator conditioning, as loaded
+_COND_CACHE: dict[str, object] = {}   # voice path -> prepared conditioning
 
 
 def _shared_model():
-    global _SHARED_MODEL
+    global _SHARED_MODEL, _BUILTIN_CONDS
     if _SHARED_MODEL is None:
         import torch
         from chatterbox.tts import ChatterboxTTS
         device = "cuda" if torch.cuda.is_available() else "cpu"
         _SHARED_MODEL = ChatterboxTTS.from_pretrained(device=device)
+        _BUILTIN_CONDS = _SHARED_MODEL.conds
     return _SHARED_MODEL
 
 
@@ -163,13 +166,26 @@ class ChatterboxEngine:
 
     def speak(self, text: str, voice: str | None = None):
         """One chunk -> 1-D float tensor. `voice` overrides the engine default
-        for this chunk (full-cast narration switches voices per quote)."""
+        for this chunk (full-cast narration switches voices per quote).
+
+        Chatterbox keeps the LAST prompt's conditioning on the model, so a
+        call without a prompt after a character quote would silently stay in
+        the character's voice — the narrator would never come back. We manage
+        conditioning explicitly: prepare each voice once, cache it, and set
+        the right one before every generate."""
         m = self._load()
-        kwargs = dict(exaggeration=self.exaggeration, cfg_weight=self.cfg_weight)
-        v = voice if voice is not None else self.voice
-        if v:
-            kwargs["audio_prompt_path"] = v
-        return m.generate(text, **kwargs).squeeze(0)
+        v = (voice if voice is not None else self.voice) or ""
+        conds = _COND_CACHE.get(v)
+        if conds is None:
+            if v:
+                m.prepare_conditionals(v, exaggeration=self.exaggeration)
+                conds = m.conds
+            else:
+                conds = _BUILTIN_CONDS
+            _COND_CACHE[v] = conds
+        m.conds = conds
+        return m.generate(text, exaggeration=self.exaggeration,
+                          cfg_weight=self.cfg_weight).squeeze(0)
 
 
 def synthesize_chapter(engine: ChatterboxEngine, text: str, out_wav: Path,
