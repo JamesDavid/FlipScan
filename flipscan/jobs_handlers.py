@@ -181,6 +181,10 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         use_cast = bool(params.get("use_cast"))
         chapters = [int(x) for x in str(params.get("chapters") or "").split(",")
                     if x.strip().isdigit()] or None
+        try:
+            head_chars = int(params.get("head_chars") or 0)
+        except (TypeError, ValueError):
+            head_chars = 0
         vslug = re.sub(r"[^A-Za-z0-9_-]+", "-", vname) if vname else "builtin"
         stamp = time.strftime("%Y%m%d-%H%M")
         sslug = f"--{speed:g}x" if speed != 1.0 else ""
@@ -196,6 +200,8 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
             tslug = "-".join(re.sub(r"[^A-Za-z0-9]+", "-", t).strip("-")[:24]
                              for t in titles) or "chapters"
             chslug = f"--sample-{tslug}"
+            if head_chars:
+                chslug += f"--first{max(1, round(head_chars / 1216))}min"
         out = (ws.dir("out")
                / f"{ws.root.name}--{vslug}{sslug}{cslug}{chslug}--{stamp}.m4b")
         log(f"voice: {vname or 'built-in narrator'}"
@@ -204,7 +210,8 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
             + (f", chapters {chapters}" if chapters else "") + f" -> {out.name}")
         build_audiobook(ws, cfg, out, voice=voice, speed=speed,
                         use_cast=use_cast, voices_dir=root / "voices",
-                        chapters=chapters, log=log, should_cancel=should_cancel)
+                        chapters=chapters, head_chars=head_chars,
+                        log=log, should_cancel=should_cancel)
         # stamp what it was built from, so the output tab's stale/current badge
         # is honest (without this the m4b reads "stale" forever)
         record_output(ws, out.name)
@@ -219,8 +226,12 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         from .casting import analyze_book
         ws = ws_for(project)
         cfg = load_config(ws.root)
+        only_chapters = [int(x) for x in
+                         str(params.get("only_chapters") or "").split(",")
+                         if x.strip().isdigit()] or None
         cast = analyze_book(ws, cfg, log=log, should_cancel=should_cancel,
-                            only_failed=bool(params.get("only_failed")))
+                            only_failed=bool(params.get("only_failed")),
+                            only_chapters=only_chapters)
         return {"characters": len(cast.get("characters") or {}),
                 "quotes": sum(c["quotes"] for c
                               in (cast.get("characters") or {}).values())}
@@ -265,8 +276,9 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         # generated character voices are BOOK-scoped — Count Zeppelin belongs
         # to his book, not every book's voice menu
         out = ws.root / "voices" / f"{vname}.wav"
-        desc = build_description(ch.get("description", ""),
-                                 ch.get("sounds_like", ""))
+        # a user-edited voice prompt is used VERBATIM; else compose one
+        desc = (ch.get("voice_prompt") or "").strip() or build_description(
+            ch.get("description", ""), ch.get("sounds_like", ""))
         generate_voice_sample(desc, out, log=log)
         assign_voice(ws, character, vname)   # cast it immediately
         log(f"voice {vname!r} added to the library and assigned to {character}")

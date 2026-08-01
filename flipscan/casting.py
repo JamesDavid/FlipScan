@@ -62,6 +62,9 @@ Rules:
   spelling, punctuation, capitalization. Do not paraphrase or fix anything.
 - Only direct speech or quoted writing by a person. NOT titles, scare quotes,
   emphasized words, or quoted phrases shorter than 4 words.
+- EPIGRAPHS count: a quotation at a chapter/section opening followed by the
+  originator's name on its own line (or after a dash) is spoken by that person
+  — attribute it to them, not NARRATOR.
 - "speaker": the person who says/wrote it. Use a consistent canonical name for
   the same person throughout. If you are not confident who speaks, use
   "NARRATOR" (those stay in the narrator's voice).
@@ -259,17 +262,40 @@ def assign_voice(ws: Workspace, character: str, voice: str) -> dict:
     return cast
 
 
+def set_voice_prompt(ws: Workspace, character: str, prompt: str) -> dict:
+    """Store a user-edited voice-generator description for a character — used
+    VERBATIM by 🪄 instead of the auto-composed one ('' reverts to auto)."""
+    cast = load_cast(ws)
+    if cast is None:
+        raise FileNotFoundError("no cast analysis yet — run Analyze characters")
+    ch = cast["characters"].get(character)
+    if ch is None:
+        raise KeyError(f"unknown character {character!r}")
+    if prompt.strip():
+        ch["voice_prompt"] = prompt.strip()
+    else:
+        ch.pop("voice_prompt", None)
+    save_cast(ws, cast)
+    return cast
+
+
 # ---------------- the analysis job
 
-def _aggregate(chapters: list[dict], prev_voices: dict[str, str]) -> dict:
+def _aggregate(chapters: list[dict], prev_chars: dict[str, dict]) -> dict:
     """Book-wide character map rebuilt from the per-chapter results; voice
-    assignments carried over by name."""
+    assignments and user-edited voice prompts carried over by name."""
+    def fresh(name: str) -> dict:
+        old = prev_chars.get(name) or {}
+        entry = {"description": "", "sounds_like": "", "quotes": 0,
+                 "samples": [], "voice": old.get("voice", "")}
+        if old.get("voice_prompt"):
+            entry["voice_prompt"] = old["voice_prompt"]
+        return entry
+
     characters: dict[str, dict] = {}
     for row in chapters:
         for c in row.get("characters") or []:
-            entry = characters.setdefault(c["name"], {
-                "description": "", "sounds_like": "", "quotes": 0,
-                "samples": [], "voice": prev_voices.get(c["name"], "")})
+            entry = characters.setdefault(c["name"], fresh(c["name"]))
             if not entry["description"] and c.get("description"):
                 entry["description"] = c["description"]
             if not entry["sounds_like"] and c.get("sounds_like"):
@@ -277,9 +303,7 @@ def _aggregate(chapters: list[dict], prev_voices: dict[str, str]) -> dict:
         for q in row.get("quotes") or []:
             if q["speaker"] == "NARRATOR":
                 continue
-            entry = characters.setdefault(q["speaker"], {
-                "description": "", "sounds_like": "", "quotes": 0,
-                "samples": [], "voice": prev_voices.get(q["speaker"], "")})
+            entry = characters.setdefault(q["speaker"], fresh(q["speaker"]))
             entry["quotes"] += 1
             if len(entry["samples"]) < SAMPLES_PER_CHARACTER:
                 entry["samples"].append(q["q"][:160])
@@ -291,17 +315,18 @@ def analyze_book(ws: Workspace, cfg: dict,
                  log: Callable[[str], None] = print,
                  should_cancel: Callable[[], bool] = lambda: False,
                  call_llm: Callable[[dict, str], str] | None = None,
-                 only_failed: bool = False) -> dict:
+                 only_failed: bool = False,
+                 only_chapters: list[int] | None = None) -> dict:
     """One LLM pass per chapter; aggregates a book-wide cast. Existing voice
     assignments survive re-analysis (matched by character name). A chapter
     whose analysis fails is recorded with its error (and stays narrator-only)
-    so the UI can offer a retry; only_failed re-analyzes just those chapters
-    and keeps every successful chapter's result."""
+    so the UI can offer a retry; only_failed re-analyzes just those chapters,
+    only_chapters re-analyzes just the given indices — both keep every other
+    chapter's existing result."""
     from .audiobook import narration_chapters
     call = call_llm or _call_llm
     prev = load_cast(ws) or {}
-    prev_voices = {n: c.get("voice", "")
-                   for n, c in (prev.get("characters") or {}).items()}
+    prev_chars = prev.get("characters") or {}
     prev_rows = {r.get("title"): r for r in (prev.get("chapters") or [])}
 
     chapters = []
@@ -311,8 +336,13 @@ def analyze_book(ws: Workspace, cfg: dict,
             from .jobs import JobCanceled
             raise JobCanceled()
         old = prev_rows.get(title)
-        if only_failed and old is not None and not old.get("error"):
-            chapters.append(old)      # keep the good result untouched
+        skip = (only_failed and old is not None and not old.get("error")) or \
+               (only_chapters is not None and i not in only_chapters)
+        if skip and old is not None:
+            chapters.append(old)      # keep the existing result untouched
+            continue
+        if skip:
+            chapters.append({"title": title, "quotes": [], "characters": []})
             continue
         parts = _split_for_analysis(text)
         log(f"  [{i + 1}/{len(chs)}] {title[:46]!r}: analyzing"
@@ -361,7 +391,7 @@ def analyze_book(ws: Workspace, cfg: dict,
                          "quotes": [{"q": q["q"], "speaker": q["speaker"]}
                                     for q in located],
                          "characters": parsed["characters"]})
-    characters = _aggregate(chapters, prev_voices)
+    characters = _aggregate(chapters, prev_chars)
     cast = {"analyzed_at": time.time(), "chapters": chapters,
             "characters": characters}
     save_cast(ws, cast)

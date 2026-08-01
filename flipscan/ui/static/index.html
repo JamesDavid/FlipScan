@@ -1997,17 +1997,48 @@ cached and reused by the full build"
         </div>
         <select style="width:auto;margin:0"
           onchange="assignCastVoice('${esc(n)}', this.value)">${opt(ch.voice || "")}</select>
+        <button class="secondary" style="padding:.15rem .5rem${ch.voice_prompt
+            ? ";color:var(--accent)" : ""}"
+          title="edit the exact description 🪄 feeds the voice generator${
+            ch.voice_prompt ? " (currently customized)" : ""}"
+          onclick="editVoicePrompt('${esc(n)}')">✎</button>
         <button class="secondary" style="padding:.15rem .5rem"
           title="🪄 generate a voice for this character from their description
 (Parler-TTS creates a matching generic voice — no real person imitated),
 add it to the library, and cast them with it"
           onclick="generateCastVoice('${esc(n)}', this)">🪄</button>
         <button class="secondary" style="padding:.15rem .5rem"
+          title="record or upload a REAL voice clip for this character (e.g. a
+public-domain speech recording of a historical figure) — it's saved to the
+library and cast to them automatically"
+          onclick="openVoiceRecorder('${esc(n)}')">🎙</button>
+        <button class="secondary" style="padding:.15rem .5rem"
           title="hear this character's assigned voice speak one of their actual quotes"
           onclick="previewVoice(this.parentElement.querySelector('select').value || ($('ab-voice')?.value ?? ''), '${esc(n)}', this)">▶</button>
       </div>`; }).join("")
       : `<div class="meta">no attributed quotes found — this book reads as pure narration</div>`}
   </details>`;
+}
+
+// edit the exact text 🪄 feeds the voice generator for a character
+async function editVoicePrompt(character) {
+  let c;
+  try { c = await api(`/projects/${current}/audiobook-cast`); }
+  catch (e) { alert(e.message); return; }
+  const ch = c.characters?.[character];
+  if (!ch) return;
+  const cur = ch.gen_prompt || "";
+  const next = prompt(
+    `Voice-generator description for ${character} — 🪄 uses this text verbatim.\n`
+    + `Describe age, gender, pitch, pace, tone, accent; mention "very clear audio".\n`
+    + `(Clear the text to revert to the auto-composed description.)`, cur);
+  if (next === null || next === cur) return;
+  try {
+    await api(`/projects/${current}/audiobook-cast/voice-prompt`
+      + `?character=${encodeURIComponent(character)}&prompt=${encodeURIComponent(next)}`,
+      {method: "POST"});
+  } catch (e) { alert(e.message); return; }
+  fetchCast();
 }
 
 // audition a voice: short synthesis through the tts job lane, then play it.
@@ -2026,6 +2057,10 @@ async function previewVoice(voice, character, btn) {
     if (!a) {
       a = document.createElement("audio");
       a.id = "preview-audio";
+      // some mobile browsers give a bare <audio> a default box, which widens
+      // the page and reflows the layout — keep it strictly invisible
+      a.style.display = "none";
+      a.setAttribute("playsinline", "");
       document.body.appendChild(a);
     }
     a.src = `/api/voice-previews/${encodeURIComponent(f)}`;
@@ -2097,6 +2132,7 @@ async function uploadVoice() {
                           {method: "POST", body: fd});
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
   } catch (e) { alert("voice upload failed: " + e.message); return; }
+  await _afterVoiceSaved(name);
   closeVoiceRecorder();
   openProject(current, "output");
 }
@@ -2124,9 +2160,15 @@ async function deleteVoice() {
 // in-browser voice recording for cloning (MediaRecorder; mic access needs
 // localhost or HTTPS — from a phone over the LAN, use the file upload instead)
 let vrec = null;   // {rec, stream, chunks, blob, t0, timer}
-function openVoiceRecorder() {
+let voiceTarget = "";   // cast character to auto-assign the saved voice to
+function openVoiceRecorder(forCharacter = "") {
+  voiceTarget = forCharacter;
   $("voice-modal").style.display = "flex";
+  const nameEl = $("vrec-name");
+  if (forCharacter && nameEl && !nameEl.value) nameEl.value = forCharacter;
   const note = $("vrec-note");
+  if (forCharacter && note)
+    note.textContent = `will be cast to ${forCharacter} automatically`;
   if (!navigator.mediaDevices?.getUserMedia) {
     // plain-http on the LAN: browsers block the mic. The server also listens
     // on https at port+1 — send the user there (one-time cert warning).
@@ -2136,6 +2178,7 @@ function openVoiceRecorder() {
   }
 }
 function closeVoiceRecorder() {
+  voiceTarget = "";
   if (vrec?.rec?.state === "recording") vrec.rec.stop();
   vrec?.stream?.getTracks().forEach(t => t.stop());
   clearInterval(vrec?.timer);
@@ -2178,6 +2221,18 @@ async function toggleVoiceRec() {
     if (s >= 40) vrec.rec.stop();   // the engine only uses the first ~30 s
   }, 250);
 }
+async function _afterVoiceSaved(name) {
+  // opened from a cast row? cast the new voice to that character right away
+  if (voiceTarget) {
+    try {
+      await api(`/projects/${current}/audiobook-cast/assign`
+        + `?character=${encodeURIComponent(voiceTarget)}&voice=${encodeURIComponent(name)}`,
+        {method: "POST"});
+    } catch {}
+    voiceTarget = "";
+  }
+}
+
 async function useVoiceRec() {
   if (!vrec?.blob) return;
   const name = ($("vrec-name")?.value || "").trim();
@@ -2192,6 +2247,7 @@ async function useVoiceRec() {
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
   } catch (e) { alert("saving voice failed: " + e.message); btn.disabled = false;
                 btn.textContent = "✓ Save to voice library"; return; }
+  await _afterVoiceSaved(name);
   closeVoiceRecorder();
   openProject(current, "output");
 }

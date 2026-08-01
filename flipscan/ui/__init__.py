@@ -2125,17 +2125,26 @@ def create_app(root: Path) -> FastAPI:
             stats.append({"idx": i, "title": r.get("title"),
                           "quotes": len(qs), "voiced": len(voiced),
                           "speakers": len({q["speaker"] for q in voiced})})
+        # attach the EFFECTIVE generator prompt so the UI can prefill the editor
+        from ..voicegen import build_description
+        chars = {}
+        for n, ch in (cast.get("characters") or {}).items():
+            chars[n] = {**ch, "gen_prompt": (ch.get("voice_prompt") or "").strip()
+                        or build_description(ch.get("description", ""),
+                                             ch.get("sounds_like", ""))}
         return {"exists": True, "analyzed_at": cast.get("analyzed_at"),
-                "characters": cast.get("characters") or {},
+                "characters": chars,
                 "failed_chapters": [r["title"] for r in
                                     (cast.get("chapters") or [])
                                     if r.get("error")],
                 "chapter_stats": stats}
 
     @app.post("/api/projects/{name}/audiobook-cast/analyze")
-    def analyze_cast_ep(name: str, only_failed: bool = False):
+    def analyze_cast_ep(name: str, only_failed: bool = False,
+                        only_chapters: str = ""):
         """Enqueue the character analysis (one text-LLM pass per chapter).
-        only_failed re-analyzes just the chapters whose last pass errored."""
+        only_failed re-analyzes just the chapters whose last pass errored;
+        only_chapters (csv of indices) re-analyzes just those chapters."""
         ws = ws_for(name)
         if not any(p.get("md") and not p.get("role")
                    and p.get("status") not in ("duplicate", "deleted")
@@ -2144,9 +2153,12 @@ def create_app(root: Path) -> FastAPI:
         if jobq.active(name, ("cast-analysis",)) is not None:
             raise HTTPException(409, "a cast analysis is already running")
         job_id = jobq.enqueue(name, "cast-analysis",
-                              {"only_failed": only_failed},
+                              {"only_failed": only_failed,
+                               "only_chapters": only_chapters},
                               label="analyze characters"
-                                    + (" (retry failed)" if only_failed else ""))
+                                    + (" (retry failed)" if only_failed else "")
+                                    + (f" (ch {only_chapters})"
+                                       if only_chapters else ""))
         return {"ok": True, "job_id": job_id}
 
     @app.post("/api/projects/{name}/audiobook-cast/generate-voice")
@@ -2166,6 +2178,18 @@ def create_app(root: Path) -> FastAPI:
         job_id = jobq.enqueue(name, "voice-gen", {"character": character},
                               label=f"generate voice ({character})")
         return {"ok": True, "job_id": job_id}
+
+    @app.post("/api/projects/{name}/audiobook-cast/voice-prompt")
+    def set_cast_voice_prompt(name: str, character: str, prompt: str = ""):
+        """Store a user-edited voice-generator description for a character —
+        🪄 uses it verbatim; empty reverts to the auto-composed one."""
+        from ..casting import set_voice_prompt
+        ws = ws_for(name)
+        try:
+            set_voice_prompt(ws, character, prompt)
+        except (FileNotFoundError, KeyError) as e:
+            raise HTTPException(404, str(e))
+        return {"ok": True}
 
     @app.post("/api/projects/{name}/audiobook-cast/assign")
     def assign_cast_voice(name: str, character: str, voice: str = ""):
@@ -2224,7 +2248,8 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/build-audiobook")
     def build_audiobook_ep(name: str, voice: str = "", speed: float = 1.0,
-                           use_cast: bool = False, chapters: str = ""):
+                           use_cast: bool = False, chapters: str = "",
+                           head_chars: int = 0):
         """Enqueue the audiobook synthesis as a durable job — a full book is
         hours of local TTS, so it runs in the queue (own 'tts' lane), survives
         restarts, and resumes from the per-chapter wav cache. `voice` is a name
@@ -2266,7 +2291,8 @@ def create_app(root: Path) -> FastAPI:
                 + (", cast" if use_cast else "") + sample_note + ")"
         job_id = jobq.enqueue(name, "audiobook",
                               {"voice": voice, "speed": speed,
-                               "use_cast": use_cast, "chapters": chapters},
+                               "use_cast": use_cast, "chapters": chapters,
+                               "head_chars": max(0, head_chars)},
                               label=label)
         return {"ok": True, "job_id": job_id}
 
