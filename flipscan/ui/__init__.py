@@ -367,6 +367,10 @@ def create_app(root: Path) -> FastAPI:
             "latex_available": _latex_tools_available(),
             "tts_available": _tts_available(),
             "voices": _voice_names(),
+            "default_voice": (lambda v: v if v and
+                              (root / "voices" / f"{v}.wav").exists() else "")(
+                (load_config().get("audiobook", {})
+                 .get("default_voice") or "").strip()),
             # 🪄-generated character voices live with THIS book only
             "book_voices": sorted(f.stem for f in
                                   (ws.root / "voices").glob("*.wav"))
@@ -552,8 +556,13 @@ def create_app(root: Path) -> FastAPI:
 
     @app.put("/api/settings")
     def put_settings(s: Settings):
-        current = load_config()["provider"]
-        save_global_config({"provider": {
+        cfg_now = load_config()
+        current = cfg_now["provider"]
+        save_global_config({
+            # save_global_config rewrites the whole file — carry the audiobook
+            # section (default narrator voice etc.) through, or it's wiped
+            "audiobook": cfg_now.get("audiobook", {}),
+            "provider": {
             "name": s.provider,
             "ollama_url": s.ollama_url,
             "ollama_model": s.ollama_model,
@@ -2297,6 +2306,23 @@ def create_app(root: Path) -> FastAPI:
         finally:
             raw.unlink(missing_ok=True)
         return {"ok": True, "name": clean, "voices": _voice_names()}
+
+    @app.post("/api/voices/default")
+    def set_default_voice(voice_name: str = ""):
+        """Set the default narrator: a voice NAME from the shared library, used
+        as the preselected narrator on every book ('' = the built-in voice)."""
+        voice_name = voice_name.strip()
+        if voice_name and not (root / "voices" / f"{voice_name}.wav").exists():
+            raise HTTPException(404, f"voice {voice_name!r} is not in the "
+                                     "shared library (book-scoped voices can't "
+                                     "be the global default)")
+        cfg_now = load_config()
+        save_global_config({
+            "provider": cfg_now["provider"],
+            "audiobook": {**cfg_now.get("audiobook", {}),
+                          "default_voice": voice_name},
+        })
+        return {"ok": True, "default_voice": voice_name}
 
     @app.delete("/api/voices/{voice_name}")
     def delete_voice(voice_name: str):

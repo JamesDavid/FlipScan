@@ -1552,8 +1552,14 @@ chapter list here and in the built EPUB/PDF (no model calls)">↻ Rebuild book f
         <label style="margin:0 0 0 .4rem">voice</label>
         <select id="ab-voice" style="width:auto;margin:0">
           <option value="">Built-in narrator</option>
-          ${(p.voices || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("")}
+          ${(p.voices || []).map(v => `<option value="${esc(v)}"
+             ${v === p.default_voice ? "selected" : ""}>${esc(v)}${
+             v === p.default_voice ? " ★" : ""}</option>`).join("")}
         </select>
+        <button class="secondary" style="padding:.15rem .5rem;font-size:.72rem"
+          title="make the selected voice the default narrator for every book
+(★ marks the current default; select Built-in narrator and click to clear)"
+          onclick="setDefaultVoice(this)">★</button>
         <button class="secondary" style="padding:.15rem .5rem;font-size:.72rem"
           title="delete the selected cloned voice from the library"
           onclick="deleteVoice()">✕</button>
@@ -2092,6 +2098,15 @@ async function uploadVoice() {
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
   } catch (e) { alert("voice upload failed: " + e.message); return; }
   closeVoiceRecorder();
+  openProject(current, "output");
+}
+
+// make the selected library voice the default narrator everywhere
+async function setDefaultVoice(btn) {
+  const v = $("ab-voice")?.value ?? "";
+  try {
+    await api(`/voices/default?voice_name=${encodeURIComponent(v)}`, {method: "POST"});
+  } catch (e) { alert(e.message); return; }
   openProject(current, "output");
 }
 

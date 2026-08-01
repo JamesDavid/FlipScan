@@ -59,6 +59,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "audiobook": {
         "engine": "chatterbox",   # local TTS with zero-shot voice cloning
+        # the narrator used by default: a voice NAME from the shared library
+        # ("" = the engine's built-in voice). Set from the output tab (★).
+        "default_voice": "",
         # path to a 10-30s reference recording; a per-project voice-sample.wav
         # takes precedence. Only clone voices you have the right to use.
         "voice_sample": "",
