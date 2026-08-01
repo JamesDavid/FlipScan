@@ -127,6 +127,7 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
 
     def epub_import(project, params, log, should_cancel):
         from .project import add_pages_from_epub
+        from .stages.assemble import run as assemble_run
         ws = ws_for(project)
         cfg = load_config(ws.root)
         dest = Path(params["path"])
@@ -137,6 +138,9 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
                 dest.unlink(missing_ok=True)
             except OSError:
                 pass
+        # assemble immediately — an imported ebook should be instantly ready
+        # (estimate, proof tab, builds) with no extra step
+        assemble_run(ws, cfg, log=lambda m: None)
         log(f"imported {n} items from {dest.name}")
         return {"pages": n}
 
