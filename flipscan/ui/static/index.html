@@ -1855,14 +1855,15 @@ async function buildFmt(fmt) {
 }
 
 // ---- audiobook: durable synthesis job + shared voice library
-async function buildAudiobook(btn) {
+async function buildAudiobook(btn, chaptersCsv = "") {
   const voice = $("ab-voice")?.value || "";
   const speed = $("ab-speed")?.value || "1";
   const cast = $("ab-cast")?.checked ? "&use_cast=true" : "";
+  const chs = chaptersCsv ? `&chapters=${chaptersCsv}` : "";
   if (btn) { btn.disabled = true; btn.textContent = "queued…"; }
   try {
     const { job_id } = await api(`/projects/${current}/build-audiobook`
-      + `?voice=${encodeURIComponent(voice)}&speed=${speed}${cast}`, {method: "POST"});
+      + `?voice=${encodeURIComponent(voice)}&speed=${speed}${cast}${chs}`, {method: "POST"});
     if (btn) btn.textContent = "🎧 narrating… (watch ⚙ queue)";
     await waitForJob(job_id);
   } catch (e) { alert(e.message); openProject(current, "output"); return; }
@@ -1922,7 +1923,14 @@ async function fetchCast() {
       <b>🎭 Cast</b>
       <span class="meta" style="margin:0">${names.length} speaking character${names.length === 1 ? "" : "s"}
         — assign voices, then tick “cast voices” above before building</span>
-      <button class="secondary" style="margin-left:auto;padding:.15rem .6rem;font-size:.75rem"
+      <span style="margin-left:auto"></span>
+      ${(c.chapter_stats || []).some(s => s.voiced) ? `<button
+        style="padding:.15rem .6rem;font-size:.75rem"
+        title="build just the chapter with the most cast-voiced quotes, to hear
+the full-cast treatment before committing to the whole book — its audio is
+cached and reused by the full build"
+        onclick="sampleCastChapter(this)">🎧 Sample chapter</button>` : ""}
+      <button class="secondary" style="padding:.15rem .6rem;font-size:.75rem"
         onclick="analyzeCast(this)">↻ Re-analyze</button>
     </div>
     ${failed.length ? `<div class="row" style="background:#fef2f2;border:1px solid #dc2626;
@@ -1981,6 +1989,22 @@ async function previewVoice(voice, character, btn) {
     a.play();
   } catch (e) { alert("preview failed: " + e.message); }
   if (btn) { btn.disabled = false; btn.textContent = orig; }
+}
+
+// build ONE chapter — the most cast-voiced — as a full-cast audition
+async function sampleCastChapter(btn) {
+  let c;
+  try { c = await api(`/projects/${current}/audiobook-cast`); }
+  catch (e) { alert(e.message); return; }
+  const best = (c.chapter_stats || []).reduce(
+    (a, s) => (s.voiced > (a?.voiced || 0) ? s : a), null);
+  if (!best) { alert("No cast-voiced quotes yet — assign voices first."); return; }
+  if (!confirm(`Build a full-cast sample of “${best.title}”?\n\n`
+    + `${best.voiced} quotes in ${best.speakers} character voices. Its audio is `
+    + `cached, so the eventual full build reuses it — no wasted GPU time.`)) return;
+  const chk = $("ab-cast");
+  if (chk && !chk.disabled) chk.checked = true;   // a cast sample implies cast
+  buildAudiobook(btn, String(best.idx));
 }
 
 // mint a voice for a character from their description (Parler), auto-cast it

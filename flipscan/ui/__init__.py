@@ -2085,12 +2085,23 @@ def create_app(root: Path) -> FastAPI:
         ws = ws_for(name)
         cast = load_cast(ws)
         if cast is None:
-            return {"exists": False, "characters": {}, "failed_chapters": []}
+            return {"exists": False, "characters": {}, "failed_chapters": [],
+                    "chapter_stats": []}
+        assigned = {n for n, c in (cast.get("characters") or {}).items()
+                    if (c.get("voice") or "").strip()}
+        stats = []
+        for i, r in enumerate(cast.get("chapters") or []):
+            qs = r.get("quotes") or []
+            voiced = [q for q in qs if q["speaker"] in assigned]
+            stats.append({"idx": i, "title": r.get("title"),
+                          "quotes": len(qs), "voiced": len(voiced),
+                          "speakers": len({q["speaker"] for q in voiced})})
         return {"exists": True, "analyzed_at": cast.get("analyzed_at"),
                 "characters": cast.get("characters") or {},
                 "failed_chapters": [r["title"] for r in
                                     (cast.get("chapters") or [])
-                                    if r.get("error")]}
+                                    if r.get("error")],
+                "chapter_stats": stats}
 
     @app.post("/api/projects/{name}/audiobook-cast/analyze")
     def analyze_cast_ep(name: str, only_failed: bool = False):
@@ -2184,7 +2195,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/projects/{name}/build-audiobook")
     def build_audiobook_ep(name: str, voice: str = "", speed: float = 1.0,
-                           use_cast: bool = False):
+                           use_cast: bool = False, chapters: str = ""):
         """Enqueue the audiobook synthesis as a durable job — a full book is
         hours of local TTS, so it runs in the queue (own 'tts' lane), survives
         restarts, and resumes from the per-chapter wav cache. `voice` is a name
@@ -2213,12 +2224,15 @@ def create_app(root: Path) -> FastAPI:
         if jobq.active(name, ("audiobook",)) is not None:
             raise HTTPException(409, "an audiobook build is already running")
         speed = max(0.5, min(3.0, speed))
+        chapters = ",".join(x for x in chapters.split(",") if x.strip().isdigit())
         label = f"audiobook ({voice or 'built-in voice'}" \
                 + (f", {speed:g}x" if speed != 1.0 else "") \
-                + (", cast" if use_cast else "") + ")"
+                + (", cast" if use_cast else "") \
+                + (f", sample ch {chapters}" if chapters else "") + ")"
         job_id = jobq.enqueue(name, "audiobook",
                               {"voice": voice, "speed": speed,
-                               "use_cast": use_cast}, label=label)
+                               "use_cast": use_cast, "chapters": chapters},
+                              label=label)
         return {"ok": True, "job_id": job_id}
 
     # ---------------- narration voice library (shared across all books)

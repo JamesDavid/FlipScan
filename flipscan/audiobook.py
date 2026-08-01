@@ -346,13 +346,17 @@ def estimate(ws: Workspace) -> dict:
 def build_audiobook(ws: Workspace, cfg: dict, out: Path,
                     voice: str | None = None, speed: float = 1.0,
                     use_cast: bool = False, voices_dir: Path | None = None,
+                    chapters: list[int] | None = None,
                     log: Callable[[str], None] = print,
                     should_cancel: Callable[[], bool] = lambda: False) -> Path:
     """`voice` is a path to a reference sample from the voice library (cloned
     narration), or None/'' for the engine's built-in narrator; a configured
     audiobook.voice_sample is the fallback when no explicit choice is made.
     With `use_cast`, quotes attributed by the cast analysis are spoken in each
-    character's assigned library voice (voices_dir resolves the names)."""
+    character's assigned library voice (voices_dir resolves the names).
+    `chapters` limits the build to those chapter indices (a sample build) —
+    their wavs land in the same cache, so the sample's synthesis is banked
+    toward the eventual full build."""
     chs = narration_chapters(ws)
     if not chs:
         raise RuntimeError("no narratable text — run the pipeline first")
@@ -387,6 +391,8 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
 
     wavs: list[tuple[str, Path]] = []
     for i, (title, text) in enumerate(chs):
+        if chapters is not None and i not in chapters:
+            continue
         segments = None
         if voice_of:
             from .casting import locate_quotes, segments_for
