@@ -40,6 +40,7 @@ KIND_LANES = {
     "audiobook": "tts",
     "tts-preview": "tts",       # shares the GPU lane so it never fights a build
     "voice-gen": "tts",         # Parler needs the GPU too — same serial lane
+    "voice-gen-all": "tts",
 }
 
 
@@ -284,6 +285,35 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
         log(f"voice {vname!r} added to the library and assigned to {character}")
         return {"voice": vname}
 
+    def voice_gen_all(project, params, log, should_cancel):
+        import re as _re
+        from .casting import assign_voice, load_cast
+        from .voicegen import build_description, generate_voice_samples
+        ws = ws_for(project)
+        cast = load_cast(ws)
+        chars = (cast or {}).get("characters") or {}
+        todo = []
+        for cname, ch in sorted(chars.items(), key=lambda x: -x[1]["quotes"]):
+            if (ch.get("voice") or "").strip():
+                continue               # already cast — leave the user's choice
+            vname = _re.sub(r"[^A-Za-z0-9 _-]+", "", cname).strip()
+            if not vname:
+                continue
+            desc = (ch.get("voice_prompt") or "").strip() or build_description(
+                ch.get("description", ""), ch.get("sounds_like", ""))
+            todo.append((cname, vname, desc,
+                         ws.root / "voices" / f"{vname}.wav"))
+        if not todo:
+            log("every character already has a voice — nothing to generate")
+            return {"generated": 0}
+        log(f"generating {len(todo)} voices (one Parler load for the batch)…")
+        made = generate_voice_samples([(d, out) for _, _, d, out in todo],
+                                      log=log, should_cancel=should_cancel)
+        for (cname, vname, _, out) in todo[:len(made)]:
+            assign_voice(ws, cname, vname)
+        log(f"{len(made)} voices generated and cast")
+        return {"generated": len(made)}
+
     jobq.register("pdf-import", pdf_import)
     jobq.register("video-import", video_import)
     jobq.register("epub-import", epub_import)
@@ -291,3 +321,4 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
     jobq.register("cast-analysis", cast_analysis)
     jobq.register("tts-preview", tts_preview)
     jobq.register("voice-gen", voice_gen)
+    jobq.register("voice-gen-all", voice_gen_all)

@@ -2179,6 +2179,25 @@ def create_app(root: Path) -> FastAPI:
                               label=f"generate voice ({character})")
         return {"ok": True, "job_id": job_id}
 
+    @app.post("/api/projects/{name}/audiobook-cast/generate-all-voices")
+    def generate_all_cast_voices(name: str):
+        """Mint voices for every character WITHOUT one (existing assignments
+        untouched), in a single job that loads Parler once for the batch."""
+        import importlib.util
+        from ..casting import load_cast
+        ws = ws_for(name)
+        if importlib.util.find_spec("parler_tts") is None:
+            raise HTTPException(400, "voice generation needs Parler-TTS — "
+                "run: pip install git+https://github.com/huggingface/parler-tts.git")
+        cast = load_cast(ws)
+        chars = (cast or {}).get("characters") or {}
+        n = sum(1 for c in chars.values() if not (c.get("voice") or "").strip())
+        if not n:
+            raise HTTPException(400, "every character already has a voice")
+        job_id = jobq.enqueue(name, "voice-gen-all", {},
+                              label=f"generate all voices ({n})")
+        return {"ok": True, "job_id": job_id, "count": n}
+
     @app.post("/api/projects/{name}/audiobook-cast/voice-prompt")
     def set_cast_voice_prompt(name: str, character: str, prompt: str = ""):
         """Store a user-edited voice-generator description for a character —

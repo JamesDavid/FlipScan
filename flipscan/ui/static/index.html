@@ -1967,6 +1967,11 @@ async function fetchCast() {
       <span class="meta" style="margin:0">assign voices, then tick
         “cast voices” above before building</span>
       <span style="margin-left:auto"></span>
+      ${names.length - voicedN > 0 ? `<button
+        style="padding:.15rem .6rem;font-size:.75rem"
+        title="🪄 mint a voice for every character that doesn't have one yet
+(one batch job, existing assignments untouched — roughly a minute per voice)"
+        onclick="generateAllVoices(this)">🪄 Generate all missing (${names.length - voicedN})</button>` : ""}
       ${(c.chapter_stats || []).some(s => s.voiced) ? `<button
         style="padding:.15rem .6rem;font-size:.75rem"
         title="build just the chapter with the most cast-voiced quotes, to hear
@@ -2083,6 +2088,30 @@ async function sampleCastChapter(btn) {
   const chk = $("ab-cast");
   if (chk && !chk.disabled) chk.checked = true;   // a cast sample implies cast
   buildAudiobook(btn, String(best.idx));
+}
+
+// mint voices for EVERY uncast character in one batch job
+async function generateAllVoices(btn) {
+  let c;
+  try { c = await api(`/projects/${current}/audiobook-cast`); }
+  catch (e) { alert(e.message); return; }
+  const missing = Object.entries(c.characters || {})
+    .filter(([, ch]) => !(ch.voice || "").trim());
+  if (!missing.length) { alert("Every character already has a voice."); return; }
+  if (!confirm(`Generate voices for ${missing.length} character(s)?\n\n`
+    + `Roughly a minute per voice on the GPU (one batch job — cancellable in the `
+    + `⚙ queue, finished voices are kept). Characters you've already cast are `
+    + `untouched.`)) return;
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "generating…"; }
+  try {
+    const { job_id } = await api(`/projects/${current}/audiobook-cast/generate-all-voices`,
+                                 {method: "POST"});
+    await waitForJob(job_id);
+  } catch (e) { alert(e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+  try { window._proj = await api(`/projects/${current}`); } catch {}
+  fetchCast();
 }
 
 // mint a voice for a character from their description (Parler), auto-cast it
