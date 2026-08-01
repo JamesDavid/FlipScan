@@ -14,7 +14,7 @@ You give the book a **title** (or look it up) — the folder name is a unique sl
 
 ## Four ways to get pages in
 
-You can mix all three in one project; page order is reconciled from printed page numbers.
+You can mix video, photos, and PDF in one project; page order is reconciled from printed page numbers.
 
 - **Flip-through video** — the fastest for a whole book. **Film it in slow-motion mode** (e.g. 120/240 fps): the extra frames per page turn give FlipScan a sharp, flat frame to pick for every page, which makes the biggest difference to output quality. Thumb through the book (any direction, any subset, as many videos as you like); page turns split each video into page captures, and upside-down videos are auto-detected.
 - **Photos** — for the cover, inside-cover text, or any page a video missed. Deliberate photos are used exactly as framed (no warping/cropping). Orientation is auto-checked per shot.
