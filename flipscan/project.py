@@ -368,6 +368,13 @@ def add_pages_from_epub(ws: Workspace, cfg: dict, epub_path: Path,
         html = item.get_content().decode("utf-8", "ignore")
         html = re.sub(r"<\?xml[^>]*\?>", "", html)   # prolog leaks into text
         md = markdownify(html, heading_style="ATX", strip=["a"])
+        # Single-file ebooks (Project Gutenberg etc.) pack the whole book into
+        # one spine document with chapters as h2 headings — promote them to h1
+        # so the assembler splits real chapters instead of one giant one.
+        h1s = len(re.findall(r"^# ", md, re.M))
+        h2s = len(re.findall(r"^## ", md, re.M))
+        if h1s <= 1 and h2s >= 3:
+            md = re.sub(r"^## ", "# ", md, flags=re.M)
         # rewrite image refs to the extracted figures
         def _img(m):
             name = Path(m.group(2)).name
