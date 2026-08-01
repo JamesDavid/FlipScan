@@ -1945,11 +1945,21 @@ async function fetchCast() {
         + voices.map(v => `<option ${sel === v && !bookVoices.includes(v) ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("")
         + `</optgroup>` : "");
   const failed = c.failed_chapters || [];
-  el.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem">
-    <div class="row" style="margin-bottom:.3rem">
-      <b>🎭 Cast</b>
-      <span class="meta" style="margin:0">${names.length} speaking character${names.length === 1 ? "" : "s"}
-        — assign voices, then tick “cast voices” above before building</span>
+  const voicedN = names.filter(n => (c.characters[n].voice || "") !== "").length;
+  // a 50-row cast buries the Downloads list — collapse it behind a summary
+  // (open state survives the re-renders that voice assignments trigger)
+  el.innerHTML = `<details ${window._castOpen ? "open" : ""}
+      ontoggle="window._castOpen = this.open"
+      style="border:1px solid var(--line);border-radius:8px;padding:.45rem .9rem">
+    <summary style="cursor:pointer;font-weight:600">🎭 Cast
+      <span class="meta" style="font-weight:400">— ${names.length} speaking
+        character${names.length === 1 ? "" : "s"}${voicedN
+          ? `, ${voicedN} with voices` : ""}${failed.length
+          ? ` · <span style="color:#dc2626">⚠ ${failed.length} chapter${
+              failed.length > 1 ? "s" : ""} failed</span>` : ""}</span></summary>
+    <div class="row" style="margin:.5rem 0 .3rem">
+      <span class="meta" style="margin:0">assign voices, then tick
+        “cast voices” above before building</span>
       <span style="margin-left:auto"></span>
       ${(c.chapter_stats || []).some(s => s.voiced) ? `<button
         style="padding:.15rem .6rem;font-size:.75rem"
@@ -1991,7 +2001,7 @@ add it to the library, and cast them with it"
           onclick="previewVoice(this.parentElement.querySelector('select').value || ($('ab-voice')?.value ?? ''), '${esc(n)}', this)">▶</button>
       </div>`; }).join("")
       : `<div class="meta">no attributed quotes found — this book reads as pure narration</div>`}
-  </div>`;
+  </details>`;
 }
 
 // audition a voice: short synthesis through the tts job lane, then play it.
