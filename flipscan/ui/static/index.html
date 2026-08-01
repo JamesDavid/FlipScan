@@ -899,6 +899,12 @@ function renderTab(tab, p) {
                  style="display:none" onchange="addPdfToProject()">
           <button class="secondary" onclick="$('addpdf-file').click()"
                   ${p.running ? "disabled" : ""}>+ Add PDF</button>
+          <input type="file" accept="application/epub+zip,.epub" id="addepub-file"
+                 style="display:none" onchange="addEpubToProject()">
+          <button class="secondary" onclick="$('addepub-file').click()"
+                  title="import an existing EPUB — chapters become editable pages,
+no OCR needed; ready to edit, re-export, or narrate as an audiobook"
+                  ${p.running ? "disabled" : ""}>+ Add ebook (EPUB)</button>
           <span class="meta">film the book, or import a PDF of it — every PDF
             page becomes a page here; run the pipeline after adding</span>
         </div>
@@ -1804,6 +1810,27 @@ async function addVideoToProject() {
     }
   } catch (e) { alert("add video failed: " + e.message); }
   openProject(current, "media");
+}
+
+async function addEpubToProject() {
+  const input = $("addepub-file");
+  if (!input.files.length) return;
+  const btn = input.nextElementSibling;
+  btn.disabled = true;
+  const fd = new FormData();
+  fd.append("ebook", input.files[0]);
+  try {
+    btn.textContent = "uploading…";
+    const up = await uploadXHR(`/api/projects/${current}/epub`, fd,
+                    pct => btn.textContent = pct < 100
+                      ? `uploading ${pct}%` : "importing…");
+    const j = await waitForJob(up.job_id, line => btn.textContent = line.slice(0, 40));
+    const n = j.result && j.result.pages;
+    alert(`${n} chapters imported — the text is already clean, so there's no `
+      + `pipeline to run. Head to the pages tab to edit, or the output tab to `
+      + `re-export or build an audiobook.`);
+  } catch (e) { alert("EPUB import failed: " + e.message); }
+  openProject(current, "pages");
 }
 
 async function addPdfToProject() {

@@ -36,6 +36,7 @@ KIND_LANES = {
     "cast-analysis": "proof",   # text-LLM work, parallel-safe like proofreads
     "pdf-import": "import",
     "video-import": "import",
+    "epub-import": "import",
     "audiobook": "tts",
     "tts-preview": "tts",       # shares the GPU lane so it never fights a build
     "voice-gen": "tts",         # Parler needs the GPU too — same serial lane
@@ -122,6 +123,21 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
             except OSError:
                 pass
         log(f"imported {n} pages from {dest.name}")
+        return {"pages": n}
+
+    def epub_import(project, params, log, should_cancel):
+        from .project import add_pages_from_epub
+        ws = ws_for(project)
+        cfg = load_config(ws.root)
+        dest = Path(params["path"])
+        try:
+            n = add_pages_from_epub(ws, cfg, dest, log)
+        finally:
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:
+                pass
+        log(f"imported {n} items from {dest.name}")
         return {"pages": n}
 
     def video_import(project, params, log, should_cancel):
@@ -254,6 +270,7 @@ def register_handlers(jobq: JobQueue, root: Path) -> None:
 
     jobq.register("pdf-import", pdf_import)
     jobq.register("video-import", video_import)
+    jobq.register("epub-import", epub_import)
     jobq.register("audiobook", audiobook)
     jobq.register("cast-analysis", cast_analysis)
     jobq.register("tts-preview", tts_preview)

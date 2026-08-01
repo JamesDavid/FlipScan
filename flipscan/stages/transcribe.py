@@ -165,7 +165,7 @@ def dedupe_by_printed(pages: list[dict], log=print, mtime_of=None) -> int:
         # PDF pages are unique-by-position; their numbers may repeat across
         # concatenated works, so never merge them by printed number
         if (n is None or p.get("role") or p.get("status") == "deleted"
-                or p.get("source") == "pdf"):
+                or p.get("source") in ("pdf", "epub")):
             continue
         groups.setdefault((n,), []).append(p)
 
@@ -551,12 +551,12 @@ def reconcile(ws: Workspace, pages: list[dict], log=print) -> list[dict]:
     # the book is PDF-sourced, keep the pages exactly as imported.
     body = [p for p in pages if not p.get("role")
             and p.get("status") not in ("deleted",)]
-    if body and all(p.get("source") == "pdf" for p in body):
+    if body and all(p.get("source") in ("pdf", "epub") for p in body):
         ws.manifest["pages"] = pages          # import order = book order
         ws.manifest["missing_pages"] = []     # repeating numbers -> no gap list
         ws.save()
-        log("  PDF book: kept authoritative page order (printed numbers may "
-            "repeat across concatenated works)")
+        log("  PDF/EPUB book: kept authoritative page order (printed numbers "
+            "may repeat across concatenated works)")
         return pages
 
     sanitize_numbers_by_video(pages, log)

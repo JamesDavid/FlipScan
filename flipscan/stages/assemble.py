@@ -61,8 +61,13 @@ def _strip_repeated_lines(page_texts: list[str], threshold: float = 0.15,
         for ln in lines[-2:]:
             lasts[_norm_line(ln)] += 1
     n = max(1, len(page_texts))
-    repeated = ({ln for ln, c in firsts.items() if ln and c / n > threshold}
-                | {ln for ln, c in lasts.items() if ln and c / n > threshold})
+    # the fraction test alone misfires on books with FEW pages (an EPUB import
+    # is one page per chapter: a unique heading on 1 of 3 pages is 33%) — a
+    # genuine running header also repeats in absolute terms
+    repeated = ({ln for ln, c in firsts.items()
+                 if ln and c >= 3 and c / n > threshold}
+                | {ln for ln, c in lasts.items()
+                   if ln and c >= 3 and c / n > threshold})
     # bad crops truncate the running header differently on every page
     # ('BLE DREAMS', 'GIB DREAMS'), so exact counting misses them — an edge
     # line is also junk when it fuzzy-matches a known header / title / author

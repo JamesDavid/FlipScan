@@ -196,7 +196,7 @@ def create_app(root: Path) -> FastAPI:
     # jobs that mutate a project's manifest and must never overlap FOR THE SAME
     # PROJECT — the pipeline and the ingest jobs. (Different projects are fine;
     # the import lane is independent of the main lane.)
-    _EXCLUSIVE_KINDS = ("pipeline", "pdf-import", "video-import")
+    _EXCLUSIVE_KINDS = ("pipeline", "pdf-import", "video-import", "epub-import")
 
     def ws_for(name: str) -> Workspace:
         target = (root / name).resolve()
@@ -644,6 +644,26 @@ def create_app(root: Path) -> FastAPI:
             while chunk := await pdf.read(1 << 22):
                 f.write(chunk)
         job_id = jobq.enqueue(name, "pdf-import", {"path": str(dest)},
+                              label=f"import {dest.name}")
+        return {"ok": True, "job_id": job_id}
+
+    @app.post("/api/projects/{name}/epub")
+    async def add_epub(name: str, ebook: UploadFile):
+        """Upload an existing EPUB and import it as a durable job: chapters
+        become editable text pages, images land in figures/, the cover carries
+        over — the capture/OCR pipeline is skipped entirely, so the book is
+        immediately ready to edit, re-export, or narrate as an audiobook."""
+        ws = ws_for(name)
+        if jobq.active(name, _EXCLUSIVE_KINDS) is not None:
+            raise HTTPException(409, "an import or pipeline run is already in "
+                                     "progress — wait for it to finish")
+        uploads = ws.root / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        dest = uploads / Path(ebook.filename or "book.epub").name
+        with open(dest, "wb") as f:
+            while chunk := await ebook.read(1 << 22):
+                f.write(chunk)
+        job_id = jobq.enqueue(name, "epub-import", {"path": str(dest)},
                               label=f"import {dest.name}")
         return {"ok": True, "job_id": job_id}
 

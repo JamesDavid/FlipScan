@@ -300,6 +300,108 @@ def add_pages_from_pdf(ws: Workspace, cfg: dict, pdf: Path,
     return n
 
 
+def add_pages_from_epub(ws: Workspace, cfg: dict, epub_path: Path,
+                        log: Callable[[str], None] = print) -> int:
+    """Start a book from an existing EPUB: each spine document becomes one
+    text-only 'page' (chapter), images land in figures/, and the cover becomes
+    the cover page. The whole capture/OCR pipeline is skipped — the text is
+    already clean — so the book lands directly on the pages/proof/output tabs
+    for editing, re-export, or audiobook narration."""
+    import re
+
+    from ebooklib import ITEM_COVER, ITEM_DOCUMENT, ITEM_IMAGE, epub
+    from markdownify import markdownify
+
+    book = epub.read_epub(str(epub_path))
+    pages = ws.manifest["pages"]
+    figdir = ws.root / "figures"
+    figdir.mkdir(exist_ok=True)
+    pagedir = ws.dir("pages")
+
+    # ---- images: extract once, map their epub hrefs -> figures/<name>
+    img_map: dict[str, str] = {}
+    for item in book.get_items():
+        if item.get_type() not in (ITEM_IMAGE, ITEM_COVER):
+            continue
+        base = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(item.get_name()).name)
+        dest = figdir / f"epub_{base}"
+        dest.write_bytes(item.get_content())
+        img_map[Path(item.get_name()).name] = f"figures/{dest.name}"
+
+    # ---- cover page (pinned to the front, used by EPUB/PDF/m4b art)
+    cover_item = next((i for i in book.get_items()
+                       if i.get_type() == ITEM_COVER), None)
+    if cover_item is None:   # many epubs mark the cover only in metadata
+        meta = book.get_metadata("OPF", "cover")
+        cover_id = meta[0][1].get("content") if meta else None
+        cover_item = book.get_item_with_id(cover_id) if cover_id else None
+    n_imported = 0
+    if cover_item is not None:
+        pid = next_page_id(ws)
+        patches = ws.root / "patches"
+        patches.mkdir(exist_ok=True)
+        ext = Path(cover_item.get_name()).suffix or ".jpg"
+        dest = patches / f"{pid}{ext}"
+        dest.write_bytes(cover_item.get_content())
+        pages.append({"id": pid, "cluster_frames": [], "canonical": None,
+                      "scores": {}, "status": "ok", "printed_number": None,
+                      "patched_source": f"patches/{dest.name}",
+                      "color": f"patches/{dest.name}",
+                      "source": "epub", "md": None,
+                      "role": "cover", "pinned": "start"})
+        n_imported += 1
+        log("  cover image imported")
+
+    # ---- one page per spine document, in reading order
+    spine_ids = [sid for sid, _ in book.spine]
+    for sid in spine_ids:
+        item = book.get_item_with_id(sid)
+        if item is None or item.get_type() != ITEM_DOCUMENT:
+            continue
+        # skip the EPUB's own TOC/nav page — beyond being noise, its list of
+        # chapter titles makes every real chapter heading look like a repeated
+        # running header to the assembler, which then strips them all
+        if (isinstance(item, epub.EpubNav)
+                or "nav" in (getattr(item, "properties", None) or [])
+                or Path(item.get_name()).stem.lower() in ("nav", "toc")):
+            continue
+        html = item.get_content().decode("utf-8", "ignore")
+        html = re.sub(r"<\?xml[^>]*\?>", "", html)   # prolog leaks into text
+        md = markdownify(html, heading_style="ATX", strip=["a"])
+        # rewrite image refs to the extracted figures
+        def _img(m):
+            name = Path(m.group(2)).name
+            return f"![{m.group(1)}]({img_map.get(name, m.group(2))})"
+        md = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _img, md)
+        md = re.sub(r"\n{3,}", "\n\n", md).strip()
+        if len(re.sub(r"[^A-Za-z0-9]", "", md)) < 20 and "![" not in md:
+            continue                     # blank filler documents
+        pid = next_page_id(ws)
+        (pagedir / f"{pid}.md").write_text(md, encoding="utf-8")
+        pages.append({"id": pid, "cluster_frames": [], "canonical": None,
+                      "scores": {}, "status": "ok", "printed_number": None,
+                      "source": "epub", "md": f"pages/{pid}.md",
+                      "confidence": "high", "flags": [],
+                      "transcribed_by": "epub-import"})
+        n_imported += 1
+    # book metadata, if the project has none yet
+    bm = ws.manifest["book"]
+    for key, dc in (("title", "title"), ("author", "creator")):
+        if not bm.get(key):
+            meta = book.get_metadata("DC", dc)
+            if meta:
+                bm[key] = meta[0][0]
+    # nothing to capture/score/transcribe — the text arrived finished
+    for s in ("extract", "score", "cluster", "select", "preprocess",
+              "transcribe", "figures"):
+        ws.stage_done(s)
+    ws.stage_reset("assemble")
+    ws.save()
+    log(f"{n_imported} chapters/items imported from {epub_path.name} — "
+        f"ready to edit, re-export, or narrate")
+    return n_imported
+
+
 def crop_page_photo(ws: Workspace, cfg: dict, page: dict,
                     quad_norm: list, log: Callable[[str], None] = print) -> None:
     """Crop a photo-sourced page (cover, back cover, any patched page) with
