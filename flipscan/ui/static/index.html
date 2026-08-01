@@ -1888,11 +1888,12 @@ async function buildFmt(fmt) {
 }
 
 // ---- audiobook: durable synthesis job + shared voice library
-async function buildAudiobook(btn, chaptersCsv = "") {
+async function buildAudiobook(btn, chaptersCsv = "", headChars = 0) {
   const voice = $("ab-voice")?.value || "";
   const speed = $("ab-speed")?.value || "1";
   const cast = $("ab-cast")?.checked ? "&use_cast=true" : "";
-  const chs = chaptersCsv ? `&chapters=${chaptersCsv}` : "";
+  const chs = (chaptersCsv ? `&chapters=${chaptersCsv}` : "")
+    + (headChars ? `&head_chars=${headChars}` : "");
   if (btn) { btn.disabled = true; btn.textContent = "queued…"; }
   try {
     const { job_id } = await api(`/projects/${current}/build-audiobook`
@@ -2074,7 +2075,8 @@ async function previewVoice(voice, character, btn) {
   if (btn) { btn.disabled = false; btn.textContent = orig; }
 }
 
-// build ONE chapter — the most cast-voiced — as a full-cast audition
+// a quick full-cast audition: the FIRST ~5 MINUTES of the most cast-voiced
+// chapter (a whole chapter can be hours — e.g. a book imported as one chapter)
 async function sampleCastChapter(btn) {
   let c;
   try { c = await api(`/projects/${current}/audiobook-cast`); }
@@ -2082,12 +2084,13 @@ async function sampleCastChapter(btn) {
   const best = (c.chapter_stats || []).reduce(
     (a, s) => (s.voiced > (a?.voiced || 0) ? s : a), null);
   if (!best) { alert("No cast-voiced quotes yet — assign voices first."); return; }
-  if (!confirm(`Build a full-cast sample of “${best.title}”?\n\n`
-    + `${best.voiced} quotes in ${best.speakers} character voices. Its audio is `
-    + `cached, so the eventual full build reuses it — no wasted GPU time.`)) return;
+  if (!confirm(`Build a quick full-cast audition — the first ~5 minutes of `
+    + `“${best.title}”?\n\n(${best.voiced} cast quotes in the whole chapter; `
+    + `about 6 minutes of GPU. For the complete chapter or book, use Build `
+    + `audiobook with 🎭 ticked.)`)) return;
   const chk = $("ab-cast");
   if (chk && !chk.disabled) chk.checked = true;   // a cast sample implies cast
-  buildAudiobook(btn, String(best.idx));
+  buildAudiobook(btn, String(best.idx), 6100);
 }
 
 // mint voices for EVERY uncast character in one batch job
