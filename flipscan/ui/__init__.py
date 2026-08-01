@@ -2118,11 +2118,20 @@ def create_app(root: Path) -> FastAPI:
                     "chapter_stats": []}
         assigned = {n for n, c in (cast.get("characters") or {}).items()
                     if (c.get("voice") or "").strip()}
+        # a restructure (re-import, chapter split) can shift chapter positions
+        # after an analysis — resolve each stat row's idx against the CURRENT
+        # book by title, so sample builds land on the right chapter
+        try:
+            from ..proofread import chapters as book_chapters
+            cur_idx = {t: i for i, (t, _) in enumerate(book_chapters(ws))}
+        except Exception:
+            cur_idx = {}
         stats = []
         for i, r in enumerate(cast.get("chapters") or []):
             qs = r.get("quotes") or []
             voiced = [q for q in qs if q["speaker"] in assigned]
-            stats.append({"idx": i, "title": r.get("title"),
+            idx = cur_idx.get(r.get("title"), i)
+            stats.append({"idx": idx, "title": r.get("title"),
                           "quotes": len(qs), "voiced": len(voiced),
                           "speakers": len({q["speaker"] for q in voiced})})
         # attach the EFFECTIVE generator prompt so the UI can prefill the editor
