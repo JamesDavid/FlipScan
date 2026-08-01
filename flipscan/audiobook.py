@@ -153,8 +153,8 @@ class ChatterboxEngine:
         self.voice = (a.get("voice_sample") or "").strip() or None
         self.exaggeration = float(a.get("exaggeration", 0.5))
         self.cfg_weight = float(a.get("cfg_weight", 0.5))
-        # below Chatterbox's 0.8 default: fewer hallucinated breaths/syllables
-        self.temperature = float(a.get("temperature", 0.6))
+        # keep Chatterbox's default: lower values audibly drawl/stretch words
+        self.temperature = float(a.get("temperature", 0.8))
         self._model = None
 
     def _load(self):
@@ -211,7 +211,9 @@ def _trim_edge_babble(wav, sr: int):
     if n < 8:
         return wav
     e = wav[:n * frame].reshape(n, frame).pow(2).mean(1).sqrt()
-    thr = max(float(e.max()) * 0.03, 1e-3)   # low floor: quiet junk counts too
+    # 6%: quiet-but-real speech (soft fricatives, breaths) must NOT be
+    # classified as silence — a lower floor audibly chopped the narration
+    thr = max(float(e.max()) * 0.06, 1e-3)
     voiced = (e > thr).tolist()
 
     def find_islands():
@@ -229,6 +231,16 @@ def _trim_edge_babble(wav, sr: int):
     islands = find_islands()
     if not islands:
         return wav
+
+    def fade_span(a: int, b: int):
+        """Zero [a,b) with short ramps into the surrounding audio."""
+        r = int(sr * 0.01)
+        wav[a:b] = 0.0
+        if a - r >= 0:
+            wav[a - r:a] *= torch.linspace(1.0, 0.0, r)
+        if b + r <= wav.numel():
+            wav[b:b + r] *= torch.linspace(0.0, 1.0, r)
+
     GAP, BLIP = int(0.30 / 0.02), int(0.60 / 0.02)   # 300 ms gap, 600 ms blip
     while len(islands) >= 2 and \
             (islands[0][1] - islands[0][0]) < BLIP and \
@@ -238,27 +250,49 @@ def _trim_edge_babble(wav, sr: int):
             (islands[-1][1] - islands[-1][0]) < BLIP and \
             (islands[-1][0] - islands[-2][1]) >= GAP:
         islands.pop()
+    # interior detached blip ("haaa"): silence it in place — its neighbours
+    # are already silence, and the ramps prevent any click
     IGAP, IBLIP = int(0.60 / 0.02), int(0.40 / 0.02)
-    islands = [isl for k, isl in enumerate(islands)
-               if not (0 < k < len(islands) - 1
-                       and (isl[1] - isl[0]) <= IBLIP
-                       and (isl[0] - islands[k - 1][1]) >= IGAP
-                       and (islands[k + 1][0] - isl[0]) >= IGAP)]
-    # rebuild: islands (with 60 ms of context) joined by their real gaps,
-    # clamped to at most 0.9 s — a dropped island's audio simply never returns
+    for k in range(1, len(islands) - 1):
+        s0, e0 = islands[k]
+        if (e0 - s0) <= IBLIP and \
+                (s0 - islands[k - 1][1]) >= IGAP and \
+                (islands[k + 1][0] - e0) >= IGAP:
+            fade_span(s0 * frame, e0 * frame)
+    # hallucinated dead air: an internal pause over 1.5 s shrinks to 0.9 s,
+    # and what remains of it is silenced (quiet junk like a faint "kaa" lives
+    # in these fake pauses; real room tone inside NORMAL pauses is untouched)
+    LONG, KEEP = int(1.5 / 0.02), int(0.9 / 0.02)
+    cuts = []
+    for k in range(len(islands) - 1):
+        gap = islands[k + 1][0] - islands[k][1]
+        if gap >= LONG:
+            a = islands[k][1]
+            fade_span(a * frame, (a + KEEP) * frame)
+            cuts.append(((a + KEEP) * frame, islands[k + 1][0] * frame))
+    if cuts:
+        keepers, pos = [], 0
+        for a, b in cuts:
+            keepers.append(wav[pos:a])
+            pos = b
+        keepers.append(wav[pos:])
+        wav = torch.cat(keepers)
+        n2 = wav.numel() // frame
+        e2 = wav[:n2 * frame].reshape(n2, frame).pow(2).mean(1).sqrt() \
+            if n2 else e[:0]
+        # recompute trim bounds against the edited audio
+        idx = (e2 > thr).nonzero()
+        if idx.numel():
+            first, last = int(idx[0]), int(idx[-1]) + 1
+        else:
+            return wav
+        pad = int(sr * 0.06)
+        return wav[max(0, first * frame - pad):
+                   min(wav.numel(), last * frame + pad)]
     pad = int(sr * 0.06)
-    max_gap = int(sr * 0.9)
-    out = []
-    prev_end = None
-    for s0, e0 in islands:
-        a = max(0, s0 * frame - pad)
-        b = min(wav.numel(), e0 * frame + pad)
-        if prev_end is not None:
-            gap = max(0, a - prev_end)
-            out.append(torch.zeros(min(gap, max_gap)))
-        out.append(wav[a:b])
-        prev_end = b
-    return torch.cat(out) if out else wav
+    a = max(0, islands[0][0] * frame - pad)
+    b = min(wav.numel(), islands[-1][1] * frame + pad)
+    return wav[a:b]
 
 
 def _condition_piece(wav, sr: int):
