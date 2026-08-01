@@ -153,6 +153,8 @@ class ChatterboxEngine:
         self.voice = (a.get("voice_sample") or "").strip() or None
         self.exaggeration = float(a.get("exaggeration", 0.5))
         self.cfg_weight = float(a.get("cfg_weight", 0.5))
+        # below Chatterbox's 0.8 default: fewer hallucinated breaths/syllables
+        self.temperature = float(a.get("temperature", 0.6))
         self._model = None
 
     def _load(self):
@@ -185,34 +187,46 @@ class ChatterboxEngine:
             _COND_CACHE[v] = conds
         m.conds = conds
         return m.generate(text, exaggeration=self.exaggeration,
-                          cfg_weight=self.cfg_weight).squeeze(0)
+                          cfg_weight=self.cfg_weight,
+                          temperature=self.temperature).squeeze(0)
 
 
 TARGET_LUFS = -20.0   # broadcast-ish speech level all pieces normalize to
 
 
 def _trim_edge_babble(wav, sr: int):
-    """Chatterbox sometimes hallucinates a spurious syllable ("meh", "ammm")
-    detached from the real speech at a generation's edge — audible exactly at
-    voice switches. Find voiced islands; a tiny island at either edge that is
-    separated from the main speech by a clear silence gap is babble — drop it.
-    Also trims plain leading/trailing silence."""
+    """Scrub Chatterbox generation artifacts from one piece:
+    - edge babble: a stray syllable ("meh", "ammm") detached from the speech
+      at either end — dropped;
+    - interior babble: a tiny voiced island marooned mid-piece by long silence
+      on both sides ("haaa") — real prose never isolates a word by 600 ms on
+      each side, so it's cut with its silence;
+    - hallucinated dead air: multi-second internal pauses (which also hide
+      quiet sub-threshold junk like a faint "kaa") — clamped to 0.9 s, junk
+      excised with the pause;
+    - plain leading/trailing silence — trimmed."""
+    import torch
     frame = int(sr * 0.02)
     n = wav.numel() // frame
     if n < 8:
         return wav
     e = wav[:n * frame].reshape(n, frame).pow(2).mean(1).sqrt()
-    thr = float(e.max()) * 0.06
+    thr = max(float(e.max()) * 0.03, 1e-3)   # low floor: quiet junk counts too
     voiced = (e > thr).tolist()
-    islands, s = [], None
-    for i, v in enumerate(voiced):
-        if v and s is None:
-            s = i
-        elif not v and s is not None:
-            islands.append((s, i))
-            s = None
-    if s is not None:
-        islands.append((s, n))
+
+    def find_islands():
+        out, s = [], None
+        for i, v in enumerate(voiced):
+            if v and s is None:
+                s = i
+            elif not v and s is not None:
+                out.append((s, i))
+                s = None
+        if s is not None:
+            out.append((s, n))
+        return out
+
+    islands = find_islands()
     if not islands:
         return wav
     GAP, BLIP = int(0.30 / 0.02), int(0.60 / 0.02)   # 300 ms gap, 600 ms blip
@@ -224,10 +238,27 @@ def _trim_edge_babble(wav, sr: int):
             (islands[-1][1] - islands[-1][0]) < BLIP and \
             (islands[-1][0] - islands[-2][1]) >= GAP:
         islands.pop()
+    IGAP, IBLIP = int(0.60 / 0.02), int(0.40 / 0.02)
+    islands = [isl for k, isl in enumerate(islands)
+               if not (0 < k < len(islands) - 1
+                       and (isl[1] - isl[0]) <= IBLIP
+                       and (isl[0] - islands[k - 1][1]) >= IGAP
+                       and (islands[k + 1][0] - isl[0]) >= IGAP)]
+    # rebuild: islands (with 60 ms of context) joined by their real gaps,
+    # clamped to at most 0.9 s — a dropped island's audio simply never returns
     pad = int(sr * 0.06)
-    a = max(0, islands[0][0] * frame - pad)
-    b = min(wav.numel(), islands[-1][1] * frame + pad)
-    return wav[a:b]
+    max_gap = int(sr * 0.9)
+    out = []
+    prev_end = None
+    for s0, e0 in islands:
+        a = max(0, s0 * frame - pad)
+        b = min(wav.numel(), e0 * frame + pad)
+        if prev_end is not None:
+            gap = max(0, a - prev_end)
+            out.append(torch.zeros(min(gap, max_gap)))
+        out.append(wav[a:b])
+        prev_end = b
+    return torch.cat(out) if out else wav
 
 
 def _condition_piece(wav, sr: int):
@@ -508,6 +539,7 @@ def build_audiobook(ws: Workspace, cfg: dict, out: Path,
                     if p and Path(p).exists() else "")
         key = hashlib.sha1(json.dumps(
             [text, title, _vhash(voice), engine.exaggeration, engine.cfg_weight,
+             engine.temperature,
              [(v, _vhash(v), len(t)) for v, t in (segments or [])]]
         ).encode()).hexdigest()
         if wav.exists() and sig.exists() and \

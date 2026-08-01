@@ -67,6 +67,7 @@ DEFAULTS: dict[str, Any] = {
         "voice_sample": "",
         "exaggeration": 0.5,      # expressiveness (0..1); 0.5 = neutral
         "cfg_weight": 0.5,        # pacing/adherence; lower = slower delivery
+        "temperature": 0.6,       # < Chatterbox's 0.8 default: fewer artifacts
     },
 }
 
