@@ -12,13 +12,14 @@ See [SPEC.md](SPEC.md) for the full architecture.
 
 You give the book a **title** (or look it up) — the folder name is a unique slug generated for you, so you never type or manage an internal name. The **🔍 look up** field searches Google Books / Open Library by ISBN, title, or author and auto-fills title, author, page count, publisher, and year. Creating a project only collects this metadata; you add the videos, PDF, or photos on the project page as the next step. Metadata is editable later (✎), flows into the EPUB's Dublin Core, and — once a book is transcribed — FlipScan reads the ISBN off the copyright page and offers to fill the rest in one click.
 
-## Three ways to get pages in
+## Four ways to get pages in
 
 You can mix all three in one project; page order is reconciled from printed page numbers.
 
 - **Flip-through video** — the fastest for a whole book. **Film it in slow-motion mode** (e.g. 120/240 fps): the extra frames per page turn give FlipScan a sharp, flat frame to pick for every page, which makes the biggest difference to output quality. Thumb through the book (any direction, any subset, as many videos as you like); page turns split each video into page captures, and upside-down videos are auto-detected.
 - **Photos** — for the cover, inside-cover text, or any page a video missed. Deliberate photos are used exactly as framed (no warping/cropping). Orientation is auto-checked per shot.
 - **PDF** — the alternative to filming: every PDF page is rendered and imported as a page, in authoritative order. Great for scans or born-digital PDFs — including compilations where several works are concatenated and printed page numbers repeat (each restarting at page 1), which are kept in order rather than merged.
+- **EPUB** — start from an existing ebook: chapters become editable text pages, images and the cover carry over, and the whole capture/OCR pipeline is skipped (the text is already clean). Perfect for editing an ebook you have, re-exporting it device-sized, or **narrating it into an audiobook** with the full voice-casting flow. (For MOBI/AZW3, convert to EPUB with Calibre first.)
 
 ### Capture tips (video)
 
